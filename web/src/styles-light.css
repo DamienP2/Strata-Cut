@@ -35,3 +35,9 @@
 :root[data-theme='light'] .sc-center { background: var(--bg); }
 :root[data-theme='light'] .sc-wave svg { color: var(--pvw); }
 :root[data-theme='light'] .sc-sel::before, :root[data-theme='light'] .sc-sel::after { color: #fff; }
+
+/* Cadre : rôles, badges, journal */
+:root[data-theme='light'] .user-card.role-admin { --role: var(--t-red); }
+:root[data-theme='light'] :is(.badge.role-admin, .badge.bad) { color: var(--t-red); }
+:root[data-theme='light'] .badge.crash { color: var(--t-violet); }
+:root[data-theme='light'] .log-box { --bg: #0b0c12; --panel: #12141d; --panel-2: #181b26; --panel-3: #1f2331; --line: #262a3a; --line-2: #323750; --text: #e6e8f2; --text-2: #a3a8bf; --text-3: #8a90ad; --accent-2: #bfcaff; --pvw: #22c55e; --warn: #f5a524; color-scheme: dark; }

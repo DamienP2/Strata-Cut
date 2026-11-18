@@ -1,0 +1,107 @@
+/* /system/<section>: the list of sections on the left, the open one on the right. */
+import { lazy, Suspense, useEffect, type ComponentType, type LazyExoticComponent } from 'react';
+import { CloudDownload, Gauge, HardDrive, HeartPulse, Lock, RotateCcw, SlidersHorizontal, Users as UsersIcon } from 'lucide-react';
+import { t } from '../i18n';
+import { navigate } from '../router';
+import { can, useApp, useChanged, type PublicUser } from '../store';
+import { needsLook, useHealth } from '../ui/health';
+import { NavItem, NavSection, SidePage } from './SidePage';
+import { loadUsers, useUserList } from './userList';
+
+const page = <K extends string>(load: () => Promise<Record<K, ComponentType>>, name: K) => lazy(() => load().then((m) => ({ default: m[name] })));
+
+interface Section {
+  id: string;
+  /** English, translated where shown. */
+  label: string;
+  icon: ComponentType<{ size?: number }>;
+  admin: boolean;
+  page: LazyExoticComponent<ComponentType>;
+}
+
+interface Group {
+  title: string;
+  sections: Section[];
+}
+
+export const SYSTEM: Group[] = [
+  {
+    title: 'Monitoring',
+    sections: [
+      { id: 'performance', label: 'Performance', icon: Gauge, admin: true, page: page(() => import('../settings/Performance'), 'Performance') },
+      { id: 'health', label: 'Health', icon: HeartPulse, admin: true, page: page(() => import('../settings/Health'), 'Health') },
+    ],
+  },
+  {
+    title: 'Access',
+    sections: [
+      { id: 'users', label: 'Users', icon: UsersIcon, admin: true, page: page(() => import('./Users'), 'Users') },
+      { id: 'security', label: 'Security', icon: Lock, admin: true, page: page(() => import('../settings/Security'), 'Security') },
+    ],
+  },
+  {
+    title: 'Server',
+    sections: [
+      { id: 'general', label: 'General', icon: SlidersHorizontal, admin: true, page: page(() => import('../settings/General'), 'General') },
+      { id: 'storage', label: 'Storage', icon: HardDrive, admin: true, page: page(() => import('../settings/Storage'), 'Storage') },
+      { id: 'updates', label: 'Updates', icon: CloudDownload, admin: true, page: page(() => import('../settings/Updates'), 'Updates') },
+      { id: 'maintenance', label: 'Maintenance', icon: RotateCcw, admin: true, page: page(() => import('../settings/Maintenance'), 'Maintenance') },
+    ],
+  },
+];
+
+/** The sections this user may open. */
+export function visibleSystem(user: PublicUser | null | undefined): Group[] {
+  return SYSTEM.map((g) => ({ ...g, sections: g.sections.filter((s) => !s.admin || can.admin(user)) })).filter((g) => g.sections.length > 0);
+}
+
+export function SystemPage({ section }: { section?: string }) {
+  const user = useApp((s) => s.auth?.user);
+  const health = useHealth((s) => s.health);
+  const users = useUserList((s) => s.users);
+  const groups = visibleSystem(user);
+  const all = groups.flatMap((g) => g.sections);
+  const open = all.find((s) => s.id === section);
+  const admin = can.admin(user);
+
+  // No section (or one this user may not open): the first visible one.
+  useEffect(() => {
+    if (!open && all.length) void navigate(`/system/${all[0].id}`, true);
+    else if (!all.length) void navigate('/', true);
+  }, [open, all]);
+
+  useEffect(() => {
+    if (admin) void loadUsers();
+  }, [admin]);
+  useChanged('users', () => admin && void loadUsers());
+
+  const Page = open?.page;
+  return (
+    <SidePage
+      className="sys-page"
+      wide={false}
+      nav={groups.map((g) => (
+        <div key={g.title} className="sys-group">
+          <NavSection title={t(g.title)} />
+          {g.sections.map((s) => (
+            <NavItem
+              key={s.id}
+              icon={s.icon}
+              label={t(s.label)}
+              on={s.id === open?.id}
+              onClick={() => void navigate(`/system/${s.id}`)}
+              status={s.id === 'health' && needsLook(health) ? 'warn' : null}
+              count={s.id === 'users' && users ? users.length : undefined}
+            />
+          ))}
+        </div>
+      ))}
+    >
+      {Page && (
+        <Suspense fallback={<div className="loading">{t('Loading…')}</div>}>
+          <Page key={open.id} />
+        </Suspense>
+      )}
+    </SidePage>
+  );
+}
