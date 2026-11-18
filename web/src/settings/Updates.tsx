@@ -244,6 +244,8 @@ export function Updates() {
                   <CloudDownload size={14} /> {t('Install {v}', { v: newer.version })}
                 </button>
               </>
+            ) : s.lastCheck && !latest ? (
+              <span className="muted">{t('No version published on {repo} yet, checked {ago}.', { repo: info.repo, ago: timeAgo(s.lastCheck) })}</span>
             ) : s.lastCheck ? (
               <span className="muted">{t('Up to date: latest version {v}, checked {ago}.', { v: latest?.version ?? info.current, ago: timeAgo(s.lastCheck) })}</span>
             ) : (

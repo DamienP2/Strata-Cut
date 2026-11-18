@@ -44,4 +44,5 @@ export const updates: Record<string, string> = {
   'GitHub refused the token (expired or revoked?)': 'GitHub a refusé le jeton (expiré ou révoqué ?)',
   'GitHub refused the request (rate limit, or the token cannot read the repository)': 'GitHub a refusé la requête (limite atteinte, ou le jeton ne peut pas lire le dépôt)',
   'Repository not found: if it is private, add a read-only token': 'Dépôt introuvable : s’il est privé, ajoutez un jeton en lecture seule',
+  'No version published on {repo} yet, checked {ago}.': 'Aucune version publiée sur {repo} pour l’instant, vérifié {ago}.',
 };

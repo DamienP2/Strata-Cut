@@ -234,7 +234,9 @@ Le script récupère la dernière version (`git pull`), recompile, remplace le p
 - Réinstaller sans télécharger : `--no-pull`.
 - Si le dossier `~/Strata-Cut` a des modifications locales, le code n'est pas actualisé (le script le signale).
 
-Quand des versions publiées existeront sur GitHub, **Système › Mises à jour** permettra aussi de vérifier et d'installer une nouvelle version depuis l'interface, avec retour arrière.
+### Depuis l'interface
+
+**Système › Mises à jour** propose les versions publiées (releases GitHub, voir « Publier une version » dans le README) : « Vérifier maintenant », puis « Installer x.y.z ». Le serveur télécharge le paquet, vérifie son empreinte SHA-256, remplace le programme et redémarre (quelques secondes). Si la nouvelle version ne démarre pas, l'ancienne est remise automatiquement ; « Revenir à x.y.z » permet aussi de revenir en arrière à la main. Le menu ne voit que les versions publiées, pas chaque modification poussée sur GitHub : pour celles-ci, relancez le script.
 
 Avec un paquet déjà construit (`Strata-Cut-<version>-linux-x86_64.tar.gz`) :
 ```bash

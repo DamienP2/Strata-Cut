@@ -52,3 +52,16 @@ Service systemd : `sudo strata-cut service install --bind 0.0.0.0:8080`.
 cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace
 cd web && npm run build && node scripts/i18n-check.mjs
 ```
+
+## Publier une version (mises à jour depuis l'interface)
+
+Le menu **Système › Mises à jour** des serveurs installés propose les **releases GitHub** du dépôt, pas les simples commits. Pour en publier une :
+
+```bash
+scripts/set-version.sh v0.3.0
+git commit -am "Version 0.3.0"
+git tag v0.3.0
+git push && git push origin v0.3.0
+```
+
+Le tag déclenche le workflow `Release` : il construit l'interface et le serveur, puis publie `Strata-Cut-0.3.0-linux-x86_64.tar.gz` et `…-linux-arm64.tar.gz` dans la release (quelques minutes). Les serveurs la voient à la vérification suivante (automatique toutes les 6 h, ou « Vérifier maintenant ») et l'installent en un clic, avec retour arrière possible.
