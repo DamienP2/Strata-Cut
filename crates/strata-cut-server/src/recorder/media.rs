@@ -32,6 +32,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders/{id}/coverage", get(coverage))
         .route("/api/recorders/{id}/frame.jpg", get(frame))
         .route("/api/recorders/{id}/wave", get(wave))
+        .route("/api/recorders/{id}/epg", get(epg))
         .route("/api/recorders/{id}/runs/{run}/{track}/{file}", get(fragment))
         .route("/api/storage", get(storage))
 }
@@ -194,6 +195,13 @@ async fn fragment(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(
     };
     let data = tokio::fs::read(&path).await.map_err(|_| not_found("fragment"))?;
     Ok(file_response(data, "video/mp4", "private, max-age=86400"))
+}
+
+/// The programmes of the source's guide between two server times.
+async fn epg(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<Window>) -> ApiResult<Json<Value>> {
+    let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    let events = rec.epg.lock().unwrap().between(q.from, q.to);
+    Ok(Json(json!({ "events": events })))
 }
 
 #[derive(Deserialize)]

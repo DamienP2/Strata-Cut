@@ -203,7 +203,11 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
 
   return (
     <article className="project-card">
-      <div className="sc-thumb">
+      <div
+        className={`sc-thumb ${st?.oldest ? 'go' : ''}`}
+        title={st?.oldest ? t('Extract') : undefined}
+        onClick={() => st?.oldest && void navigate(`/extract/${rec.id}`)}
+      >
         {img && state !== 'off' ? <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${recording ? tick : 0}`} alt="" onError={() => setImg(false)} /> : <div className="sc-pic lost" />}
         {recording && (
           <span className="sc-onpic tl">
@@ -218,19 +222,14 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
         )}
         {state === 'starting' && <span className="sc-onpic mid">{(rec.protocol === 'rtmp' || rec.protocol === 'srt') && rec.mode === 'listener' ? t('Waiting for the source') : t('Connecting…')}</span>}
         {state === 'off' && <span className="sc-onpic mid">{t('Stopped')}</span>}
-        <span className={`sc-onpic tr ${rec.protocol === 'web' ? '' : 'mono'}`}>{badge(rec)}</span>
+        {rec.protocol === 'web' && <span className="sc-onpic tr">{badge(rec)}</span>}
       </div>
       <div className="project-body">
         <div className="sc-card-title">
           <span className={`nav-dot ${recording ? 'ok' : state === 'off' ? '' : state === 'error' ? 'bad' : 'warn'}`} />
-          <strong>{rec.name}</strong>
+          <strong title={[sourceAddress(rec), fmt].filter(Boolean).join('\n')}>{rec.name}</strong>
           <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
         </div>
-        <div className="sc-addr" title={sourceAddress(rec)}>
-          {sourceAddress(rec)}
-          {rec.mode === 'listener' && (rec.protocol === 'rtmp' || rec.protocol === 'srt') ? ` · ${t('listening')}` : ''}
-        </div>
-        {fmt && <div className="project-meta"><span>{fmt}</span></div>}
         {state === 'nosignal' && st && (
           <span className="sc-warnline">
             <TriangleAlert size={12} /> {t('No signal for {d}', { d: hms(now - st.since) })}

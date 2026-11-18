@@ -4,6 +4,7 @@ mod media;
 pub mod index;
 mod run;
 pub mod web;
+pub mod epg;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -209,6 +210,10 @@ pub struct Rec {
     pub space_trimmed: std::sync::atomic::AtomicI64,
     /// Starts a new run now (the loops' folder changed).
     pub new_run: tokio::sync::Notify,
+    /// The programme guide of the source (DVB EIT), when it carries one.
+    pub epg: Mutex<epg::Guide>,
+    /// Where FFmpeg found the guide in the source (learned at the first start).
+    pub epg_found: Mutex<epg::Found>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -589,6 +594,7 @@ impl Manager {
         let dir = self.recordings_dir().join(&c.id);
         let mut runs: Vec<Run> = self.dirs.lock().unwrap().iter().flat_map(|d| load_runs(&d.join(&c.id))).collect();
         runs.sort_by_key(|r| r.meta.started);
+        let guide = epg::Guide::load(&epg::path(&self.data_dir, &c.id));
         let rec = Arc::new(Rec {
             id: c.id.clone(),
             status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false }),
@@ -599,6 +605,8 @@ impl Manager {
             no_audio: false.into(),
             space_trimmed: 0.into(),
             new_run: tokio::sync::Notify::new(),
+            epg: Mutex::new(guide),
+            epg_found: Mutex::new(epg::Found::default()),
             task: Mutex::new(None),
         });
         rec.refresh_status();
@@ -734,6 +742,7 @@ impl Manager {
         }
         let dirs: Vec<PathBuf> = self.dirs.lock().unwrap().iter().map(|d| d.join(id)).collect();
         let _ = std::fs::remove_file(self.data_dir.join("cookies").join(format!("{id}.txt")));
+        let _ = std::fs::remove_file(epg::path(&self.data_dir, id));
         let name = rec.config().name;
         let _ = tokio::task::spawn_blocking(move || {
             for dir in dirs {

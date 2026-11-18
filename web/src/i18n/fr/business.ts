@@ -143,6 +143,12 @@ export const business: Record<string, string> = {
   'web: the live cannot be read': 'Le direct ne peut pas être lu',
   'web: unexpected answer from yt-dlp': 'Réponse inattendue de yt-dlp',
 
+  // Programme guide (EPG)
+  'This programme is not recorded': 'Ce programme n’est pas enregistré',
+  'In and out on the whole programme under the playhead': 'Entrée et sortie sur tout le programme sous la tête de lecture',
+  'Whole programme: {name}': 'Tout le programme\u00a0: {name}',
+  'Click: go to its start · Shift+click: in and out on the whole programme': 'Clic\u00a0: aller au début · Maj+clic\u00a0: entrée et sortie sur tout le programme',
+
   // Extraction
   LIVE: 'DIRECT',
   Live: 'Direct',

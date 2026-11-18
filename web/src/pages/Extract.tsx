@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, Check, ChevronsLeft, ChevronsRight, Crosshair, Download, Pause, Play, RadioTower, RotateCcw, Scissors, StepBack, StepForward, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, Check, ChevronsLeft, ChevronsRight, Crosshair, Download, Pause, Play, RadioTower, RotateCcw, Scissors, StepBack, StepForward, Tv, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { t, tn, locale } from '../i18n';
 import { navigate } from '../router';
@@ -23,6 +23,15 @@ interface Span {
   run: string;
   from: number;
   to: number;
+}
+
+/** A programme of the source's guide (DVB EIT), server times. */
+interface Programme {
+  id: number;
+  start: number;
+  end: number;
+  name: string;
+  text?: string;
 }
 
 /** The zoom: the timeline shows from 10 s to the whole loop; reset = 1 min. */
@@ -117,7 +126,28 @@ function Editor({ rec }: { rec: Recorder }) {
   const [span, setSpan] = useState(ZOOM_RESET);
   const [spans, setSpans] = useState<Span[]>([]);
   const [clips, setClips] = useState<Clip[]>([]);
+  const [guide, setGuide] = useState<Programme[]>([]);
   const fps = fpsOf(run?.media?.fpsNum, run?.media?.fpsDen);
+  // The source's programme guide, for the loop and a few hours ahead.
+  useEffect(() => {
+    let dead = false;
+    const load = async () => {
+      const now = serverNow();
+      try {
+        const g = await api<{ events: Programme[] }>('GET', `/api/recorders/${rec.id}/epg?from=${Math.round(now - rec.loopHours * 3_600_000)}&to=${Math.round(now + 6 * 3_600_000)}`);
+        if (!dead) setGuide(g.events);
+      } catch {
+        /* the next try */
+      }
+    };
+    void load();
+    const i = setInterval(() => void load(), 60_000);
+    return () => {
+      dead = true;
+      clearInterval(i);
+    };
+  }, [rec.id, rec.loopHours]);
+  const onAir = pos ? guide.find((g) => g.start <= pos.wall && pos.wall < g.end) : undefined;
   const audio = useAudioOut(videoRef);
 
   // The player lives as long as this recorder is open.
@@ -202,6 +232,28 @@ function Editor({ rec }: { rec: Recorder }) {
     void pl.seekWall(wall);
   }, []);
 
+  /** In and out on a whole programme (within what is recorded); its name for the clip. */
+  const markProgramme = async (g: Programme) => {
+    // A clip stays in one continuous recording: the one holding most of the programme.
+    const best = spans
+      .map((x) => ({ from: Math.max(g.start, x.from), to: Math.min(g.end, x.to) }))
+      .filter((x) => x.to > x.from)
+      .sort((a, b) => b.to - b.from - (a.to - a.from))[0];
+    if (!best) return toast(t('This programme is not recorded'), 'error');
+    const from = best.from;
+    const to = best.to - 1000 / fps;
+    if (to <= from) return toast(t('This programme is not recorded'), 'error');
+    setLive(false);
+    const pl = p();
+    if (!pl) return;
+    pl.halt();
+    await pl.seekWall(to);
+    const out = { run: pl.run?.id ?? '', t: pl.t, wall: pl.wallOf(pl.t) };
+    await pl.seekWall(from);
+    setIn({ run: pl.run?.id ?? '', t: pl.t, wall: pl.wallOf(pl.t) });
+    setOut(out);
+    setName(g.name);
+  };
   const markIn = () => pos && setIn(pos);
   const markOut = () => pos && setOut(pos);
   const step = (n: number) => {
@@ -296,7 +348,10 @@ function Editor({ rec }: { rec: Recorder }) {
           <div className="sc-viewer">
             <video ref={videoRef} className="sc-video" playsInline />
             {run?.audio && <Meters out={audio.out} />}
-            <span className="sc-onpic tl">{rec.name}</span>
+            <span className="sc-onpic tl">
+              {rec.name}
+              {onAir && <span className="sc-onair"> · {onAir.name}</span>}
+            </span>
             {media && (
               <span className="sc-onpic tr mono">
                 {scanFormat(media)}
@@ -352,7 +407,7 @@ function Editor({ rec }: { rec: Recorder }) {
             <span className="sc-rec" /> {t('Live')}
           </button>
         </div>
-        <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} />
+        <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
       </div>
 
       <aside className="panel right">
@@ -367,6 +422,11 @@ function Editor({ rec }: { rec: Recorder }) {
             </label>
             <TcField label={t('In')} mark={mIn} fps={fps} timezone={timezone} onTake={markIn} takeTitle={t('Take the current frame  (I)')} icon={<ArrowRightToLine size={14} />} onType={(s) => typed(s, setIn)} />
             <TcField label={t('Out')} mark={mOut} fps={fps} timezone={timezone} onTake={markOut} takeTitle={t('Take the current frame  (O)')} icon={<ArrowLeftToLine size={14} />} onType={(s) => typed(s, setOut)} />
+            {onAir && (
+              <button type="button" className="btn small sc-prog-btn" title={t('In and out on the whole programme under the playhead')} onClick={() => void markProgramme(onAir)}>
+                <Tv size={13} /> <span>{t('Whole programme: {name}', { name: onAir.name })}</span>
+              </button>
+            )}
             <div className="sc-dur">
               <span className="muted">{t('Duration')}</span>
               <b>{duration(frames, fps)}</b>
@@ -463,8 +523,8 @@ function Jobs({ jobs }: { jobs: Job[] }) {
 /** Steps of the ruler, ms. */
 const TICKS = [1000, 2000, 5000, 10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000, 7_200_000, 10_800_000, 21_600_000];
 
-function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fps: number; span: number; setSpan: (ms: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; timezone: string }) {
-  const { rec, pos, playing, fps, span, setSpan, spans, clips, mIn, mOut, onSeek, timezone } = props;
+function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fps: number; span: number; setSpan: (ms: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; timezone: string; guide: Programme[]; onProgramme: (g: Programme) => void }) {
+  const { rec, pos, playing, fps, span, setSpan, spans, clips, mIn, mOut, onSeek, timezone, guide, onProgramme } = props;
   const maxSpan = zoomMax(rec.loopHours);
   const tracks = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
@@ -753,7 +813,13 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
           drag.current = null;
           scrubbing.current = false;
           setGrab(nearHead(e.clientX) ? 'on-head' : '');
-          if (d?.mode === 'pending') onSeek(wallAt(e.clientX));
+          if (d?.mode !== 'pending') return;
+          // A click on a programme: its start (Shift: in and out on the whole programme).
+          const item = (e.target as HTMLElement).closest<HTMLElement>('.sc-epg-item');
+          const g = item ? guide.find((x) => String(x.id) + x.start === item.dataset.key) : undefined;
+          if (g && e.shiftKey) onProgramme(g);
+          else if (g) onSeek(Math.max(g.start, oldest));
+          else onSeek(wallAt(e.clientX));
         }}
         onPointerCancel={() => {
           drag.current = null;
@@ -769,6 +835,28 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
             </span>
           ))}
         </div>
+        {guide.length > 0 && (
+          <div className="sc-epg">
+            {guide
+              .filter((g) => g.end > start && g.start < end)
+              .map((g) => {
+                const l = Math.max(0, x(g.start));
+                const r = Math.min(100, x(g.end));
+                const on = pos && g.start <= pos.wall && pos.wall < g.end;
+                return (
+                  <div
+                    key={String(g.id) + g.start}
+                    data-key={String(g.id) + g.start}
+                    className={`sc-epg-item ${on ? 'on' : ''}`}
+                    style={{ left: `${l}%`, width: `${Math.max(0, r - l)}%` }}
+                    title={`${g.name}\n${clock(g.start, timezone).slice(0, 5)} → ${clock(g.end, timezone).slice(0, 5)}${g.text ? `\n${g.text}` : ''}\n\n${t('Click: go to its start · Shift+click: in and out on the whole programme')}`}
+                  >
+                    <span>{g.name}</span>
+                  </div>
+                );
+              })}
+          </div>
+        )}
         <div className="sc-strip">
           {strip.out.map((w) => (
             <div key={w} className="sc-tile" style={{ left: `${x(w - strip.d / 2)}%`, width: `${(strip.d / span) * 100}%` }}>
@@ -785,6 +873,9 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
           <div key={i} className="sc-gap" style={{ left: `${x(a)}%`, width: `${x(b) - x(a)}%` }} title={t('Not recorded')} />
         ))}
         {sel && <div className="sc-sel" style={{ left: `${x(sel[0])}%`, width: `${x(sel[1]) - x(sel[0])}%` }} />}
+        {/* The in and out points, each shown as soon as it is set. */}
+        {mIn && <div className="sc-mark in" style={{ left: `${x(mIn.wall)}%` }}><b>{t('In').charAt(0)}</b></div>}
+        {mOut && <div className="sc-mark out" style={{ left: `${x(mOut.wall + 1000 / fps)}%` }}><b>{t('Out').charAt(0)}</b></div>}
         {pos && <div className="sc-head" style={{ left: `${x(pos.wall)}%` }} />}
       </div>
     </div>

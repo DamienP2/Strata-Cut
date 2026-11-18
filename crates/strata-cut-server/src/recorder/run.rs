@@ -110,8 +110,10 @@ fn same_source(a: &RecorderConfig, b: &RecorderConfig) -> bool {
 
 /// The most telling line of FFmpeg's last words (not the generic "Error opening input files").
 fn best_line(lines: &[String]) -> String {
-    let generic = |l: &str| {
-        let l = clean_message(l);
+    let generic = |raw: &str| {
+        let l = clean_message(raw);
+        // The input's description and the files opened are not errors.
+        raw.starts_with(' ') || l.contains("for writing") || l.starts_with("Input #") || l.starts_with("Output #") || l.starts_with("Stream mapping") ||
         l.is_empty() || l.starts_with("Error opening input") || l.starts_with("Exiting") || l.starts_with("Conversion failed")
     };
     lines.iter().rev().find(|l| !generic(l)).or_else(|| lines.iter().rev().find(|l| !l.trim().is_empty())).cloned().unwrap_or_default()
@@ -214,9 +216,12 @@ fn urlencode(s: &str) -> String {
 }
 
 /// The whole FFmpeg command line (without the program).
-pub fn ffmpeg_args(input: Vec<String>, run_dir: &Path, thumb: &Path, audio: bool) -> Vec<String> {
+/// `describe`: FFmpeg also describes the input (programmes, streams: how the guide is found);
+/// `epg`: the guide's stream, written raw on FFmpeg's output.
+pub fn ffmpeg_args(input: Vec<String>, run_dir: &Path, thumb: &Path, audio: bool, describe: bool, epg: Option<&str>) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
-    let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-y", "-loglevel", "warning", "-copyts", "-fflags", "+discardcorrupt", "-thread_queue_size", "4096"].map(String::from).to_vec();
+    let level = if describe { "info" } else { "warning" };
+    let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", level, "-copyts", "-fflags", "+discardcorrupt", "-thread_queue_size", "4096"].map(String::from).to_vec();
     a.extend(input);
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     // 1. The stream as received, in segments.
@@ -237,6 +242,10 @@ pub fn ffmpeg_args(input: Vec<String>, run_dir: &Path, thumb: &Path, audio: bool
     // 4. A still every 2 s for the recorder's card.
     a.extend(s(&["-map", "0:v:0", "-vf", "fps=1/2,yadif=deint=interlaced,scale=480:-2", "-q:v", "5", "-update", "1", "-atomic_writing", "1"]));
     a.push(thumb.to_string_lossy().into_owned());
+    // 5. The programme guide (DVB EIT sections), decoded by the recorder.
+    if let Some(map) = epg {
+        a.extend(s(&["-map", map, "-c", "copy", "-f", "data", "pipe:1"]));
+    }
     a
 }
 
@@ -272,7 +281,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         Some(s) => super::web::input_args(s),
         None => input_args(cfg),
     };
-    let args = ffmpeg_args(input, &run_dir, &base.join("thumb.jpg"), audio);
+    // MPEG-TS sources may carry a programme guide: FFmpeg describes the input to find it.
+    let ts = matches!(cfg.protocol, Protocol::Udp | Protocol::Rtp | Protocol::Srt);
+    let found = rec.epg_found.lock().unwrap().clone();
+    let epg_map = found.stream.clone().filter(|_| ts);
+    let args = ffmpeg_args(input, &run_dir, &base.join("thumb.jpg"), audio, ts, epg_map.as_deref());
     tracing::debug!("{}: ffmpeg {}", cfg.name, args.join(" "));
     // Picture and sound apart on the page: yt-dlp joins them and feeds FFmpeg.
     let mut feeder = None;
@@ -304,7 +317,8 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             }
         }
     }
-    let child = Command::new(&m.ffmpeg).args(&args).current_dir(&run_dir).stdin(stdin).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
+    let stdout = if epg_map.is_some() { Stdio::piped() } else { Stdio::null() };
+    let child = Command::new(&m.ffmpeg).args(&args).current_dir(&run_dir).stdin(stdin).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true).spawn();
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
@@ -313,12 +327,21 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         }
     };
     let log: Arc<Mutex<VecDeque<String>>> = Default::default();
+    // The guide found in the input while FFmpeg does not write it yet: start again with it.
+    let epg_new = Arc::new(tokio::sync::Notify::new());
     if let Some(err) = child.stderr.take() {
         let log = log.clone();
         let name = cfg.name.clone();
+        let (rec2, epg_new2, mapped) = (rec.clone(), epg_new.clone(), epg_map.is_some());
         tokio::spawn(async move {
             let mut lines = tokio::io::BufReader::new(err).lines();
+            let mut info = super::epg::InfoReader::default();
             while let Ok(Some(l)) = lines.next_line().await {
+                if ts && info.line(&l) && !mapped {
+                    tracing::info!("{name}: the source carries a programme guide");
+                    *rec2.epg_found.lock().unwrap() = info.found.clone();
+                    epg_new2.notify_one();
+                }
                 tracing::debug!("{name}: {l}");
                 let mut q = log.lock().unwrap();
                 q.push_back(l);
@@ -329,6 +352,9 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         });
     }
     tracing::info!("{}: recording ({})", cfg.name, run_dir.display());
+    if let Some(out) = child.stdout.take() {
+        tokio::spawn(read_guide(m.data_dir().to_path_buf(), rec.clone(), found.service, out));
+    }
 
     let mut scan = Scanner::default();
     let mut tick = tokio::time::interval(Duration::from_millis(500));
@@ -365,6 +391,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
                 break Outcome::Stopped;
             }
+            _ = epg_new.notified() => {
+                stop_child(&mut child).await;
+                tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                break Outcome::Restart;
+            }
             _ = rec.new_run.notified() => {
                 // Only when this run is not already in the loops' current folder.
                 if run_dir.starts_with(m.recordings_dir()) {
@@ -386,6 +417,43 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     }
     finish_run(rec, &run_id);
     outcome
+}
+
+/// Decodes the guide FFmpeg writes on its output, keeps it, saves it now and then.
+async fn read_guide(data_dir: PathBuf, rec: Arc<Rec>, service: Option<u16>, mut out: tokio::process::ChildStdout) {
+    use tokio::io::AsyncReadExt;
+    let path = super::epg::path(&data_dir, &rec.id);
+    let mut sections = super::epg::Sections::default();
+    let mut decoder = super::epg::Decoder { service };
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut saved = std::time::Instant::now();
+    loop {
+        let n = match out.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        let events: Vec<_> = sections.push(&buf[..n]).iter().flat_map(|s| decoder.section(s)).collect();
+        if events.is_empty() {
+            continue;
+        }
+        let hours = rec.config().loop_hours;
+        let mut g = rec.epg.lock().unwrap();
+        g.add(events);
+        g.trim(now_ms() as f64, hours);
+        if g.changed && saved.elapsed() > Duration::from_secs(10) {
+            g.changed = false;
+            saved = std::time::Instant::now();
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = crate::paths::write_json(&path, &g.events, false);
+        }
+    }
+    let mut g = rec.epg.lock().unwrap();
+    if g.changed {
+        g.changed = false;
+        let _ = crate::paths::write_json(&path, &g.events, false);
+    }
 }
 
 /// Measures new audio fragments for the timeline's waveform, off the async threads.
