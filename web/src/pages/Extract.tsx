@@ -502,7 +502,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; zoom: n
         onSeek(oFrom + ((e.clientX - r.left) / r.width) * oSpan);
       }}>
         {spans.map((s, i) => (
-          <div key={i} className="sc-ov-rec" style={{ left: `${ox(s.from)}%`, width: `${ox(s.to) - ox(s.from)}%` }} />
+          <div key={i} className="sc-ov-rec" style={{ left: `${ox(s.from)}%`, width: `max(2px, ${ox(s.to) - ox(s.from)}%)` }} />
         ))}
         {clips.map((c) => (
           <div key={c.id} className="sc-ov-clip" style={{ left: `${ox(c.start)}%` }} title={c.name} />
@@ -524,7 +524,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; zoom: n
         onPointerCancel={() => (scrubbing.current = false)}
       >
         <div className="sc-ruler">
-          {ticks.out.map((v) => (
+          {ticks.out.filter((v) => x(v) < 94).map((v) => (
             <span key={v} style={{ left: `${x(v)}%` }}>
               {ticks.step >= 60_000 ? clock(v, timezone).slice(0, 5) : clock(v, timezone)}
             </span>

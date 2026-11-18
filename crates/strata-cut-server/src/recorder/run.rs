@@ -59,8 +59,9 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                     rec.set_state(State::Nosignal, "");
                 } else {
                     failures += 1;
-                    let nosignal = message.is_empty() || message.contains("timed out") || message.contains("Connection timed out") || message.contains("End of file") || message.contains("Input/output error");
-                    if nosignal {
+                    // A setting that cannot work is an error; anything else means the source is not there.
+                    let broken = ["Address already in use", "Cannot assign requested address", "Permission denied", "Protocol not found", "Invalid argument", "cannot start", "Error opening output", "No space left"].iter().any(|k| message.contains(k));
+                    if !broken {
                         rec.set_state(State::Nosignal, "");
                     } else {
                         rec.set_state(State::Error, message);
@@ -128,7 +129,7 @@ fn urlencode(s: &str) -> String {
 /// The whole FFmpeg command line (without the program).
 pub fn ffmpeg_args(c: &RecorderConfig, run_dir: &Path, thumb: &Path, audio: bool) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
-    let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-loglevel", "warning", "-copyts", "-fflags", "+discardcorrupt", "-thread_queue_size", "4096"].map(String::from).to_vec();
+    let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-y", "-loglevel", "warning", "-copyts", "-fflags", "+discardcorrupt", "-thread_queue_size", "4096"].map(String::from).to_vec();
     a.extend(input_args(c));
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     // 1. The stream as received, in segments.

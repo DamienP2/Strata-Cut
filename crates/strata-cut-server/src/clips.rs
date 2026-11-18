@@ -278,7 +278,7 @@ impl Clips {
             let _ = tokio::fs::create_dir_all(d).await;
         }
         let _ = tokio::process::Command::new(&self.recorders.ffmpeg)
-            .args(["-v", "error", "-ss", &format!("{:.3}", dur / 2.0), "-i"])
+            .args(["-v", "error", "-ss", &format!("{:.3}", if dur > 1.0 { dur / 2.0 } else { 0.0 }), "-i"])
             .arg(&out)
             .args(["-frames:v", "1", "-vf", "scale=-2:144", "-q:v", "5", "-y"])
             .arg(&thumb)
