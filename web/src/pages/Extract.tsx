@@ -785,8 +785,10 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           e.currentTarget.setPointerCapture(e.pointerId);
-          // On the playhead: drag it. Elsewhere: drag = move the view, click = put the playhead there.
-          if (nearHead(e.clientX)) {
+          // On the playhead or anywhere on the ruler (the hours): drag it.
+          // Elsewhere: drag = move the view, click = put the playhead there.
+          const onRuler = !!(e.target as HTMLElement).closest('.sc-ruler');
+          if (nearHead(e.clientX) || onRuler) {
             drag.current = { mode: 'scrub', x0: e.clientX, s0: start };
             scrubbing.current = true;
             setGrab('scrubbing');
@@ -798,7 +800,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         onPointerMove={(e) => {
           const d = drag.current;
           if (!d) {
-            setGrab(nearHead(e.clientX) ? 'on-head' : '');
+            setGrab(nearHead(e.clientX) || (e.target as HTMLElement).closest('.sc-ruler') ? 'on-head' : '');
             return;
           }
           if (d.mode === 'scrub') scrubTo(wallAt(e.clientX));

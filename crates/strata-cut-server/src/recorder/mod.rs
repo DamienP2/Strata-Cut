@@ -5,6 +5,7 @@ pub mod index;
 mod run;
 pub mod web;
 pub mod epg;
+pub mod schedule;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -74,6 +75,16 @@ pub struct RecorderConfig {
     pub bitrate: f64,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Records only during its programmed slots (else: a rolling loop).
+    #[serde(default)]
+    pub scheduled: bool,
+    /// Programmed: days the recordings are kept.
+    #[serde(default = "default_keep")]
+    pub keep_days: u32,
+}
+
+fn default_keep() -> u32 {
+    7
 }
 
 fn listener() -> Mode {
@@ -109,6 +120,9 @@ impl RecorderConfig {
         }
         if !(1..=168).contains(&self.loop_hours) {
             return Err("the loop lasts 1 to 168 hours".into());
+        }
+        if !(1..=365).contains(&self.keep_days) {
+            return Err("the recordings are kept 1 to 365 days".into());
         }
         let listens = self.listens();
         if listens && self.port == 0 {
@@ -172,6 +186,16 @@ pub enum State {
     Recording,
     Nosignal,
     Error,
+    /// Programmed: waiting for its next slot.
+    Waiting,
+}
+
+/// A slot of the programme, for the interface.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct SlotInfo {
+    pub name: String,
+    pub start: i64,
+    pub end: i64,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -193,6 +217,9 @@ pub struct Status {
     /// The programme on air now and the next one, from the source's guide.
     pub on_air: Option<epg::Event>,
     pub next: Option<epg::Event>,
+    /// Programmed: the slot recording now, and the next one.
+    pub slot: Option<SlotInfo>,
+    pub next_slot: Option<SlotInfo>,
 }
 
 pub fn now_ms() -> i64 {
@@ -219,6 +246,8 @@ pub struct Rec {
     pub epg: Mutex<epg::Guide>,
     /// Where FFmpeg found the guide in the source (learned at the first start).
     pub epg_found: Mutex<epg::Found>,
+    /// FFmpeg could not write the guide of this source: recorded without it.
+    pub epg_failed: std::sync::atomic::AtomicBool,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -268,7 +297,8 @@ impl Rec {
         s.next = g.events.iter().find(|e| e.start > now).map(short);
         drop(g);
         let cut = self.space_trimmed.load(std::sync::atomic::Ordering::Relaxed);
-        let short = matches!((oldest, newest), (Some(a), Some(b)) if ((b - a) as f64) < self.config().loop_hours as f64 * 3_600_000.0 * 0.98);
+        let cfg = self.config();
+        let short = !cfg.scheduled && matches!((oldest, newest), (Some(a), Some(b)) if ((b - a) as f64) < cfg.loop_hours as f64 * 3_600_000.0 * 0.98);
         s.space_limited = cut > 0 && now_ms() - cut < 15 * 60_000 && short;
         if media.is_some() {
             s.media = media;
@@ -389,6 +419,12 @@ pub struct Manager {
     pub ffmpeg: String,
     /// Limits the frame grabs running at once.
     pub grabs: tokio::sync::Semaphore,
+    /// The programmed slots of the recorders in schedule mode.
+    pub schedules: schedule::Schedules,
+    /// The server's time zone (the slots' hours are in it).
+    tz: Mutex<jiff::tz::TimeZone>,
+    /// recorders.json could not be written (disk full): written again later.
+    unsaved: std::sync::atomic::AtomicBool,
 }
 
 impl Manager {
@@ -409,6 +445,9 @@ impl Manager {
             pins: Mutex::new(Vec::new()),
             ffmpeg: std::env::var("SC_FFMPEG").unwrap_or_else(|_| "ffmpeg".into()),
             grabs: tokio::sync::Semaphore::new(4),
+            schedules: schedule::Schedules::load(data_dir.join("schedules.json")),
+            tz: Mutex::new(jiff::tz::TimeZone::get(&cfg.timezone).unwrap_or(jiff::tz::TimeZone::UTC)),
+            unsaved: false.into(),
         });
         web::keep_updated(data_dir.to_path_buf());
         let list: Vec<RecorderConfig> = crate::paths::read_json(&m.config_path()).unwrap_or_default();
@@ -433,11 +472,22 @@ impl Manager {
                     let _ = tokio::task::spawn_blocking(move || {
                         m2.enforce_space();
                         m2.forget_old_dirs();
+                        if m2.unsaved.load(std::sync::atomic::Ordering::Relaxed) && m2.save().is_ok() {
+                            tracing::info!("the recorders are saved again");
+                        }
                     })
                     .await;
                 }
+                let tz = m.tz();
+                let now_t = now_ms();
                 for r in m.recs() {
                     r.refresh_status();
+                    let c = r.config();
+                    let info = |o: Option<(schedule::Slot, i64, i64)>| o.map(|(s, a, b)| SlotInfo { name: s.name, start: a, end: b });
+                    let (slot, next) = if c.scheduled { (info(m.schedules.active(&r.id, &tz, now_t)), info(m.schedules.next(&r.id, &tz, now_t))) } else { (None, None) };
+                    let mut st = r.status.lock().unwrap();
+                    st.slot = slot;
+                    st.next_slot = next;
                 }
                 tick += 1;
                 let now = m.status_json();
@@ -466,6 +516,10 @@ impl Manager {
         let dir = cfg.recordings_dir(&self.data_dir);
         *self.recordings_dir.lock().unwrap() = dir.clone();
         *self.limits.lock().unwrap() = Limits::from(cfg, &self.data_dir);
+        if let Ok(tz) = jiff::tz::TimeZone::get(&cfg.timezone) {
+            *self.tz.lock().unwrap() = tz;
+            self.schedules.changed.notify_waiters();
+        }
         let mut dirs = self.dirs.lock().unwrap();
         if !dirs.contains(&dir) {
             tracing::info!("the loops now go to {}; the former ones stay readable until they roll out", dir.display());
@@ -603,9 +657,16 @@ impl Manager {
         self.recs.lock().unwrap().iter().find(|r| r.id == id).cloned()
     }
 
+    /// Writes recorders.json; when the disk refuses (full), it is written again later,
+    /// so that a recorder deleted meanwhile does not come back at the next start.
     fn save(&self) -> std::io::Result<()> {
         let list: Vec<RecorderConfig> = self.recs().iter().map(|r| r.config()).collect();
-        crate::paths::write_json(&self.config_path(), &list, true)
+        let r = crate::paths::write_json(&self.config_path(), &list, true);
+        self.unsaved.store(r.is_err(), std::sync::atomic::Ordering::Relaxed);
+        if let Err(e) = &r {
+            tracing::error!("the recorders could not be saved ({e}): tried again every 10 s");
+        }
+        r
     }
 
     fn add(self: &Arc<Self>, c: RecorderConfig) -> Arc<Rec> {
@@ -615,7 +676,7 @@ impl Manager {
         let guide = epg::Guide::load(&epg::path(&self.data_dir, &c.id));
         let rec = Arc::new(Rec {
             id: c.id.clone(),
-            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None }),
+            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None }),
             cfg: watch::channel(c).0,
             runs: RwLock::new(runs),
             stop: watch::channel(false).0,
@@ -625,6 +686,7 @@ impl Manager {
             new_run: tokio::sync::Notify::new(),
             epg: Mutex::new(guide),
             epg_found: Mutex::new(epg::Found::default()),
+            epg_failed: false.into(),
             task: Mutex::new(None),
         });
         rec.refresh_status();
@@ -656,8 +718,24 @@ impl Manager {
     pub fn reserved(&self) -> u64 {
         self.recs().iter().filter_map(|r| {
             let c = r.config();
-            c.enabled.then(|| loop_need(&c, r.status.lock().unwrap().measured)).flatten()
+            c.enabled.then(|| self.need_of(&c, r.status.lock().unwrap().measured)).flatten()
         }).sum()
+    }
+
+    pub fn tz(&self) -> jiff::tz::TimeZone {
+        self.tz.lock().unwrap().clone()
+    }
+
+    /// Bytes a recorder keeps when full: its loop, or programmed, the hours of its
+    /// slots in the days its recordings are kept.
+    pub fn need_of(&self, c: &RecorderConfig, measured: u64) -> Option<u64> {
+        if !c.scheduled {
+            return loop_need(c, measured);
+        }
+        let hours = self.schedules.hours_ahead(&c.id, &self.tz(), now_ms(), c.keep_days);
+        let mut h = c.clone();
+        h.loop_hours = 1;
+        loop_need(&h, measured).map(|per_hour| (per_hour as f64 * hours) as u64)
     }
 
     /// Refuses a recorder whose full loop does not fit (only when the change asks for more space).
@@ -670,17 +748,17 @@ impl Manager {
         for r in self.recs() {
             let o = r.config();
             let measured = r.status.lock().unwrap().measured;
-            let need = if o.enabled { loop_need(&o, measured).unwrap_or(0) } else { 0 };
+            let need = if o.enabled { self.need_of(&o, measured).unwrap_or(0) } else { 0 };
             before += need;
             if o.id == c.id {
                 known = true;
-                after += loop_need(c, measured).unwrap_or(0);
+                after += self.need_of(c, measured).unwrap_or(0);
             } else {
                 after += need;
             }
         }
         if !known {
-            after += loop_need(c, 0).unwrap_or(0);
+            after += self.need_of(c, 0).unwrap_or(0);
         }
         if after > cap && after > before {
             return Err("not enough disk space for this loop".into());
@@ -758,6 +836,7 @@ impl Manager {
         let dirs: Vec<PathBuf> = self.dirs.lock().unwrap().iter().map(|d| d.join(id)).collect();
         let _ = std::fs::remove_file(self.data_dir.join("cookies").join(format!("{id}.txt")));
         let _ = std::fs::remove_file(epg::path(&self.data_dir, id));
+        self.schedules.delete_recorder(id);
         let name = rec.config().name;
         let _ = tokio::task::spawn_blocking(move || {
             for dir in dirs {
@@ -800,7 +879,10 @@ impl Manager {
 
     /// Removes what is older than the loop (except pinned segments).
     pub fn trim(&self, rec: &Rec) {
-        let cutoff = (now_ms() - rec.config().loop_hours as i64 * 3_600_000) as f64;
+        // A loop keeps its length; programmed recordings are kept some days.
+        let c = rec.config();
+        let hours = if c.scheduled { c.keep_days as i64 * 24 } else { c.loop_hours as i64 };
+        let cutoff = (now_ms() - hours * 3_600_000) as f64;
         self.trim_before(rec, cutoff);
     }
 

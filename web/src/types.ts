@@ -26,6 +26,10 @@ export interface Recorder {
   cookies?: string;
   /** web: the platform found from the address (sent by the server). */
   platform?: string;
+  /** Records only during its programmed slots (else a rolling loop). */
+  scheduled?: boolean;
+  /** Programmed: days its recordings are kept. */
+  keepDays?: number;
   /** Loop length, hours. */
   loopHours: number;
   /** Expected bitrate, Mb/s: the loop's space is reserved from it (0 = unknown). */
@@ -33,7 +37,7 @@ export interface Recorder {
   enabled: boolean;
 }
 
-export type RecorderState = 'off' | 'starting' | 'recording' | 'nosignal' | 'error';
+export type RecorderState = 'off' | 'starting' | 'recording' | 'nosignal' | 'error' | 'waiting';
 
 export interface MediaInfo {
   codec: string;
@@ -67,6 +71,32 @@ export interface RecorderStatus {
   /** The programme on air and the next one, from the source's guide (EPG). */
   onAir: Programme | null;
   next: Programme | null;
+  /** Programmed: the slot recording now, and the next one. */
+  slot: SlotTime | null;
+  nextSlot: SlotTime | null;
+}
+
+export interface SlotTime {
+  name: string;
+  start: number;
+  end: number;
+}
+
+/** A programmed slot of a recorder (hours in the server's time zone). */
+export interface Slot {
+  id: string;
+  recorder: string;
+  name: string;
+  /** One day, YYYY-MM-DD; empty when repeated. */
+  date: string;
+  /** Repeated on these days: 1 = Monday … 7 = Sunday. */
+  days: number[];
+  start: string;
+  end: string;
+  enabled: boolean;
+  /** Sent by the server: the next (or current) occurrence. */
+  next?: { start: number; end: number } | null;
+  active?: boolean;
 }
 
 /** A programme of a source's guide (DVB EIT), server times in ms. */

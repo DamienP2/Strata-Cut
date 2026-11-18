@@ -77,4 +77,9 @@ export const system: Record<string, string> = {
   'Admins only (fallback)': 'Admins seulement (secours)',
   'Test the connection': 'Tester la connexion',
   'Directory reached · {n} keys': 'Annuaire joint · {n} clés',
+  'Empty the journal': 'Vider le journal',
+  'Empty the health journal?': 'Vider le journal de santé\u00a0?',
+  'The incidents, the crash reports and the log are deleted. Export them first if the support needs them.': 'Les incidents, les rapports de plantage et le journal sont effacés. Exportez-les d’abord si le support en a besoin.',
+  Empty: 'Vider',
+  'Journal emptied': 'Journal vidé',
 };

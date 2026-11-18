@@ -28,6 +28,9 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
         .route("/api/recorders/{id}/clear", post(clear))
+        .route("/api/schedules", get(schedules).post(put_slot))
+        .route("/api/schedules/occurrences", get(occurrences))
+        .route("/api/schedules/{id}", axum::routing::put(put_slot_id).delete(delete_slot))
         .route("/api/recorders/{id}/thumb.jpg", get(thumb))
         .route("/api/recorders/{id}/media", get(media))
         .route("/api/recorders/{id}/coverage", get(coverage))
@@ -85,6 +88,75 @@ async fn set_enabled(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlP
     let mut c = rec.config();
     c.enabled = b.enabled;
     s.recorders.update(&id, c).map(Json).map_err(bad)
+}
+
+/// The programmed slots, each with its next occurrence.
+async fn schedules(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> ApiResult<Json<Value>> {
+    let m = &s.recorders;
+    Ok(Json(json!({ "slots": m.schedules.json(&m.tz(), super::now_ms()), "timezone": m.tz().iana_name().unwrap_or("UTC") })))
+}
+
+/// Every occurrence of the slots between two server times (the calendar).
+async fn occurrences(State(s): State<Shared>, CurrentUser(_): CurrentUser, Query(q): Query<Window>) -> ApiResult<Json<Value>> {
+    let m = &s.recorders;
+    let tz = m.tz();
+    let (from, to) = (q.from as i64, q.to as i64);
+    if to <= from || to - from > 62 * 86_400_000 {
+        return Err(bad("the window is 1 ms to 62 days"));
+    }
+    let list: Vec<Value> = m
+        .schedules
+        .all()
+        .iter()
+        .flat_map(|sl| sl.occurrences(&tz, from, to).into_iter().map(move |(a, b)| json!({"slot": sl.id, "recorder": sl.recorder, "name": sl.name, "start": a, "end": b})))
+        .collect();
+    Ok(Json(json!({ "occurrences": list })))
+}
+
+/// Tells every client the programme changed.
+fn schedules_changed(s: &Shared) {
+    let m = &s.recorders;
+    m.events.send(crate::state::Audience::All, json!({"type": "schedules", "slots": m.schedules.json(&m.tz(), super::now_ms())}));
+}
+
+async fn put_slot(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(slot): Json<super::schedule::Slot>) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    save_slot(&s, slot)
+}
+
+async fn put_slot_id(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(mut slot): Json<super::schedule::Slot>) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    slot.id = id;
+    save_slot(&s, slot)
+}
+
+fn save_slot(s: &Shared, slot: super::schedule::Slot) -> ApiResult<Json<Value>> {
+    let m = s.recorders.clone();
+    let rec = m.get(&slot.recorder).ok_or_else(|| not_found("recorder"))?;
+    if !rec.config().scheduled {
+        return Err(bad("this recorder records in a loop: switch it to programmed"));
+    }
+    let before = m.reserved();
+    let saved = m
+        .schedules
+        .put(slot, |_| {
+            // The recordings kept must fit, as a loop's.
+            let after = m.reserved();
+            match m.loops_capacity() {
+                Some(cap) if after > cap && after > before => Err("not enough disk space for these recordings".into()),
+                _ => Ok(()),
+            }
+        })
+        .map_err(bad)?;
+    schedules_changed(s);
+    Ok(Json(serde_json::to_value(saved).unwrap_or_default()))
+}
+
+async fn delete_slot(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    s.recorders.schedules.delete(&id).map_err(bad)?;
+    schedules_changed(&s);
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// Empties a recorder's loop (it goes on recording).
@@ -362,7 +434,7 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
                 json!({
                     "id": r.id, "name": c.name, "enabled": c.enabled, "loopHours": c.loop_hours,
                     "expected": c.bitrate, "bitrate": st.bitrate, "bytes": st.bytes,
-                    "need": super::loop_need(&c, st.measured), "oldest": st.oldest, "newest": st.newest,
+                    "need": m.need_of(&c, st.measured), "oldest": st.oldest, "newest": st.newest,
                     "spaceLimited": st.space_limited,
                 })
             })

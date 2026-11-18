@@ -61,6 +61,11 @@ fn rank(level: &str) -> u8 {
 }
 
 /// The lines after `after`, at `level` or more severe, `limit` at most (the newest).
+/// Empties the log kept in memory (the numbering goes on).
+pub fn clear() {
+    RING.lock().unwrap_or_else(|p| p.into_inner()).entries.clear();
+}
+
 pub fn read(after: u64, level: Option<&str>, limit: usize) -> (Vec<Entry>, u64) {
     let min = level.map(rank).unwrap_or(0);
     let ring = RING.lock().unwrap();

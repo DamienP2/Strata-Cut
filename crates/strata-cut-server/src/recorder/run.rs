@@ -45,7 +45,24 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
             rec.no_audio.store(false, Ordering::Relaxed);
             continue;
         }
-        if rec.status.lock().unwrap().state == State::Off {
+        // Programmed: outside its slots, wait for the next one (the programme may change meanwhile).
+        if cfg.scheduled {
+            let now = now_ms();
+            let tz = m.tz();
+            if m.schedules.active(&rec.id, &tz, now).is_none() {
+                rec.set_state(State::Waiting, "");
+                rec.refresh_status();
+                let wait = m.schedules.next(&rec.id, &tz, now).map(|(_, a, _)| (a - now).clamp(0, 30_000)).unwrap_or(30_000);
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(wait as u64)) => {}
+                    _ = cfg_rx.changed() => {}
+                    _ = stop_rx.changed() => {}
+                    _ = m.schedules.changed.notified() => {}
+                }
+                continue;
+            }
+        }
+        if matches!(rec.status.lock().unwrap().state, State::Off | State::Waiting) {
             rec.set_state(State::Starting, "");
         }
         match record_once(&m, &rec, &cfg, &mut cfg_rx, &mut stop_rx).await {
@@ -114,7 +131,7 @@ fn best_line(lines: &[String]) -> String {
         let l = clean_message(raw);
         // The input's description and the files opened are not errors.
         raw.starts_with(' ') || l.contains("for writing") || l.starts_with("Input #") || l.starts_with("Output #") || l.starts_with("Stream mapping") ||
-        l.is_empty() || l.starts_with("Error opening input") || l.starts_with("Exiting") || l.starts_with("Conversion failed")
+        l.is_empty() || l.starts_with("Error opening input") || l.starts_with("Error opening output") || l.starts_with("Exiting") || l.starts_with("Conversion failed")
     };
     lines.iter().rev().find(|l| !generic(l)).or_else(|| lines.iter().rev().find(|l| !l.trim().is_empty())).cloned().unwrap_or_default()
 }
@@ -284,7 +301,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     // MPEG-TS sources may carry a programme guide: FFmpeg describes the input to find it.
     let ts = matches!(cfg.protocol, Protocol::Udp | Protocol::Rtp | Protocol::Srt);
     let found = rec.epg_found.lock().unwrap().clone();
-    let epg_map = found.stream.clone().filter(|_| ts);
+    let epg_map = found.stream.clone().filter(|_| ts && !rec.epg_failed.load(Ordering::Relaxed));
     let args = ffmpeg_args(input, &run_dir, &base.join("thumb.jpg"), audio, ts, epg_map.as_deref());
     tracing::debug!("{}: ffmpeg {}", cfg.name, args.join(" "));
     // Picture and sound apart on the page: yt-dlp joins them and feeds FFmpeg.
@@ -305,7 +322,12 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     tokio::spawn(async move {
                         let mut lines = tokio::io::BufReader::new(err).lines();
                         while let Ok(Some(l)) = lines.next_line().await {
-                            tracing::info!("{name}: yt-dlp: {l}");
+                            // Its errors only; the end of a pipe closed by FFmpeg is not one.
+                            if l.contains("ERROR") && !l.contains("ffmpeg exited with code") {
+                                tracing::warn!("{name}: yt-dlp: {}", l.trim());
+                            } else if !l.trim().is_empty() {
+                                tracing::debug!("{name}: yt-dlp: {}", l.trim());
+                            }
                         }
                     });
                 }
@@ -337,7 +359,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             let mut lines = tokio::io::BufReader::new(err).lines();
             let mut info = super::epg::InfoReader::default();
             while let Ok(Some(l)) = lines.next_line().await {
-                if ts && info.line(&l) && !mapped {
+                if ts && info.line(&l) && !mapped && !rec2.epg_failed.load(Ordering::Relaxed) {
                     tracing::info!("{name}: the source carries a programme guide");
                     *rec2.epg_found.lock().unwrap() = info.found.clone();
                     epg_new2.notify_one();
@@ -375,6 +397,18 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     Ok(s) => tracing::warn!("{}: ffmpeg ended ({s}): {message}", cfg.name),
                     Err(e) => tracing::warn!("{}: ffmpeg: {e}", cfg.name),
                 }
+                if !scan.had_data {
+                    // FFmpeg's last words, for the log (the reason is often a line above the last).
+                    let tail: Vec<&str> = lines.iter().rev().filter(|l| !l.starts_with(' ') && !l.contains("for writing")).take(6).map(|l| l.as_str()).collect();
+                    tracing::debug!("{}: ffmpeg said: {}", cfg.name, tail.into_iter().rev().collect::<Vec<_>>().join(" | "));
+                    // The guide written along may be what FFmpeg refuses: record without it from now on.
+                    if epg_map.is_some() {
+                        rec.epg_failed.store(true, Ordering::Relaxed);
+                        rec.epg_found.lock().unwrap().stream = None;
+                        tracing::warn!("{}: recording without the programme guide (FFmpeg did not start with it)", cfg.name);
+                        break Outcome::Restart;
+                    }
+                }
                 break Outcome::Exited { had_data: scan.had_data, message: clean_message(&message) };
             }
             r = cfg_rx.changed() => {
@@ -408,6 +442,13 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             _ = tick.tick() => {
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, false));
                 measure(m, rec, &run_id, std::mem::take(&mut scan.waves));
+                // Programmed: the slot is over (or was removed).
+                if cfg.scheduled && m.schedules.active(&rec.id, &m.tz(), now_ms()).is_none() {
+                    tracing::info!("{}: end of the programmed slot", cfg.name);
+                    stop_child(&mut child).await;
+                    tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                    break Outcome::Restart;
+                }
             }
         }
     };
@@ -713,7 +754,7 @@ mod tests {
     use super::*;
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
-        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true }
+        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, scheduled: false, keep_days: 7 }
     }
 
     #[test]

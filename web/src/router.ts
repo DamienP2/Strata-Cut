@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 /** The pages of the app, from the URL. */
 export type Route =
   | { page: 'recorders' }
+  | { page: 'schedule' }
   | { page: 'extract'; recorder?: string }
   | { page: 'clips' }
   | { page: 'system'; section?: string }
@@ -15,6 +16,8 @@ export function parseRoute(path: string): Route {
       return { page: 'extract', recorder: p[1] ? decodeURIComponent(p[1]) : undefined };
     case 'clips':
       return { page: 'clips' };
+    case 'schedule':
+      return { page: 'schedule' };
     case 'system':
       return { page: 'system', section: p[1] };
     case 'help':

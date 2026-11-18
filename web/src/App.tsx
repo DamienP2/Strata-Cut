@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { CircleHelp, Clapperboard, RadioTower, Scissors, Server } from 'lucide-react';
+import { CalendarClock, CircleHelp, Clapperboard, RadioTower, Scissors, Server } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { loadDisplayPrefs, useDisplayPrefs } from './displayPrefs';
 import { t, useLang } from './i18n';
@@ -19,6 +19,7 @@ import { SystemPage, visibleSystem } from './pages/SystemPage';
 
 const Recorders = lazy(() => import('./pages/Recorders').then((m) => ({ default: m.Recorders })));
 const Extract = lazy(() => import('./pages/Extract').then((m) => ({ default: m.Extract })));
+const Schedule = lazy(() => import('./pages/Schedule').then((m) => ({ default: m.Schedule })));
 const Clips = lazy(() => import('./pages/Clips').then((m) => ({ default: m.Clips })));
 const Help = lazy(() => import('./pages/Help').then((m) => ({ default: m.Help })));
 
@@ -93,6 +94,9 @@ function Shell({ route }: { route: Route }) {
     case 'clips':
       page = <Clips />;
       break;
+    case 'schedule':
+      page = <Schedule />;
+      break;
     case 'system':
       page = system ? <SystemPage section={route.section} /> : null;
       break;
@@ -109,6 +113,7 @@ function Shell({ route }: { route: Route }) {
         <Brand />
         <div className="tabs home-tabs">
           <Tab on={route.page === 'recorders'} icon={<RadioTower size={14} />} label={t('Recorders')} path="/" />
+          <Tab on={route.page === 'schedule'} icon={<CalendarClock size={14} />} label={t('Schedule')} path="/schedule" />
           <Tab on={route.page === 'extract'} icon={<Scissors size={14} />} label={t('Extraction')} path="/extract" />
           <Tab on={route.page === 'clips'} icon={<Clapperboard size={14} />} label={t('Clips')} path="/clips" />
           {system && <Tab on={route.page === 'system'} icon={<Server size={14} />} label={t('System')} path="/system" dot={admin && needsLook(health)} />}

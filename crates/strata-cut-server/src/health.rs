@@ -283,6 +283,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/system/health", get(summary))
         .route("/api/system/health/journal", get(get_journal))
         .route("/api/system/health/seen", post(seen))
+        .route("/api/system/health/clear", post(clear))
         .route("/api/system/health/export.zip", get(export))
 }
 
@@ -334,6 +335,31 @@ async fn seen(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResul
     require(me.is_admin())?;
     let path = health_dir(&s).join("seen.json");
     blocking(move || crate::paths::write_json(&path, &Seen { at: now_ms() }, false)).await?.map_err(internal)?;
+    s.changed("health");
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Empties the journal (incidents), the crash reports and the log in memory.
+async fn clear(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<StatusCode> {
+    require(me.is_admin())?;
+    let dir = health_dir(&s);
+    blocking(move || {
+        let _g = HEALTH.get().map(|h| h.write.lock().unwrap_or_else(|p| p.into_inner()));
+        for sub in [dir.clone(), dir.join("crashes")] {
+            for e in std::fs::read_dir(&sub).into_iter().flatten().flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let doomed = (name.starts_with("journal-") && name.ends_with(".jsonl")) || (sub.ends_with("crashes") && name.ends_with(".json"));
+                if doomed {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        crate::paths::write_json(&dir.join("seen.json"), &Seen { at: now_ms() }, false)
+    })
+    .await?
+    .map_err(internal)?;
+    crate::logs::clear();
+    tracing::info!("health journal emptied by {}", me.username);
     s.changed("health");
     Ok(StatusCode::NO_CONTENT)
 }

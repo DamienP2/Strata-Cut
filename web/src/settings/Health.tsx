@@ -1,13 +1,14 @@
 /* Système › Supervision › Santé: incidents and the server's log. */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { create } from 'zustand';
-import { Download, HeartPulse, Pause, Play, ScrollText, Search, TriangleAlert } from 'lucide-react';
+import { Download, Eraser, HeartPulse, Pause, Play, ScrollText, Search, TriangleAlert } from 'lucide-react';
 import { locale, t, tn } from '../i18n';
 import { api, useApp } from '../store';
 import { PageHead, SubTabs } from '../pages/SidePage';
 import { useDisplayPref } from '../displayPrefs';
 import { Dropdown } from '../ui/Dropdown';
 import { Empty } from '../ui/Empty';
+import { confirmDialog } from '../ui/dialogs';
 import { formatDateTime, formatDuration, timeAgo } from '../ui/format';
 import { healthSeen, loadHealth, useHealth, type Incident } from '../ui/health';
 
@@ -15,6 +16,17 @@ type Tab = 'incidents' | 'log';
 
 export function Health() {
   const health = useHealth((s) => s.health);
+  const toast = useApp((s) => s.toast);
+  const clearJournal = async () => {
+    if (!(await confirmDialog({ title: t('Empty the health journal?'), message: t('The incidents, the crash reports and the log are deleted. Export them first if the support needs them.'), confirm: t('Empty'), danger: true }))) return;
+    try {
+      await api('POST', '/api/system/health/clear');
+      await loadHealth();
+      toast(t('Journal emptied'));
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
   const [tab, setTab] = useDisplayPref<Tab>('health.tab', 'incidents');
 
   useEffect(() => {
@@ -35,6 +47,9 @@ export function Health() {
   return (
     <>
       <PageHead title={t('Health')} sub={sub}>
+        <button className="btn" onClick={() => void clearJournal()}>
+          <Eraser size={14} /> {t('Empty the journal')}
+        </button>
         <a className="btn" href="/api/system/health/export.zip" download>
           <Download size={14} /> {t('Export')}
         </a>

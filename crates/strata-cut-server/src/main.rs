@@ -147,6 +147,54 @@ async fn bind_retry(wanted: SocketAddr) -> anyhow::Result<tokio::net::TcpListene
     anyhow::bail!("{wanted} is in use")
 }
 
+/// Other Strata Cut servers running on the same data folder (same program, `run`).
+fn others(data_dir: &std::path::Path) -> Vec<i32> {
+    let me = std::process::id() as i32;
+    let Ok(exe) = std::env::current_exe() else { return Vec::new() };
+    let strip = |p: std::path::PathBuf| std::path::PathBuf::from(p.to_string_lossy().trim_end_matches(" (deleted)"));
+    let exe = strip(exe);
+    let data = data_dir.to_string_lossy().into_owned();
+    let Ok(dir) = std::fs::read_dir("/proc") else { return Vec::new() };
+    dir.flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok())
+        .filter(|&pid| pid != me)
+        .filter(|&pid| std::fs::read_link(format!("/proc/{pid}/exe")).map(strip).is_ok_and(|p| p == exe))
+        .filter(|&pid| {
+            let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+            let args: Vec<String> = cmd.split(|&b| b == 0).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+            // A server (not `user …` or `service …`) on this very folder.
+            let server = !args.iter().skip(1).any(|a| a == "user" || a == "service");
+            let env = std::fs::read(format!("/proc/{pid}/environ")).unwrap_or_default();
+            let env_dir = env.split(|&b| b == 0).find_map(|v| v.strip_prefix(b"SC_DATA_DIR=").map(|d| String::from_utf8_lossy(d).into_owned()));
+            server && (args.contains(&data) || env_dir.as_deref() == Some(data.as_str()))
+        })
+        .collect()
+}
+
+/// Stops them (cleanly, then by force after 10 s).
+fn stop_others(data_dir: &std::path::Path) {
+    let pids = others(data_dir);
+    if pids.is_empty() {
+        return;
+    }
+    for &pid in &pids {
+        tracing::warn!("another Strata Cut (pid {pid}) was still running on {}: stopped", data_dir.display());
+        // SAFETY: kill has no memory effects.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+    }
+    for _ in 0..100 {
+        if others(data_dir).is_empty() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for pid in others(data_dir) {
+        tracing::warn!("pid {pid} did not stop: killed");
+        // SAFETY: as above.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+}
+
 async fn until_true(mut rx: watch::Receiver<bool>) {
     while !*rx.borrow() {
         if rx.changed().await.is_err() {
@@ -157,6 +205,9 @@ async fn until_true(mut rx: watch::Receiver<bool>) {
 
 pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Result<()> {
     let data_dir = args.data_dir.clone().unwrap_or_else(paths::user_data_dir);
+    // One Strata Cut per data folder: an older one still running (an update or a restart
+    // that did not end it) would go on recording with its old list of recorders.
+    stop_others(&data_dir);
     health::start(&data_dir);
     update::startup_guard(&data_dir);
     update::confirm_after(data_dir.clone(), Duration::from_secs(60));
