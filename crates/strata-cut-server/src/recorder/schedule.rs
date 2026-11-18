@@ -73,13 +73,15 @@ impl Slot {
         Ok(())
     }
 
-    /// The occurrences overlapping [from, to) in ms, in the time zone `tz`.
+    /// The occurrences that record, overlapping [from, to) in ms (none while paused).
     pub fn occurrences(&self, tz: &TimeZone, from: i64, to: i64) -> Vec<(i64, i64)> {
+        if self.enabled { self.times(tz, from, to) } else { Vec::new() }
+    }
+
+    /// Its times overlapping [from, to) in ms, in the time zone `tz`, paused or not (the interface).
+    pub fn times(&self, tz: &TimeZone, from: i64, to: i64) -> Vec<(i64, i64)> {
         let mut out = Vec::new();
         let (Some((sh, sm)), Some((eh, em))) = (hm(&self.start), hm(&self.end)) else { return out };
-        if !self.enabled {
-            return out;
-        }
         let day = |ms: i64| Timestamp::from_millisecond(ms).ok().map(|t| t.to_zoned(tz.clone()).date());
         let (Some(mut d), Some(last)) = (day(from - 86_400_000), day(to)) else { return out };
         let once = self.date.parse::<civil::Date>().ok();
@@ -193,10 +195,10 @@ impl Schedules {
             .all()
             .into_iter()
             .map(|s| {
-                let occ = s.occurrences(tz, now, now + 8 * 86_400_000).into_iter().find(|&(_, b)| b > now);
+                let occ = s.times(tz, now, now + 8 * 86_400_000).into_iter().find(|&(_, b)| b > now);
                 let mut v = serde_json::to_value(&s).unwrap_or_default();
                 v["next"] = occ.map(|(a, b)| json!({"start": a, "end": b})).unwrap_or(Value::Null);
-                v["active"] = json!(occ.is_some_and(|(a, _)| a <= now));
+                v["active"] = json!(s.enabled && occ.is_some_and(|(a, _)| a <= now));
                 v
             })
             .collect();

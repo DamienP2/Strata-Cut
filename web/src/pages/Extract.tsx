@@ -170,7 +170,18 @@ function Editor({ rec }: { rec: Recorder }) {
     const onPause = () => setPlaying(p.playing);
     v.addEventListener('play', onPlay);
     v.addEventListener('pause', onPause);
-    void p.goLive(serverNow());
+    // `?at=<ms>` (from the Schedule page): that moment, else the live.
+    const at = Number(new URLSearchParams(location.search).get('at'));
+    if (at > 0) {
+      setLive(false);
+      void p.seekWall(at).then(() => {
+        if (p.run) return;
+        // That moment is no longer in the loop: the live.
+        toast(t('This moment is no longer in the loop'), 'error');
+        setLive(true);
+        void p.goLive(serverNow());
+      });
+    } else void p.goLive(serverNow());
     return () => {
       cancelAnimationFrame(frame);
       v.removeEventListener('play', onPlay);

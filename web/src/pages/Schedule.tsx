@@ -60,13 +60,13 @@ export function Schedule() {
   const nameOf = (id: string) => recorders.find((r) => r.id === id)?.name ?? '—';
   const names = useMemo(dayNames, []);
   if (!slots) return <div className="loading">{t('Loading…')}</div>;
+  // The list: what is to come (an ended slot is no longer shown), the paused ones last.
   const shown = slots
-    .filter((s) => (!only || s.recorder === only) && (!q || `${s.name} ${nameOf(s.recorder)}`.toLowerCase().includes(q.toLowerCase())))
-    .sort((a, b) => (a.next?.start ?? Infinity) - (b.next?.start ?? Infinity));
+    .filter((s) => s.next && (!only || s.recorder === only) && (!q || `${s.name} ${nameOf(s.recorder)}`.toLowerCase().includes(q.toLowerCase())))
+    .sort((a, b) => Number(!a.enabled) - Number(!b.enabled) || a.next!.start - b.next!.start);
   const upcoming = slots.filter((s) => s.next && s.enabled).sort((a, b) => a.next!.start - b.next!.start)[0];
   const now = serverNow();
 
-  const when = (s: Slot) => (s.date ? day(new Date(`${s.date}T12:00:00Z`).getTime(), 'UTC', locale()) : s.days.length === 7 ? t('Every day') : s.days.map((d) => names[d - 1]).join(' · '));
   const remove = async (s: Slot) => {
     if (!(await confirmDialog({ title: t('Delete the slot “{name}”?', { name: s.name || nameOf(s.recorder) }), message: t('What it recorded stays.'), confirm: t('Delete'), danger: true }))) return;
     try {
@@ -143,69 +143,75 @@ export function Schedule() {
                 <p>{q || only ? t('No match') : t('No slot yet')}</p>
               </div>
             ) : (
-              <table className="user-table sc-slots">
-                <thead>
-                  <tr>
-                    <th>{t('Name')}</th>
-                    <th>{t('Recorder')}</th>
-                    <th>{t('When')}</th>
-                    <th>{t('Hours')}</th>
-                    <th>{t('Next')}</th>
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((s) => (
-                    <tr key={s.id} className={s.enabled ? '' : 'dim'}>
-                      <td>
-                        <strong>{s.name || '—'}</strong>
-                      </td>
-                      <td>
-                        {nameOf(s.recorder)}
-                        {recorders.find((r) => r.id === s.recorder)?.enabled && (
-                          <span className="muted" title={t('This recorder already records all the time: its slots change nothing while it runs.')}>
-                            {' '}· {t('already recording')}
-                          </span>
-                        )}
-                      </td>
-                      <td>{when(s)}</td>
-                      <td className="num">
-                        {s.start} → {s.end}
-                      </td>
-                      <td>
+              <div className="sc-slot-list">
+                {shown.map((s) => {
+                  const n = s.next!;
+                  const live = s.enabled && !!s.active;
+                  const rec = recorders.find((r) => r.id === s.recorder);
+                  const dayGap = Math.round((startOfDay(n.start, timezone) - startOfDay(now, timezone)) / DAY);
+                  const dayLabel = dayGap === 0 ? t('Today') : dayGap === 1 ? t('Tomorrow') : day(n.start, timezone, locale());
+                  return (
+                    <div key={s.id} className={`sc-slot-row ${s.enabled ? '' : 'paused'} ${live ? 'live' : ''}`}>
+                      <button type="button" className="sc-slot-when" onClick={() => setEdit({ slot: s })} title={t('Edit')}>
+                        <span className="sc-slot-day">{dayLabel}</span>
+                        <span className="sc-slot-time">{hhmm(n.start, timezone)}</span>
+                      </button>
+                      <div className="sc-slot-main">
+                        <strong>{s.name || t('Programmed slot')}</strong>
+                        <span className="sc-slot-meta">
+                          <span className={`nav-dot ${rec?.enabled ? 'ok' : ''}`} title={rec?.enabled ? t('This recorder already records all the time: its slots change nothing while it runs.') : undefined} />
+                          {nameOf(s.recorder)}
+                          <span className="sc-slot-sep">·</span>
+                          {s.date ? (
+                            t('Once')
+                          ) : (
+                            <span className="sc-slot-days">
+                              {names.map((nm, k) => (
+                                <i key={k} className={s.days.includes(k + 1) ? 'on' : ''}>
+                                  {nm.charAt(0).toUpperCase()}
+                                </i>
+                              ))}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="sc-slot-hours">
+                        <span>
+                          {s.start} – {s.end}
+                        </span>
+                        <span className="muted">{until(n.end - n.start)}</span>
+                      </div>
+                      <div className="sc-slot-state">
                         {!s.enabled ? (
-                          <span className="muted">{t('Paused')}</span>
-                        ) : s.active && s.next ? (
-                          <span className="sc-state ok">
-                            <span className="sc-rec" /> {t('Recording until {h}', { h: hhmm(s.next.end, timezone) })}
-                          </span>
-                        ) : s.next ? (
-                          <span title={t('in {d}', { d: until(s.next.start - now) })}>
-                            {day(s.next.start, timezone, locale())} {hhmm(s.next.start, timezone)}
-                          </span>
+                          <span className="sc-pill">{t('Paused')}</span>
+                        ) : live ? (
+                          <button type="button" className="sc-pill live link" title={t('Click: watch it in Extraction')} onClick={() => void navigate(`/extract/${s.recorder}`)}>
+                            <span className="sc-rec" /> {t('Recording until {h}', { h: hhmm(n.end, timezone) })}
+                          </button>
                         ) : (
-                          <span className="muted">{t('Over')}</span>
+                          <span className="sc-pill soon">{t('in {d}', { d: until(n.start - now) })}</span>
                         )}
-                      </td>
-                      <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      </div>
+                      <div className="sc-slot-actions">
                         {admin && (
                           <>
-                            <label className="check sc-slot-on" title={s.enabled ? t('Pause') : t('Resume')}>
+                            <label className="check sc-slot-on" title={t('Paused: the slot records nothing until it is active again (nothing is deleted).')}>
                               <input type="checkbox" checked={s.enabled} onChange={() => void toggle(s)} />
-                            </label>{' '}
+                              <span>{s.enabled ? t('Active') : t('Paused')}</span>
+                            </label>
                             <button className="icon-btn ghost" title={t('Edit')} onClick={() => setEdit({ slot: s })}>
                               <Pencil size={14} />
-                            </button>{' '}
+                            </button>
                             <button className="icon-btn ghost" title={t('Delete')} onClick={() => void remove(s)}>
                               <Trash2 size={14} />
                             </button>
                           </>
                         )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </>
         )}
@@ -245,7 +251,7 @@ function SlotModal({ slot, initial, recorders, preset, names, timezone, admin, o
     if (!slot) return;
     const now = serverNow();
     api<{ occurrences: Occurrence[] }>('GET', `/api/schedules/occurrences?from=${Math.round(now)}&to=${Math.round(now + 21 * 86_400_000)}`).then(
-      (o) => setComing(o.occurrences.filter((x) => x.slot === slot.id).sort((a, b) => a.start - b.start).slice(0, 6)),
+      (o) => setComing(o.occurrences.filter((x) => x.slot === slot.id && x.enabled !== false).sort((a, b) => a.start - b.start).slice(0, 6)),
       () => setComing([]),
     );
   }, [slot]);
@@ -394,9 +400,21 @@ interface Occurrence {
   name: string;
   start: number;
   end: number;
+  /** false: the slot is paused (shown, records nothing). */
+  enabled?: boolean;
 }
 
 const DAY = 86_400_000;
+
+type View = '6h' | '12h' | 'day' | 'week';
+const SPANS: Record<View, number> = { '6h': 6 * 3_600_000, '12h': 12 * 3_600_000, day: DAY, week: 7 * DAY };
+
+/** Where a view starts around `ms`: an hour before (6 h, 12 h: on the hour), else at midnight. */
+function anchorFor(v: View, ms: number, tz: string): number {
+  if (v === 'day' || v === 'week') return startOfDay(ms, tz);
+  const back = v === '6h' ? 3_600_000 : 2 * 3_600_000;
+  return Math.floor((ms - back) / 3_600_000) * 3_600_000;
+}
 
 /** The time zone's offset at `ms` (ms to add to UTC to read its clock). */
 function tzOffset(ms: number, tz: string): number {
@@ -419,9 +437,11 @@ function startOfDay(ms: number, tz: string): number {
  * shows above each row (a click on a programme makes a slot for it).
  */
 function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
-  const [view, setView] = useState<'day' | 'week'>('week');
-  const [anchor, setAnchor] = useState(() => startOfDay(serverNow(), timezone));
-  const span = view === 'day' ? DAY : 7 * DAY;
+  // 6 h by default (from an hour ago), 12 h, a day, a week.
+  const [view, setView] = useState<View>('6h');
+  const [anchor, setAnchor] = useState(() => anchorFor('6h', serverNow(), timezone));
+  const span = SPANS[view];
+  const hourly = view !== 'week';
   const from = anchor;
   const to = anchor + span;
   const [occ, setOcc] = useState<Occurrence[]>([]);
@@ -458,28 +478,41 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
   }, [from, to, ids]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const x = (ms: number) => ((ms - from) / span) * 100;
-  const days = Array.from({ length: view === 'day' ? 1 : 7 }, (_, i) => startOfDay(from + i * DAY + DAY / 2, timezone));
-  const ticks = view === 'day' ? Array.from({ length: 24 }, (_, h) => from + h * 3_600_000) : days.flatMap((d) => [6, 12, 18].map((h) => d + h * 3_600_000));
-  const label = view === 'day' ? day(from, timezone, locale()) : `${day(from, timezone, locale())} → ${day(to - DAY / 2, timezone, locale())}`;
+  // Midnights in view, the lines (every 30 min on 6 h, every hour on 12 h and a day) and their labels.
+  const days: number[] = [];
+  for (let d = startOfDay(from, timezone); d < to; d = startOfDay(d + DAY + 3_600_000, timezone)) if (d >= from) days.push(d);
+  const weekDays = view === 'week' ? Array.from({ length: 7 }, (_, i) => startOfDay(from + i * DAY + DAY / 2, timezone)) : [];
+  const every = view === '6h' ? 1_800_000 : 3_600_000;
+  const ticks = hourly ? Array.from({ length: Math.round(span / every) }, (_, i) => from + i * every) : weekDays.flatMap((d) => [6, 12, 18].map((h) => d + h * 3_600_000));
+  const label = view === 'day'
+    ? day(from, timezone, locale())
+    : hourly
+    ? `${day(from, timezone, locale())} ${hhmm(from, timezone)} → ${dateIn(to - 1, timezone) === dateIn(from, timezone) ? '' : `${day(to - 1, timezone, locale())} `}${hhmm(to, timezone)}`
+    : `${day(from, timezone, locale())} → ${day(to - DAY / 2, timezone, locale())}`;
+  const go = (dir: number) => setAnchor((a) => (view === 'week' || view === 'day' ? startOfDay(a + dir * span + DAY / 2, timezone) : a + dir * span));
+  const pick = (v: View) => {
+    setAnchor(anchorFor(v, now >= from && now < to ? now : from + span / 2, timezone));
+    setView(v);
+  };
 
   // A drag on an empty place: the new slot's hours (5 min steps).
   const [sel, setSel] = useState<{ recorder: string; a: number; b: number } | null>(null);
   const drag = useRef<{ recorder: string; x0: number; a: number; lane: DOMRect } | null>(null);
   const snap = (ms: number, step: number) => Math.round(ms / step) * step;
   const at = (clientX: number, r: DOMRect) => from + Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * span;
-  const step = view === 'day' ? 5 * 60_000 : 15 * 60_000;
+  const step = hourly ? 5 * 60_000 : 15 * 60_000;
   const open = (recorder: string, a: number, b: number, name = '') => onNew({ recorder, name, date: dateIn(a, timezone), days: [], start: hhmm(a, timezone), end: hhmm(b, timezone) });
 
   return (
     <div className="sc-cal">
       <div className="sc-cal-head">
-        <button className="icon-btn ghost" title={t('Before')} onClick={() => setAnchor((a) => startOfDay(a - span + DAY / 2, timezone))}>
+        <button className="icon-btn ghost" title={t('Before')} onClick={() => go(-1)}>
           <ChevronLeft size={16} />
         </button>
-        <button className="btn small" onClick={() => setAnchor(startOfDay(serverNow(), timezone))}>
-          {t('Today')}
+        <button className="btn small" onClick={() => setAnchor(anchorFor(view, serverNow(), timezone))}>
+          {t('Now')}
         </button>
-        <button className="icon-btn ghost" title={t('After')} onClick={() => setAnchor((a) => startOfDay(a + span + DAY / 2, timezone))}>
+        <button className="icon-btn ghost" title={t('After')} onClick={() => go(1)}>
           <ChevronRight size={16} />
         </button>
         <strong className="sc-cal-range">{label}</strong>
@@ -488,10 +521,12 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
         <Segmented
           value={view}
           options={[
+            { value: '6h', label: '6 h' },
+            { value: '12h', label: '12 h' },
             { value: 'day', label: t('Day') },
             { value: 'week', label: t('Week') },
           ]}
-          onChange={(v) => setView(v)}
+          onChange={pick}
         />
       </div>
       <div className="sc-cal-grid">
@@ -499,20 +534,32 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
           <div className="sc-cal-name" />
           <div className="sc-cal-lane">
             {view === 'week'
-              ? days.map((d) => (
+              ? weekDays.map((d) => (
                   <span key={d} className={`sc-cal-day ${startOfDay(now, timezone) === d ? 'today' : ''}`} style={{ left: `${x(d)}%`, width: `${(DAY / span) * 100}%` }}>
                     {day(d, timezone, locale())}
                   </span>
                 ))
-              : ticks.map((tk) => (
-                  <span key={tk} className="sc-cal-hour" style={{ left: `${x(tk)}%` }}>
-                    {hhmm(tk, timezone).slice(0, 2)}
-                  </span>
-                ))}
+              : ticks
+                  .filter((tk) => hhmm(tk, timezone).endsWith(':00'))
+                  .map((tk) => (
+                    <span key={tk} className={`sc-cal-hour ${days.includes(tk) && tk > from ? 'midnight' : ''}`} style={{ left: `${x(tk)}%` }}>
+                      {/* A new day inside the view shows its date (the first one is in the title). */}
+                      {days.includes(tk) && tk > from ? day(tk, timezone, locale()) : view === '6h' ? hhmm(tk, timezone) : hhmm(tk, timezone).slice(0, 2)}
+                    </span>
+                  ))}
           </div>
         </div>
         {recorders.map((r) => {
-          const mine = occ.filter((o) => o.recorder === r.id);
+          // Overlapping slots go one under the other (each keeps its own place to click).
+          const mine = occ.filter((o) => o.recorder === r.id).sort((a, b) => a.start - b.start);
+          const ends: number[] = [];
+          const track = mine.map((o) => {
+            let k = ends.findIndex((e) => e <= o.start);
+            if (k < 0) k = ends.push(0) - 1;
+            ends[k] = o.end;
+            return k;
+          });
+          const tracks = Math.max(1, ends.length);
           const guide = guides[r.id] ?? [];
           return (
             <div key={r.id} className="sc-cal-row">
@@ -553,6 +600,8 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
                   setSel(null);
                 }}
               >
+                {/* Time gone by: shaded. */}
+                {now > from && <span className="sc-cal-past" style={{ width: `${Math.min(100, x(now))}%` }} />}
                 {days.map((d) => (
                   <span key={d} className="sc-cal-line day" style={{ left: `${x(d)}%` }} />
                 ))}
@@ -571,17 +620,30 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
                     {g.name}
                   </button>
                 ))}
-                {mine.map((o) => {
+                {mine.map((o, i) => {
                   const slot = slots.find((s) => s.id === o.slot);
-                  const live = o.start <= now && now < o.end;
+                  const live = o.enabled !== false && o.start <= now && now < o.end;
+                  // Recorded and still in the loop: it opens in Extraction.
+                  const kept = o.enabled !== false && o.end < now && o.end > now - r.loopHours * 3_600_000;
                   return (
                     <button
                       key={`${o.slot}-${o.start}`}
                       type="button"
-                      className={`sc-cal-slot ${live ? 'live' : ''} ${o.end < now ? 'past' : ''} ${slot?.date ? '' : 'repeat'}`}
-                      style={{ left: `${Math.max(0, x(o.start))}%`, width: `${Math.max(0.4, Math.min(100, x(o.end)) - Math.max(0, x(o.start)))}%` }}
-                      title={`${o.name || t('Programmed slot')}\n${day(o.start, timezone, locale())} ${hhmm(o.start, timezone)}–${hhmm(o.end, timezone)}`}
-                      onClick={() => slot && onOpen(slot)}
+                      className={`sc-cal-slot ${live ? 'live' : ''} ${o.end < now ? 'past' : ''} ${slot?.date ? '' : 'repeat'} ${o.enabled === false ? 'paused' : ''}`}
+                      style={{
+                        left: `${Math.max(0, x(o.start))}%`,
+                        width: `${Math.max(0.4, Math.min(100, x(o.end)) - Math.max(0, x(o.start)))}%`,
+                        top: `calc(21px + (100% - 26px) * ${track[i] / tracks})`,
+                        height: `calc((100% - 26px) / ${tracks} - ${tracks > 1 ? 2 : 0}px)`,
+                        bottom: 'auto',
+                      }}
+                      title={`${o.name || t('Programmed slot')}\n${day(o.start, timezone, locale())} ${hhmm(o.start, timezone)}–${hhmm(o.end, timezone)}\n\n${live ? t('Click: watch it in Extraction') : kept ? t('Click: open it in Extraction') : t('Click: its details')}`}
+                      onClick={() => {
+                        // Recording now: the live in Extraction; recorded: its start there; to come: its details.
+                        if (live) void navigate(`/extract/${o.recorder}`);
+                        else if (kept) void navigate(`/extract/${o.recorder}?at=${o.start}`);
+                        else if (slot) onOpen(slot);
+                      }}
                     >
                       {live && <span className="sc-rec" />}
                       <span>{o.name || `${hhmm(o.start, timezone)}–${hhmm(o.end, timezone)}`}</span>

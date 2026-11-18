@@ -108,7 +108,7 @@ async fn occurrences(State(s): State<Shared>, CurrentUser(_): CurrentUser, Query
         .schedules
         .all()
         .iter()
-        .flat_map(|sl| sl.occurrences(&tz, from, to).into_iter().map(move |(a, b)| json!({"slot": sl.id, "recorder": sl.recorder, "name": sl.name, "start": a, "end": b})))
+        .flat_map(|sl| sl.times(&tz, from, to).into_iter().map(move |(a, b)| json!({"slot": sl.id, "recorder": sl.recorder, "name": sl.name, "start": a, "end": b, "enabled": sl.enabled})))
         .collect();
     Ok(Json(json!({ "occurrences": list })))
 }
