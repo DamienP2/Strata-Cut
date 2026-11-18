@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Strata Cut — installation sur un serveur Ubuntu (22.04 ou 24.04, 64 bits).
 #
-# Deux façons de le lancer :
-#   - seul (copié sur le serveur) :  sudo bash install-ubuntu.sh
-#     il télécharge le dépôt par SSH (git@github.com:DamienP2/Strata-Cut.git) dans ~/Strata-Cut,
-#     en créant au besoin une clé de déploiement à ajouter sur GitHub ;
-#   - depuis le dépôt :              sudo ./scripts/install-ubuntu.sh
-# Relancer le script met à jour le code (git pull par SSH) puis l'installation ; les données restent.
+# En une ligne, dans un terminal (SSH) sur le serveur :
+#   curl -fsSL https://raw.githubusercontent.com/DamienP2/Strata-Cut/HEAD/scripts/install-ubuntu.sh | sudo bash -s -- --admin admin
+# Le script télécharge le dépôt dans ~/Strata-Cut, compile et installe le service.
+# Depuis le dépôt :  sudo ./scripts/install-ubuntu.sh
+# Relancer le script met à jour le code (git pull) puis l'installation ; les données restent.
 #
 # Options :
-#   --repo URL            dépôt git en SSH (défaut git@github.com:DamienP2/Strata-Cut.git)
+#   --repo URL            dépôt git (défaut https://github.com/DamienP2/Strata-Cut.git ;
+#                         une adresse SSH git@… marche aussi, avec clé de déploiement créée au besoin)
 #   --branch NOM          branche à installer (défaut : la branche par défaut du dépôt)
 #   --src DIR             dossier du code source (défaut : le dépôt du script, sinon ~/Strata-Cut)
 #   --no-pull             n'actualise pas le code source
@@ -50,7 +50,7 @@ NO_SERVICE=0
 UNINSTALL=0
 PURGE=0
 
-REPO="git@github.com:DamienP2/Strata-Cut.git"
+REPO="https://github.com/DamienP2/Strata-Cut.git"
 BRANCH=""
 SRC_DIR=""
 NO_PULL=0
@@ -58,7 +58,8 @@ NO_PULL=0
 GITHUB_ED25519="SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
 
 # Le script est-il dans un dépôt Strata Cut ?
-SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_REPO=""
+if [ -f "${BASH_SOURCE[0]:-}" ]; then SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"; fi
 
 # ---------------------------------------------------------------- affichage
 if [ -t 1 ]; then B=$'\e[1m'; G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; N=$'\e[0m'; else B=; G=; Y=; R=; N=; fi
@@ -66,7 +67,13 @@ step() { printf '\n%s==> %s%s\n' "$B" "$*" "$N"; }
 ok() { printf '%s  ✓ %s%s\n' "$G" "$*" "$N"; }
 warn() { printf '%s  ! %s%s\n' "$Y" "$*" "$N" >&2; }
 die() { printf '%s  ✗ %s%s\n' "$R" "$*" "$N" >&2; exit 1; }
-usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 0; }
+usage() {
+  if [ -f "${BASH_SOURCE[0]:-}" ]; then sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; else echo "Aide : https://github.com/DamienP2/Strata-Cut/blob/HEAD/docs/INSTALL-UBUNTU.md"; fi
+  exit 0
+}
+# Lancé par « curl … | bash », l'entrée est le script lui-même : les questions passent par le terminal.
+TTY=""
+if [ -t 0 ]; then TTY=/dev/stdin; elif { : </dev/tty; } 2>/dev/null; then TTY=/dev/tty; fi
 
 # ---------------------------------------------------------------- options
 while [ $# -gt 0 ]; do
@@ -96,7 +103,7 @@ for d in "$DATA_DIR" "$RECORDINGS_DIR" "$CLIPS_DIR"; do
   [ -z "$d" ] || [[ "$d" = /* ]] || die "un dossier s'écrit en chemin absolu : $d"
 done
 [ -z "$PACKAGE" ] || PACKAGE="$(realpath "$PACKAGE")"
-[ "$(id -u)" -eq 0 ] || die "lancez ce script avec sudo : sudo $0 $*"
+[ "$(id -u)" -eq 0 ] || die "lancez ce script avec sudo (… | sudo bash)"
 
 # Le compte qui a lancé sudo compile (pas root).
 BUILD_USER="${SUDO_USER:-root}"
@@ -107,7 +114,7 @@ as_builder() {
 
 # Le code source : le dépôt du script, sinon ~/Strata-Cut du compte qui compile.
 if [ -z "$SRC_DIR" ]; then
-  if [ -f "$SCRIPT_REPO/Cargo.toml" ]; then SRC_DIR="$SCRIPT_REPO"; else SRC_DIR="$BUILD_HOME/Strata-Cut"; fi
+  if [ -n "$SCRIPT_REPO" ] && [ -f "$SCRIPT_REPO/Cargo.toml" ]; then SRC_DIR="$SCRIPT_REPO"; else SRC_DIR="$BUILD_HOME/Strata-Cut"; fi
 fi
 [[ "$SRC_DIR" = /* ]] || SRC_DIR="$(pwd)/$SRC_DIR"
 
@@ -235,7 +242,7 @@ elif [ -f "$SRC_DIR/Cargo.toml" ] && [ ! -d "$SRC_DIR/.git" ]; then
   step "3/9  Code source"
   ok "$SRC_DIR (copie sans git : non actualisée)"
 else
-  step "3/9  Code source (git par SSH)"
+  step "3/9  Code source"
   command -v git >/dev/null || die "git est introuvable"
   # Un dépôt déjà cloné garde son adresse et sa clé.
   if [ -d "$SRC_DIR/.git" ]; then
@@ -243,8 +250,13 @@ else
     key_cmd="$(as_builder "git -C '$SRC_DIR' config --get core.sshCommand" || true)"
     [ -z "$key_cmd" ] || GIT_SSH="$key_cmd -o BatchMode=yes -o ConnectTimeout=20"
   fi
+  case "$REPO" in
+    https://* | http://*) ssh_repo=0 ;;
+    *) ssh_repo=1 ;;
+  esac
+  if [ "$ssh_repo" -eq 1 ]; then
   host="$(repo_host "$REPO")"
-  [ -n "$host" ] || die "le dépôt doit être une adresse SSH (git@hôte:propriétaire/dépôt.git) : $REPO"
+  [ -n "$host" ] || die "adresse de dépôt non reconnue : $REPO"
   port="$(repo_port "$REPO")"
   trust_host "$host" "$port"
 
@@ -272,14 +284,18 @@ else
       echo
       echo "    $(cat "$KEY.pub")"
       echo
-      if [ -t 0 ] && [ "$tries" -lt 10 ]; then
-        read -r -p "  Appuyez sur Entrée une fois la clé ajoutée (Ctrl-C pour arrêter)… " _
+      if [ -n "$TTY" ] && [ "$tries" -lt 10 ]; then
+        read -r -p "  Appuyez sur Entrée une fois la clé ajoutée (Ctrl-C pour arrêter)… " _ <"$TTY"
       else
         die "accès au dépôt refusé : ajoutez la clé ci-dessus puis relancez le script"
       fi
     done
     ok "accès au dépôt par la clé de déploiement"
   else
+    ok "accès au dépôt $REPO"
+  fi
+  else
+    as_git ls-remote --exit-code "$REPO" HEAD >/dev/null 2>&1 || die "impossible de lire le dépôt $REPO (adresse, réseau, proxy ?)"
     ok "accès au dépôt $REPO"
   fi
 
@@ -477,7 +493,13 @@ fi
 # ---------------------------------------------------------------- compte admin
 if [ -n "$ADMIN" ]; then
   step "Compte administrateur « $ADMIN »"
-  "$BIN" user add "$ADMIN" --role admin --data-dir "$DATA_DIR"
+  if [ -z "$TTY" ]; then
+    warn "pas de terminal pour saisir le mot de passe : sudo strata-cut user add $ADMIN --data-dir $DATA_DIR"
+  elif "$BIN" user list --data-dir "$DATA_DIR" 2>/dev/null | grep -qw "$ADMIN"; then
+    ok "le compte « $ADMIN » existe déjà"
+  else
+    "$BIN" user add "$ADMIN" --role admin --data-dir "$DATA_DIR" <"$TTY"
+  fi
   chown "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR/users.json" 2>/dev/null || true
 fi
 
@@ -494,4 +516,4 @@ if [ -z "$ADMIN" ] && [ ! -s "$DATA_DIR/users.json" ]; then
 fi
 echo
 echo "  Service :   systemctl status $UNIT   ·   journalctl -u $UNIT -f"
-echo "  Mettre à jour : sudo $SRC_DIR/scripts/install-ubuntu.sh   (télécharge la dernière version par SSH)"
+echo "  Mettre à jour : sudo $SRC_DIR/scripts/install-ubuntu.sh   (télécharge la dernière version)"
