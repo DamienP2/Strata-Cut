@@ -22,6 +22,7 @@
 #   --package FICHIER     installe un paquet déjà construit (.tar.gz ou binaire) au lieu de compiler
 #   --no-apt              n'installe aucun paquet (dépendances déjà en place)
 #   --no-service          n'installe pas le service systemd (essai, conteneur)
+#   --no-grow             ne donne pas au volume des données tout l'espace libre du disque (LVM)
 #   --uninstall           retire le service et le programme (les données restent)
 #   --purge               avec --uninstall : supprime aussi les données et le compte de service
 #   -h, --help            cette aide
@@ -51,6 +52,7 @@ OPEN_PORTS=""
 PACKAGE=""
 NO_APT=0
 NO_SERVICE=0
+NO_GROW=0
 UNINSTALL=0
 PURGE=0
 
@@ -80,6 +82,10 @@ TTY=""
 if [ -t 0 ]; then TTY=/dev/stdin; elif { : </dev/tty; } 2>/dev/null; then TTY=/dev/tty; fi
 
 # ---------------------------------------------------------------- options
+ORIG_ARGS=("$@")
+# L'empreinte du script lancé, pour savoir s'il a changé une fois le code actualisé.
+SELF_SUM=""
+if [ -f "${BASH_SOURCE[0]:-}" ]; then SELF_SUM="$(sha256sum <"${BASH_SOURCE[0]}")"; fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="${2:?}"; shift 2 ;;
@@ -95,6 +101,7 @@ while [ $# -gt 0 ]; do
     --no-pull) NO_PULL=1; shift ;;
     --no-apt) NO_APT=1; shift ;;
     --no-service) NO_SERVICE=1; shift ;;
+    --no-grow) NO_GROW=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge) PURGE=1; shift ;;
     -h | --help) usage ;;
@@ -177,7 +184,7 @@ if [ "$NO_APT" -eq 1 ]; then
   ok "installation des paquets sautée (--no-apt)"
 else
   apt-get update -qq
-  apt_install ca-certificates curl ffmpeg python3
+  apt_install ca-certificates curl ffmpeg python3 cloud-guest-utils
   if [ -z "$PACKAGE" ]; then apt_install git openssh-client build-essential pkg-config; fi
   ok "ffmpeg, python3 et outils de base en place"
 fi
@@ -334,6 +341,13 @@ else
     ok "dépôt cloné dans $SRC_DIR : $(as_builder "git -C '$SRC_DIR' log -1 --format='%h %s'")"
   fi
   [ -f "$SRC_DIR/Cargo.toml" ] || die "$SRC_DIR ne contient pas Strata Cut (Cargo.toml absent)"
+  # Le code vient d'être actualisé : si le script lui-même a changé, la suite se fait avec la nouvelle version
+  # (bash continue sinon l'ancienne, déjà ouverte, et poserait les anciens relais).
+  NEW_SCRIPT="$SRC_DIR/scripts/install-ubuntu.sh"
+  if [ -z "${SC_REEXEC:-}" ] && [ -f "$NEW_SCRIPT" ] && [ "$(sha256sum <"$NEW_SCRIPT")" != "$SELF_SUM" ]; then
+    ok "script d'installation mis à jour : la suite se fait avec la nouvelle version"
+    SC_REEXEC=1 exec bash "$NEW_SCRIPT" "${ORIG_ARGS[@]}" --src "$SRC_DIR" --no-pull
+  fi
 fi
 
 # ---------------------------------------------------------------- 4. compilation
@@ -549,18 +563,47 @@ EOF
   # le crée et le donne au compte du service, seulement s'il finit par strata-cut/loops ou /clips.
   cat >"$STORAGE_HELPER" <<'EOF'
 #!/bin/sh
-# Strata Cut : prépare le dossier demandé dans l'interface ($1 = <données>/storage.request, $2 = compte du service),
-# ou donne à un volume LVM tout l'espace libre de son groupe (« extend /dev/mapper/<volume> »).
+# Strata Cut : relais root de Système › Stockage ($1 = <données>/storage.request, $2 = compte du service).
+#   « /<disque>/strata-cut/loops » : crée le dossier et le donne au service ;
+#   « extend /dev/mapper/<volume> » : donne au volume LVM tout l'espace libre du disque
+#   (fin de disque hors partition : growpart + pvresize, puis lvextend -r : à chaud, sans perte).
+# Le résultat (« ok » ou « error: … ») est écrit dans <données>/storage.result.
 set -eu
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+result="$(dirname "$1")/storage.result"
 d="$(head -n 1 "$1" | head -c 1024)"
+
+grow() {
+  lv="$1"
+  case "$lv" in /dev/mapper/*) ;; *) echo "volume refusé : $lv"; return 1 ;; esac
+  case "$lv" in *[!A-Za-z0-9._/+-]*) echo "volume refusé : $lv"; return 1 ;; esac
+  command -v lvs >/dev/null || { echo "lvm2 absent"; return 1; }
+  # Le groupe et le nom du volume (lvextend veut « groupe/volume »).
+  real="$(readlink -f "$lv")"
+  # shellcheck disable=SC2046
+  set -- $(lvs --noheadings -o vg_name,lv_name,lv_dm_path 2>/dev/null | while read -r vg name dm; do
+    [ "$(readlink -f "$dm")" = "$real" ] && echo "$vg $name"; done)
+  [ $# -eq 2 ] || { echo "pas un volume LVM : $lv"; return 1; }
+  vg="$1"; name="$2"
+  # Les partitions du groupe qui ont de la place après elles sur leur disque : on les agrandit.
+  for pv in $(pvs --noheadings -o pv_name -S "vg_name=$vg" 2>/dev/null); do
+    part="$(basename "$(readlink -f "$pv")")"
+    [ -r "/sys/class/block/$part/partition" ] || continue
+    num="$(cat "/sys/class/block/$part/partition")"
+    disk="$(basename "$(readlink -f "/sys/class/block/$part/..")")"
+    if command -v growpart >/dev/null; then
+      out="$(growpart "/dev/$disk" "$num" 2>&1)" && pvresize "$pv" >/dev/null || case "$out" in *NOCHANGE*) ;; *) echo "growpart : $out" ;; esac
+    fi
+  done
+  free="$(vgs --noheadings --units b --nosuffix -o vg_free "$vg" | tr -d ' ')"
+  if [ "${free:-0}" -lt 1073741824 ]; then echo "aucun espace libre dans le groupe $vg"; return 1; fi
+  out="$(lvextend -r -l +100%FREE "$vg/$name" 2>&1)" || { echo "$out" | tail -n 1; return 1; }
+  echo "$out" | tail -n 3
+}
+
 case "$d" in
   "extend "*)
-    lv="${d#extend }"
-    case "$lv" in /dev/mapper/*) ;; *) echo "volume refusé : $lv" >&2; exit 1 ;; esac
-    case "$lv" in *[!A-Za-z0-9._/+-]*) echo "volume refusé : $lv" >&2; exit 1 ;; esac
-    lvs "$lv" >/dev/null 2>&1 || { echo "pas un volume LVM : $lv" >&2; exit 1; }
-    findmnt -n -S "$lv" >/dev/null 2>&1 || { echo "volume non monté : $lv" >&2; exit 1; }
-    lvextend -r -l +100%FREE "$lv"
+    if out="$(grow "${d#extend }" 2>&1)"; then echo ok >"$result"; echo "$out"; else printf 'error: %s\n' "$(echo "$out" | tail -n 1)" >"$result"; echo "$out" >&2; exit 1; fi
     exit 0 ;;
 esac
 case "$d" in
@@ -575,6 +618,7 @@ parent="$(dirname "$d")"
 [ "$(basename "$parent")" = strata-cut ] && chown "$2:$2" "$parent"
 chown "$2:$2" "$d"
 chmod 0750 "$d"
+echo ok >"$result"
 EOF
   chmod 0755 "$STORAGE_HELPER"
   chown root:root "$STORAGE_HELPER"
@@ -599,6 +643,26 @@ EOF
   systemctl daemon-reload
   systemctl enable --now "$STORAGE_UNIT.path" >/dev/null 2>&1
   ok "disques des boucles et des extraits réglables dans Système › Stockage"
+
+  # Ubuntu ne donne souvent au volume système qu'une partie du disque (16 Go sur 300) :
+  # le volume des données (et celui des boucles s'il est ailleurs) prend tout l'espace libre.
+  if [ "$NO_GROW" -eq 0 ]; then
+    for dir in "$DATA_DIR" "$RECORDINGS_DIR"; do
+      [ -n "$dir" ] && [ -d "$dir" ] || continue
+      src="$(findmnt -n -o SOURCE --target "$dir" 2>/dev/null || true)"
+      case "$src" in /dev/mapper/*) ;; *) continue ;; esac
+      before="$(df -h --output=size "$dir" | tail -n 1 | tr -d ' ')"
+      tmp="$(mktemp -d)"
+      echo "extend $src" >"$tmp/storage.request"
+      if out="$("$STORAGE_HELPER" "$tmp/storage.request" "$SERVICE_USER" 2>&1)"; then
+        ok "volume $src : $before → $(df -h --output=size "$dir" | tail -n 1 | tr -d ' ') (tout l'espace libre du disque)"
+      else
+        case "$out" in *"aucun espace libre"*) ok "volume $src : $before, il occupe déjà tout le disque" ;; *) warn "volume $src non agrandi : $(echo "$out" | tail -n 1)" ;; esac
+      fi
+      rm -f "$tmp/storage.request" "$tmp/storage.result"
+      rmdir "$tmp"
+    done
+  fi
 fi
 
 # ---------------------------------------------------------------- 9. pare-feu

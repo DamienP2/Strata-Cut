@@ -25,6 +25,7 @@ const KNOWN: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^sign in with (.+)$/i, (m) => t('Sign in with {name}', { name: m[1] })],
   [/^unknown language$/i, () => t('Unknown language')],
   [/^unknown theme$/i, () => t('Unknown theme')],
+  [/^the volume could not be extended: (.+)$/i, (m) => t('The volume could not be extended: {why}', { why: m[1] })],
 ];
 
 /** The French (or English) text for a raw server error; unknown errors stay as they are. */
@@ -34,7 +35,8 @@ export function friendlyError(raw: string): string {
     const m = s.match(re);
     if (m) return f(m);
   }
-  return s || t('Something went wrong');
+  // The other answers of the engine are keys of the dictionary (business.ts › Server answers).
+  return s ? t(s) : t('Something went wrong');
 }
 
 /** The message of a caught error, translated. */

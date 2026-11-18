@@ -21,6 +21,8 @@ interface Physical {
   size: number;
   lvmFree: number;
   unpartitioned: number;
+  /** What extending the volume gives: free space of its LVM group + end of the disk outside any partition. */
+  growable: number;
   lv: string | null;
 }
 /** One disk as Strata Cut sees it: `available` = total − other files − the system's reserve. */
@@ -142,9 +144,9 @@ export function Storage() {
     const p = u.physical;
     if (!p) return;
     const ok = await confirmDialog({
-      title: t('Extend the volume?'),
-      message: t('The volume {mount} grows from {from} to about {to}. The files stay; the service keeps running.', { mount: u.mount, from: sz(u.total), to: sz(u.total + p.lvmFree) }),
-      confirm: t('Extend'),
+      title: t('Use the whole disk?'),
+      message: t('The volume {mount} grows from {from} to about {to}, all the free space of the disk, in one go. The files stay; the service keeps running. A volume cannot be shrunk afterwards.', { mount: u.mount, from: sz(u.total), to: sz(u.total + p.growable) }),
+      confirm: t('Use the whole disk'),
     });
     if (!ok) return;
     setExtending(u.mount);
@@ -176,16 +178,16 @@ export function Storage() {
             {p && ` · ${p.disk} ${sz(p.size)}`}
           </span>
         </div>
-        {p && p.lvmFree > WORTH && (
+        {p && p.lv && p.growable > WORTH && (
           <div className="sc-alert">
             <TriangleAlert size={14} />
-            <span>{t('The volume uses only {total} of the {size} disk: {left} are not given to it yet.', { total: sz(u.total), size: sz(p.size), left: sz(p.lvmFree) })}</span>
-            <button className="btn primary small" disabled={extending !== null || !p.lv} onClick={() => void extend(u)}>
-              <Expand size={14} /> {extending === u.mount ? t('Extending…') : t('Extend the volume')}
+            <span>{t('The volume uses only {total} of the {size} disk: {left} are not given to it yet.', { total: sz(u.total), size: sz(p.size), left: sz(p.growable) })}</span>
+            <button className="btn primary small" disabled={extending !== null} onClick={() => void extend(u)}>
+              <Expand size={14} /> {extending === u.mount ? t('Extending…') : t('Use the whole disk ({to})', { to: sz(u.total + p.growable) })}
             </button>
           </div>
         )}
-        {p && p.lvmFree <= WORTH && p.unpartitioned > WORTH && (
+        {p && !p.lv && p.unpartitioned > WORTH && (
           <div className="sc-alert">
             <TriangleAlert size={14} />
             <span>{t('{left} of the disk are in no partition: they must be partitioned by hand.', { left: sz(p.unpartitioned) })}</span>

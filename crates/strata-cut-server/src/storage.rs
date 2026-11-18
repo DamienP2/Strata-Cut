@@ -12,6 +12,7 @@ use std::{
 
 pub const REQUEST: &str = "storage.request";
 const PATH_UNIT: &str = "/etc/systemd/system/strata-cut-storage.path";
+const RESULT: &str = "storage.result";
 const HELPER: &str = "/usr/local/lib/strata-cut/prepare-folder";
 
 /// File systems that hold data (not /proc, tmpfs, squashfs, overlay…).
@@ -26,7 +27,7 @@ pub fn managed() -> bool {
 
 /// The root helper also extends LVM volumes (installed by a recent install script).
 fn extends() -> bool {
-    std::fs::read_to_string(HELPER).is_ok_and(|s| s.contains("lvextend"))
+    std::fs::read_to_string(HELPER).is_ok_and(|s| s.contains("storage.result"))
 }
 
 /// "/mnt/My\\040Disk" in /proc/mounts → "/mnt/My Disk".
@@ -123,6 +124,8 @@ pub fn physical(mount: &str) -> Value {
     let unpartitioned = if parts > 0 { size.saturating_sub(parts) } else { 0 };
     json!({
         "disk": disk["name"], "size": size, "lvmFree": lvm_free, "unpartitioned": unpartitioned,
+        // What extending gives: the group's free space, and the end of the disk outside any partition (growpart).
+        "growable": if lvm { lvm_free + unpartitioned } else { 0 },
         "lv": if lvm { Value::String(format!("/dev/mapper/{}", node["name"].as_str().unwrap_or(""))) } else { Value::Null },
     })
 }
@@ -197,20 +200,27 @@ async fn extend(
     }
     let mount = b.mount.clone();
     let p = tokio::task::spawn_blocking(move || physical(&mount)).await.map_err(crate::api::internal)?;
-    let (Some(lv), Some(free)) = (p["lv"].as_str(), p["lvmFree"].as_u64()) else { return Err(crate::api::bad("this disk is not an lvm volume")) };
+    let (Some(lv), Some(free)) = (p["lv"].as_str(), p["growable"].as_u64()) else { return Err(crate::api::bad("this disk is not an lvm volume")) };
     if free < 1 << 30 {
         return Err(crate::api::bad("no free space left in the volume group"));
     }
     let before = crate::recorder::disk_space(Path::new(&b.mount)).map(|(t, _)| t).unwrap_or(0);
+    let result = s.data_dir.join(RESULT);
+    let _ = std::fs::remove_file(&result);
     let text = format!("extend {lv}\n");
     crate::paths::write_atomic(&s.data_dir.join(REQUEST), text.as_bytes(), false).map_err(crate::api::internal)?;
-    for _ in 0..150 {
+    // The helper writes "ok" or "error: <why>" when done (growing a partition and a file system takes a while).
+    for _ in 0..450 {
         tokio::time::sleep(Duration::from_millis(400)).await;
-        let now = crate::recorder::disk_space(Path::new(&b.mount)).map(|(t, _)| t).unwrap_or(0);
-        if now > before + (1 << 30) {
-            tracing::warn!("{} extended by {}: {} GB → {} GB", b.mount, me.username, before >> 30, now >> 30);
-            return Ok(axum::Json(json!({"total": now})));
+        let Ok(r) = std::fs::read_to_string(&result) else { continue };
+        let r = r.trim();
+        if let Some(why) = r.strip_prefix("error:") {
+            tracing::warn!("{}: extending {lv} failed: {}", b.mount, why.trim());
+            return Err(crate::api::bad(format!("the volume could not be extended: {}", why.trim())));
         }
+        let now = crate::recorder::disk_space(Path::new(&b.mount)).map(|(t, _)| t).unwrap_or(0);
+        tracing::warn!("{} extended by {}: {} GB → {} GB", b.mount, me.username, before / 1_000_000_000, now / 1_000_000_000);
+        return Ok(axum::Json(json!({"total": now})));
     }
     Err(crate::api::bad("the volume could not be extended"))
 }

@@ -118,6 +118,7 @@ Tout ce qui suit `bash -s --` sont les options du script (tableau ci-dessous). S
 | `--package FICHIER` | installe un paquet déjà construit au lieu de compiler | — |
 | `--no-apt` | n'installe aucun paquet | — |
 | `--no-service` | n'installe pas le service (essai) | — |
+| `--no-grow` | ne donne pas au volume des données tout l'espace libre du disque (LVM) | — |
 | `--uninstall` / `--purge` | désinstalle (avec `--purge` : efface aussi les données) | — |
 
 ### Sans accès à GitHub depuis le serveur
@@ -227,7 +228,7 @@ Autre façon, depuis le serveur : `sudo ~/Strata-Cut/scripts/install-ubuntu.sh -
 - **Espace par usage** : deux curseurs, **Boucles** et **Extraits**. Sur un même disque ils se partagent le disponible (en déplacer un donne le reste à l'autre). Le serveur refuse un réglage qui dépasse ce que le disque laisse vraiment, ou qui descend sous ce que les boucles réservent déjà. Au-delà de sa part, une boucle efface ses images les plus anciennes ; les extraits refusent d'en ajouter.
 - Chaque enregistreur réserve la place de sa boucle entière (débit prévu × durée) : une source qui ne tient pas est refusée.
 
-Un disque doit d'abord être monté pour apparaître (voir « Disque des boucles » au § 1). Si le volume système d'Ubuntu n'utilise pas tout le disque (cas fréquent : 16 Go sur un disque de 300 Go), la page le signale et le bouton **Étendre le volume** lui donne toute la place libre du groupe LVM (`lvextend -r`, à chaud, sans perte). Il demande le relais posé par une installation récente : relancez le script une fois. À la main : `sudo lvextend -r -l +100%FREE /dev/ubuntu-vg/ubuntu-lv`.
+Un disque doit d'abord être monté pour apparaître (voir « Disque des boucles » au § 1). Si le volume système d'Ubuntu n'utilise pas tout le disque (cas fréquent : 16 Go sur un disque de 300 Go), le script d'installation lui donne tout l'espace libre du disque, en une fois (`growpart` + `pvresize` si la fin du disque est hors partition, puis `lvextend -r -l +100%FREE` : à chaud, sans perte ; `--no-grow` pour ne pas le faire). Si le disque a grandi depuis, la page le signale et le bouton **Utiliser tout le disque** fait la même chose. À la main : `sudo lvextend -r -l +100%FREE /dev/ubuntu-vg/ubuntu-lv`.
 
 ### Serveurs de temps (NTP)
 
