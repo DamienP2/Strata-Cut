@@ -882,3 +882,4 @@ a.btn { color: inherit; }
 .follow-tip > span:first-child { overflow: hidden; text-overflow: ellipsis; }
 .follow-keys { display: inline-flex; gap: 3px; }
 .keycap { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 4px; font: 600 10.5px var(--mono); color: var(--text); background: linear-gradient(#2c3146, #22263b); border: 1px solid #3d4361; border-bottom-width: 2px; }
+.sc-transport .sc-live-on, .sc-transport .sc-live-go { height: 36px; }

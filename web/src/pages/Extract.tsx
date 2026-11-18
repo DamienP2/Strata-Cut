@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, Crosshair, Download, Eraser, FastForward, Pause, Play, Radio, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, Tv, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, ChevronsRight, Crosshair, Download, Eraser, FastForward, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, Tv, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { t, tn, locale } from '../i18n';
 import { navigate } from '../router';
@@ -477,9 +477,17 @@ function Editor({ rec }: { rec: Recorder }) {
           <div className="spacer" />
           <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
           <div className="sc-sep" />
-          <button className={`ctl wide sc-live-ctl ${live && ago < 30_000 ? 'is-live' : ''}`} data-tip={live && ago < 30_000 ? t('On the live') : `${t('Back to live')} (${behind(ago)})`} data-keys="⇧ L" onClick={goLive}>
-            <Radio size={18} />
-          </button>
+          {/* As before: on the live, a red badge; behind it, how far, and the way back. */}
+          {live && ago < 30_000 ? (
+            <span className="sc-live-on" data-tip={t('The newest frames, as they are recorded')}>
+              <span className="sc-rec" /> {t('LIVE')}
+            </span>
+          ) : (
+            <button className="btn sc-live-go" data-tip={t('Back to live')} data-keys="⇧ L" onClick={goLive}>
+              <ChevronsRight size={14} /> {t('Live')}
+              {pos && <span className="sc-live-behind">{behind(ago)}</span>}
+            </button>
+          )}
         </div>
         {/* The clip: its in and out (the timeline's E and S), its length, its name. */}
         <div className="sc-clipbar">
