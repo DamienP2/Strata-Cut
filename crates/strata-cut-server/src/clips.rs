@@ -176,6 +176,19 @@ impl Clips {
             return Err("the clip has no frame".into());
         }
         let name = req.name.trim().to_string();
+        // The clips' space: their limit, and the free margin of their disk.
+        {
+            let lim = self.recorders.limits.lock().unwrap().clone();
+            let dir = self.dir();
+            if lim.clips_max > 0 && crate::recorder::dir_size(&dir) >= lim.clips_max {
+                return Err("the clips storage is full".into());
+            }
+            if let Some((total, free)) = crate::recorder::disk_space(&dir) {
+                if free < lim.min_free(total) / 2 {
+                    return Err("the disk of the clips is full".into());
+                }
+            }
+        }
         {
             let runs = rec.runs.read().unwrap();
             let run = runs.iter().find(|r| r.meta.id == req.run).ok_or("this part of the loop was removed")?;

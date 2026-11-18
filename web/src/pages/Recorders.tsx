@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { CircleDot, Copy, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, WifiOff, X } from 'lucide-react';
+import { Copy, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
-import { t, tn, locale } from '../i18n';
+import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
 import { bitrate, scanFormat } from '../tc';
 import { confirmDialog } from '../ui/dialogs';
@@ -27,6 +27,18 @@ export function sourceAddress(r: Recorder): string {
   if (r.protocol === 'srt' && r.mode === 'listener') return `srt://${host}:${r.port}`;
   return r.url + (r.iface && (r.protocol === 'udp' || r.protocol === 'rtp') ? ` · ${r.iface}` : '');
 }
+
+/** The list again, after an action (the live event may have been missed). */
+async function reloadRecorders() {
+  try {
+    useApp.setState({ recorders: await api<Recorder[]>('GET', '/api/recorders') });
+  } catch {
+    /* the live events will tell */
+  }
+}
+
+/** Bytes a full loop takes (as the server counts it: proxies and 5 % included). */
+export const loopNeed = (mbps: number, hours: number) => (mbps > 0 ? (mbps + 1.5) * 1e6 / 8 * 3600 * hours * 1.05 : 0);
 
 /** "23 h 41" */
 function hours(ms: number): string {
@@ -56,7 +68,8 @@ export function Recorders() {
   const admin = can.admin(user);
   const [q, setQ] = useState('');
   const [chip, setChip] = useState<'all' | 'recording' | 'nosignal'>('all');
-  const [edit, setEdit] = useState<Recorder | 'new' | null>(null);
+  /** The modal: a new recorder (from = the one duplicated), or one to edit. */
+  const [edit, setEdit] = useState<{ rec: Recorder | null; from?: Recorder } | null>(null);
   const counts = {
     all: recorders.length,
     recording: recorders.filter((r) => status[r.id]?.state === 'recording').length,
@@ -80,7 +93,7 @@ export function Recorders() {
           </div>
           <div className="spacer" />
           {admin && (
-            <button className="btn primary" onClick={() => setEdit('new')}>
+            <button className="btn primary" onClick={() => setEdit({ rec: null })}>
               <Plus size={14} /> {t('New recorder')}
             </button>
           )}
@@ -108,7 +121,7 @@ export function Recorders() {
         )}
         <div className="project-grid">
           {shown.map((r) => (
-            <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} onEdit={() => setEdit(r)} />
+            <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
           ))}
           {shown.length === 0 && (q || chip !== 'all') && (
             <div className="empty big">
@@ -123,19 +136,22 @@ export function Recorders() {
             </div>
           )}
           {admin && !q && chip === 'all' && (
-            <button className="project-new" onClick={() => setEdit('new')}>
+            <button className="project-new" onClick={() => setEdit({ rec: null })}>
               <Plus size={22} />
               <span>{t('New recorder')}</span>
             </button>
           )}
         </div>
       </div>
-      {edit && <RecorderModal rec={edit === 'new' ? null : edit} onClose={() => setEdit(null)} />}
+      {edit && <RecorderModal rec={edit.rec} from={edit.from} onClose={() => setEdit(null)} />}
     </div>
   );
 }
 
-function RecorderCard({ rec, st, admin, onEdit }: { rec: Recorder; st?: RecorderStatus; admin: boolean; onEdit: () => void }) {
+const STATE_LABEL: Record<string, string> = { recording: 'Recording', nosignal: 'No signal', starting: 'Connecting…', off: 'Stopped', error: 'Error' };
+const STATE_TONE: Record<string, string> = { recording: 'ok', nosignal: 'warn', starting: 'warn', off: '', error: 'bad' };
+
+function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; st?: RecorderStatus; admin: boolean; onEdit: () => void; onDuplicate: () => void }) {
   const toast = useApp((s) => s.toast);
   const tick = useTick(2000);
   const [img, setImg] = useState(true);
@@ -149,11 +165,13 @@ function RecorderCard({ rec, st, admin, onEdit }: { rec: Recorder; st?: Recorder
   const fmt = [scanFormat(m), m ? CODECS[m.codec] ?? m.codec.toUpperCase() : '', recording && st?.bitrate ? bitrate(st.bitrate, locale()) : ''].filter(Boolean).join(' · ');
 
   const toggle = async () => {
+    if (rec.enabled && !(await confirmDialog({ title: t('Stop recording “{name}”?', { name: rec.name }), message: t('The loop already recorded is kept.'), confirm: t('Stop'), danger: true }))) return;
     try {
       await api('POST', `/api/recorders/${rec.id}/enabled`, { enabled: !rec.enabled });
     } catch (e) {
       toast(t((e as Error).message), 'error');
     }
+    void reloadRecorders();
   };
   const remove = async () => {
     if (!(await confirmDialog({ title: t('Delete the recorder “{name}”?', { name: rec.name }), message: t('Its loop is deleted too. The clips stay.'), confirm: t('Delete'), danger: true }))) return;
@@ -162,6 +180,7 @@ function RecorderCard({ rec, st, admin, onEdit }: { rec: Recorder; st?: Recorder
     } catch (e) {
       toast(t((e as Error).message), 'error');
     }
+    void reloadRecorders();
   };
 
   return (
@@ -187,6 +206,7 @@ function RecorderCard({ rec, st, admin, onEdit }: { rec: Recorder; st?: Recorder
         <div className="sc-card-title">
           <span className={`nav-dot ${recording ? 'ok' : state === 'off' ? '' : state === 'error' ? 'bad' : 'warn'}`} />
           <strong>{rec.name}</strong>
+          <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
         </div>
         <div className="sc-addr" title={sourceAddress(rec)}>
           {sourceAddress(rec)}
@@ -201,6 +221,16 @@ function RecorderCard({ rec, st, admin, onEdit }: { rec: Recorder; st?: Recorder
         {state === 'nosignal' && st?.message && (
           <span className="sc-warnline sc-reason" title={st.message}>
             {t(st.message)}
+          </span>
+        )}
+        {st?.spaceLimited && (
+          <span className="sc-warnline">
+            <TriangleAlert size={12} /> {t('Loop shortened for lack of disk space')}
+          </span>
+        )}
+        {rec.bitrate > 0 && recording && st && st.bitrate > rec.bitrate * 1e6 * 1.1 && (
+          <span className="sc-warnline" title={t('The space reserved for the loop follows the measured bitrate.')}>
+            <TriangleAlert size={12} /> {t('Bitrate {m}, expected {e}', { m: bitrate(st.bitrate, locale()), e: bitrate(rec.bitrate * 1e6, locale()) })}
           </span>
         )}
         {state === 'error' && st?.message && (
@@ -222,11 +252,21 @@ function RecorderCard({ rec, st, admin, onEdit }: { rec: Recorder; st?: Recorder
         <button className="btn small" onClick={() => void navigate(`/extract/${rec.id}`)} disabled={!st?.oldest}>
           <Scissors size={13} /> {t('Extract')}
         </button>
+        {admin &&
+          (rec.enabled ? (
+            <button className="btn small" title={t('Stop recording')} onClick={() => void toggle()}>
+              <Square size={12} /> {t('Stop')}
+            </button>
+          ) : (
+            <button className="btn small sc-start" title={t('Start recording')} onClick={() => void toggle()}>
+              <span className="sc-rec" /> {t('Record')}
+            </button>
+          ))}
         <div className="spacer" />
         {admin && (
           <>
-            <button className="icon-btn ghost" title={rec.enabled ? t('Stop recording') : t('Start recording')} onClick={() => void toggle()}>
-              {rec.enabled ? <Square size={14} /> : <CircleDot size={14} />}
+            <button className="icon-btn ghost" title={t('Duplicate')} onClick={onDuplicate}>
+              <Copy size={14} />
             </button>
             <button className="icon-btn ghost" title={t('Edit')} onClick={onEdit}>
               <Pencil size={14} />
@@ -241,33 +281,60 @@ function RecorderCard({ rec, st, admin, onEdit }: { rec: Recorder; st?: Recorder
   );
 }
 
-const blank: Recorder = { id: '', name: '', protocol: 'srt', url: '', mode: 'listener', port: 9000, path: 'live/stream', latency: 120, passphrase: '', iface: '', loopHours: 24, enabled: true };
+const blank: Recorder = { id: '', name: '', protocol: 'srt', url: '', mode: 'listener', port: 9000, path: 'live/stream', latency: 120, passphrase: '', iface: '', loopHours: 24, bitrate: 10, enabled: true };
 
-function RecorderModal({ rec, onClose }: { rec: Recorder | null; onClose: () => void }) {
-  const { recorders, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast })));
+interface Space {
+  capacity: number | null;
+  recorders: { id: string; enabled: boolean; need: number | null }[];
+}
+
+function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Recorder; onClose: () => void }) {
+  const { recorders, toast, status } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast, status: s.status })));
+  const [space, setSpace] = useState<Space | null>(null);
+  useEffect(() => {
+    api<Space>('GET', '/api/storage').then(setSpace, () => setSpace(null));
+  }, []);
   const firstPort = useMemo(() => {
     const used = new Set(recorders.map((r) => r.port));
     let p = 9000;
     while (used.has(p)) p++;
     return p;
   }, [recorders]);
-  const [c, setC] = useState<Recorder>(() => rec ?? { ...blank, port: firstPort });
+  const [c, setC] = useState<Recorder>(() => {
+    if (rec) return rec;
+    if (from) {
+      const listens = (from.protocol === 'rtmp' || from.protocol === 'srt') && from.mode === 'listener';
+      // The copy keeps every setting; a listening one gets a free port. The passphrase is copied by the server.
+      const measured = (status[from.id]?.bitrate ?? 0) / 1e6;
+      return { ...from, id: '', name: t('{name} (copy)', { name: from.name }), port: listens ? firstPort : from.port, bitrate: from.bitrate || Math.round(measured * 10) / 10 || 10 };
+    }
+    return { ...blank, port: firstPort };
+  });
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<Recorder>) => setC((x) => ({ ...x, ...patch }));
   const listens = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
   const placeholder = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000' }[c.protocol];
   const pushUrl = c.protocol === 'rtmp' ? `rtmp://${location.hostname}:${c.port}/${c.path}` : `srt://${location.hostname}:${c.port}`;
 
+  // The loop's space: reserved from the bitrate (the measured one if higher), against what the disk gives the loops.
+  const measured = rec ? (status[rec.id]?.bitrate ?? 0) / 1e6 : 0;
+  const need = c.enabled ? loopNeed(Math.max(c.bitrate, measured), c.loopHours) : 0;
+  const others = space ? space.recorders.filter((r) => r.enabled && r.id !== rec?.id).reduce((a, r) => a + (r.need ?? 0), 0) : 0;
+  const left = space?.capacity != null ? Math.max(0, space.capacity - others) : null;
+  const tooBig = left !== null && need > left;
+  const gb = (b: number) => `${(b / 1e9).toLocaleString(locale(), { maximumFractionDigits: b < 1e10 ? 1 : 0 })} ${lang() === 'fr' ? 'Go' : 'GB'}`;
+
   const save = async () => {
     setBusy(true);
     try {
       if (rec) await api('PUT', `/api/recorders/${rec.id}`, c);
-      else await api('POST', '/api/recorders', c);
+      else await api('POST', from ? `/api/recorders?copyOf=${encodeURIComponent(from.id)}` : '/api/recorders', c);
       onClose();
     } catch (e) {
       toast(t((e as Error).message), 'error');
     } finally {
       setBusy(false);
+      void reloadRecorders();
     }
   };
 
@@ -275,7 +342,7 @@ function RecorderModal({ rec, onClose }: { rec: Recorder | null; onClose: () => 
     <div className="modal-back" onPointerDown={onClose}>
       <form className="modal wide" onPointerDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); void save(); }}>
         <header>
-          <h2>{rec ? t('Edit {name}', { name: rec.name }) : t('New recorder')}</h2>
+          <h2>{rec ? t('Edit {name}', { name: rec.name }) : from ? t('Duplicate {name}', { name: from.name }) : t('New recorder')}</h2>
           <button type="button" className="icon-btn ghost" title={t('Close')} onClick={onClose}>
             <X size={16} />
           </button>
@@ -334,6 +401,16 @@ function RecorderModal({ rec, onClose }: { rec: Recorder | null; onClose: () => 
           <Field label={t('Loop length')}>
             <NumberField value={c.loopHours} min={1} max={168} suffix="h" onChange={(v) => set({ loopHours: v })} />
           </Field>
+          <Field label={t('Expected bitrate')}>
+            <NumberField value={c.bitrate} min={0.1} max={2000} step={0.5} precision={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
+          </Field>
+          {c.enabled && c.bitrate > 0 && (
+            <div className={`sc-space span2 ${tooBig ? 'bad' : ''}`}>
+              <span>{t('Reserved for the loop: {need}', { need: gb(need) })}</span>
+              {left !== null && <span>{t('available for the loops: {left}', { left: gb(left) })}</span>}
+              {tooBig && <strong>{t('Not enough space: shorter loop, lower bitrate or more disk.')}</strong>}
+            </div>
+          )}
           <Field label={t('State')} group>
             <label className="check">
               <input type="checkbox" checked={c.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> {t('Record')}
@@ -344,7 +421,7 @@ function RecorderModal({ rec, onClose }: { rec: Recorder | null; onClose: () => 
           <button type="button" className="btn" onClick={onClose}>
             {t('Cancel')}
           </button>
-          <button type="submit" className="btn primary" disabled={busy || !c.name.trim()}>
+          <button type="submit" className="btn primary" disabled={busy || !c.name.trim() || tooBig || c.bitrate <= 0}>
             {rec ? (
               t('Save')
             ) : (

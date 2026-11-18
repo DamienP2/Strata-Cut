@@ -85,6 +85,8 @@ fn main() -> anyhow::Result<()> {
 fn run(args: RunArgs) -> anyhow::Result<()> {
     let data_dir = args.data_dir.clone().unwrap_or_else(paths::user_data_dir);
     std::fs::create_dir_all(&data_dir)?;
+    // Absolute: FFmpeg runs in each run's folder.
+    let data_dir = data_dir.canonicalize()?;
     init_logging(&data_dir);
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     rt.block_on(async move {

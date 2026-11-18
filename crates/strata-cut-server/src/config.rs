@@ -23,6 +23,15 @@ pub struct ServerConfig {
     /// Where the clips are written (empty = `<data>/clips`).
     #[serde(default)]
     pub clips_dir: String,
+    /// The loops take at most this many GB (0 = no limit but the disk).
+    #[serde(default)]
+    pub loops_max_gb: f64,
+    /// The clips take at most this many GB (0 = no limit but the disk).
+    #[serde(default)]
+    pub clips_max_gb: f64,
+    /// Space always left free on the disks, % (the oldest recordings go first).
+    #[serde(default = "default_keep_free")]
+    pub keep_free_percent: u32,
     /// The machine's NTP servers (empty = the system's default).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ntp: Vec<String>,
@@ -35,6 +44,9 @@ pub struct Security {
     pub sso: crate::sso::SsoConfig,
 }
 
+fn default_keep_free() -> u32 {
+    5
+}
 fn default_name() -> String {
     BRAND.into()
 }
@@ -80,6 +92,9 @@ impl ServerConfig {
         self.trusted_origins = self.trusted_origins.iter().map(|o| o.trim().trim_end_matches('/').to_string()).filter(|o| !o.is_empty()).collect();
         self.recordings_dir = self.recordings_dir.trim().to_string();
         self.clips_dir = self.clips_dir.trim().to_string();
+        self.loops_max_gb = if self.loops_max_gb.is_finite() { self.loops_max_gb.max(0.0) } else { 0.0 };
+        self.clips_max_gb = if self.clips_max_gb.is_finite() { self.clips_max_gb.max(0.0) } else { 0.0 };
+        self.keep_free_percent = self.keep_free_percent.clamp(1, 50);
         let mut ntp: Vec<String> = Vec::new();
         for s in self.ntp.iter().flat_map(|s| s.split([' ', ',', ';'])).map(str::trim).filter(|s| !s.is_empty()) {
             if !ntp.iter().any(|x| x.eq_ignore_ascii_case(s)) {

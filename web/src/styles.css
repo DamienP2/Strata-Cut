@@ -635,3 +635,15 @@ a.btn { color: inherit; }
 .sc-tracks.grabbing, .sc-tracks.grabbing .sc-ruler { cursor: grabbing; }
 .sc-tracks.on-head, .sc-tracks.on-head .sc-ruler, .sc-tracks.scrubbing, .sc-tracks.scrubbing .sc-ruler { cursor: col-resize; }
 .sc-tracks.on-head .sc-head, .sc-tracks.scrubbing .sc-head { width: 3px; margin-left: -1.5px; box-shadow: 0 0 6px var(--live); }
+/* Recorder card: state badge, record / stop */
+.sc-state { flex: none; font-size: var(--fs-11); font-weight: 600; padding: 1px 7px; border-radius: 10px; background: var(--panel-3); color: var(--text-3); }
+.sc-state.ok { background: rgba(34, 197, 94, 0.15); color: var(--pvw); }
+.sc-state.warn { background: rgba(245, 165, 36, 0.15); color: var(--warn); }
+.sc-state.bad { background: var(--live-soft); color: var(--live); }
+.btn.sc-start { color: var(--text); }
+.btn.sc-start .sc-rec { animation: none; }
+.sc-space { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; padding: 9px 12px; border-radius: 8px; background: var(--panel-2); font-size: 12.5px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.sc-space.bad { background: var(--live-soft); color: var(--live); }
+.sc-space strong { flex-basis: 100%; font-weight: 600; }
+.sc-reserve { display: flex; flex-direction: column; gap: 6px; }
+.sc-rec-table tr.dim td { opacity: 0.5; }

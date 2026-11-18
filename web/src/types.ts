@@ -24,6 +24,8 @@ export interface Recorder {
   iface: string;
   /** Loop length, hours. */
   loopHours: number;
+  /** Expected bitrate, Mb/s: the loop's space is reserved from it (0 = unknown). */
+  bitrate: number;
   enabled: boolean;
 }
 
@@ -54,6 +56,8 @@ export interface RecorderStatus {
   oldest: number | null;
   newest: number | null;
   bytes: number;
+  /** The loop is shorter than asked: the disk limits removed its oldest part. */
+  spaceLimited: boolean;
 }
 
 export interface Job {

@@ -34,6 +34,8 @@ pub struct PSeg {
     pub n: u32,
     pub t0: f64,
     pub t1: f64,
+    #[serde(default)]
+    pub bytes: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -147,8 +149,9 @@ impl Run {
         None
     }
 
+    /// What the run takes on disk: the original segments and the proxies.
     pub fn bytes(&self) -> u64 {
-        self.master.iter().map(|s| s.bytes).sum()
+        self.master.iter().map(|s| s.bytes).sum::<u64>() + self.video.segs.iter().chain(self.audio.segs.iter()).map(|p| p.bytes).sum::<u64>()
     }
 
     pub fn master_path(&self, n: u32) -> PathBuf {

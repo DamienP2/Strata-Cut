@@ -40,8 +40,18 @@ async fn list(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Valu
     Json(s.recorders.list_json())
 }
 
-async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(c): Json<RecorderConfig>) -> ApiResult<Json<Value>> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CopyOf {
+    copy_of: Option<String>,
+}
+
+/// `?copyOf=<id>`: a duplicate, which keeps the original's passphrase (never sent to clients).
+async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<CopyOf>, Json(mut c): Json<RecorderConfig>) -> ApiResult<Json<Value>> {
     require(me.is_admin())?;
+    if c.passphrase == super::MASKED {
+        c.passphrase = q.copy_of.and_then(|id| s.recorders.get(&id)).map(|r| r.config().passphrase).unwrap_or_default();
+    }
     s.recorders.create(c).map(Json).map_err(bad)
 }
 
@@ -290,46 +300,46 @@ async fn grab(ffmpeg: &str, init: &Path, seg: &Path, t: f64, h: u32) -> Option<V
 }
 
 fn disk(path: &Path) -> Value {
-    let mut p = path.to_path_buf();
-    while !p.exists() {
-        if !p.pop() {
-            break;
-        }
-    }
-    let c = std::ffi::CString::new(p.to_string_lossy().as_bytes()).unwrap_or_default();
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
-        return Value::Null;
-    }
-    json!({"total": st.f_blocks as u64 * st.f_frsize as u64, "free": st.f_bavail as u64 * st.f_frsize as u64})
+    super::disk_space(path).map(|(total, free)| json!({"total": total, "free": free})).unwrap_or(Value::Null)
 }
 
-fn dir_size(p: &Path) -> u64 {
-    let Ok(rd) = std::fs::read_dir(p) else { return 0 };
-    rd.flatten().map(|e| match e.file_type() {
-        Ok(t) if t.is_dir() => dir_size(&e.path()),
-        Ok(_) => e.metadata().map(|m| m.len()).unwrap_or(0),
-        Err(_) => 0,
-    }).sum()
-}
-
-/// The disks of the loops and the clips.
+/// The disks of the loops and the clips, what each loop reserves and what fits.
 async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.is_admin())?;
-    let rec_dir = s.recorders.recordings_dir();
+    let m = s.recorders.clone();
     let clips_dir = s.clips.dir();
-    let recorders: Vec<Value> = s.recorders.recs().iter().map(|r| {
-        let st = r.status.lock().unwrap();
-        let c = r.config();
-        // Bytes per hour at the current rate: what the full loop will take.
-        let per_hour = st.bitrate as f64 / 8.0 * 3600.0;
-        json!({"id": r.id, "name": c.name, "bytes": st.bytes, "loopHours": c.loop_hours, "full": (per_hour * c.loop_hours as f64) as u64})
-    }).collect();
-    let (rd, cd) = (rec_dir.clone(), clips_dir.clone());
-    let clips_bytes = tokio::task::spawn_blocking(move || dir_size(&cd)).await.unwrap_or(0);
-    Ok(Json(json!({
-        "recordings": {"dir": rec_dir, "disk": disk(&rd)},
-        "clips": {"dir": clips_dir, "disk": disk(&clips_dir), "bytes": clips_bytes},
-        "recorders": recorders,
-    })))
+    let v = tokio::task::spawn_blocking(move || {
+        let rec_dir = m.recordings_dir();
+        let lim = m.limits.lock().unwrap().clone();
+        let recorders: Vec<Value> = m
+            .recs()
+            .iter()
+            .map(|r| {
+                let st = r.status.lock().unwrap().clone();
+                let c = r.config();
+                json!({
+                    "id": r.id, "name": c.name, "enabled": c.enabled, "loopHours": c.loop_hours,
+                    "expected": c.bitrate, "bitrate": st.bitrate, "bytes": st.bytes,
+                    "need": super::loop_need(&c, st.bitrate), "oldest": st.oldest, "newest": st.newest,
+                    "spaceLimited": st.space_limited,
+                })
+            })
+            .collect();
+        let clips_bytes = super::dir_size(&clips_dir);
+        json!({
+            "recordings": {"dir": rec_dir, "disk": disk(&rec_dir), "bytes": m.loops_bytes()},
+            "clips": {"dir": clips_dir, "disk": disk(&clips_dir), "bytes": clips_bytes, "sameDisk": super::same_disk(&rec_dir, &clips_dir)},
+            "capacity": m.loops_capacity(),
+            "reserved": m.reserved(),
+            "keepFree": disk_total(&rec_dir).map(|t| lim.min_free(t)),
+            "recorders": recorders,
+        })
+    })
+    .await
+    .map_err(internal)?;
+    Ok(Json(v))
+}
+
+fn disk_total(p: &Path) -> Option<u64> {
+    super::disk_space(p).map(|(t, _)| t)
 }

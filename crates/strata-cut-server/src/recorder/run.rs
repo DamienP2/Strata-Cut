@@ -96,6 +96,12 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
     rec.refresh_status();
 }
 
+/// Two settings that record the same way (only the name or the loop length differ).
+fn same_source(a: &RecorderConfig, b: &RecorderConfig) -> bool {
+    let strip = |c: &RecorderConfig| RecorderConfig { name: String::new(), loop_hours: 0, bitrate: 0.0, ..c.clone() };
+    strip(a) == strip(b)
+}
+
 /// The most telling line of FFmpeg's last words (not the generic "Error opening input files").
 fn best_line(lines: &[String]) -> String {
     let generic = |l: &str| {
@@ -292,6 +298,10 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 break Outcome::Exited { had_data: scan.had_data, message: clean_message(&message) };
             }
             r = cfg_rx.changed() => {
+                // The name or the loop length alone: no need to stop recording.
+                if r.is_ok() && same_source(&cfg_rx.borrow(), cfg) {
+                    continue;
+                }
                 stop_child(&mut child).await;
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
                 break if r.is_ok() { Outcome::Restart } else { Outcome::Stopped };
@@ -412,9 +422,9 @@ impl Scanner {
                 }
                 let Some(offset) = run.track(video).offset else { continue };
                 let ts = run.track(video).timescale.max(1) as f64;
-                for (n, dur, tfdt) in segs {
+                for (n, dur, tfdt, bytes) in segs {
                     let t0 = offset + tfdt as f64 / ts;
-                    run.append_proxy(video, PSeg { n, t0, t1: t0 + dur });
+                    run.append_proxy(video, PSeg { n, t0, t1: t0 + dur, bytes });
                     if !video {
                         self.waves.push((n, run.track_dir(false).join("init.mp4"), run.proxy_path(false, n), run.wave_path(n)));
                     }
@@ -485,7 +495,7 @@ impl Scanner {
     }
 
     /// New proxy fragments: (number, duration, first decode time).
-    fn read_proxy(&mut self, dir: &Path, video: bool) -> Vec<(u32, f64, u64)> {
+    fn read_proxy(&mut self, dir: &Path, video: bool) -> Vec<(u32, f64, u64, u64)> {
         let tdir = dir.join(if video { super::index::VIDEO } else { super::index::AUDIO });
         let Ok(list) = std::fs::read_to_string(tdir.join("index.m3u8")) else { return Vec::new() };
         let last = if video { &mut self.last_video } else { &mut self.last_audio };
@@ -509,7 +519,8 @@ impl Scanner {
             head.truncate(len);
             let Some(tfdt) = mp4::first_tfdt(&head) else { continue };
             *last = Some(n);
-            out.push((n, d, tfdt));
+            let bytes = f.metadata().map(|m| m.len()).unwrap_or(0);
+            out.push((n, d, tfdt, bytes));
         }
         out
     }
@@ -567,7 +578,7 @@ mod tests {
     use super::*;
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
-        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), loop_hours: 24, enabled: true }
+        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), loop_hours: 24, bitrate: 8.0, enabled: true }
     }
 
     #[test]
