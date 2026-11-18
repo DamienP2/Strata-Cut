@@ -153,6 +153,13 @@ export const business: Record<string, string> = {
   'the clip crosses a gap in the recording': 'L’extrait traverse un trou de l’enregistrement.',
   'the recorder was deleted': 'L’enregistreur a été supprimé.',
   cancelled: 'Annulé',
+  'srt: wrong passphrase': 'SRT\u00a0: mauvaise phrase secrète',
+  'srt: passphrase missing on one side': 'SRT\u00a0: phrase secrète absente d’un côté',
+  'srt: the source accepts no more connections': 'SRT\u00a0: la source n’accepte plus de connexion',
+  'srt: srt versions do not match': 'SRT\u00a0: versions incompatibles',
+  'srt: settings refused by the source': 'SRT\u00a0: réglages refusés par la source',
+  'srt: no answer from the source (address, port or firewall)': 'SRT\u00a0: pas de réponse de la source (adresse, port ou pare-feu)',
+  'srt: connection refused by the source (stream id?)': 'SRT\u00a0: connexion refusée par la source (stream id\u00a0?)',
   'this port is used by another recorder': 'Ce port est déjà pris par un autre enregistreur.',
   'a folder is written as an absolute path': 'Un dossier s’écrit en chemin absolu.',
 };

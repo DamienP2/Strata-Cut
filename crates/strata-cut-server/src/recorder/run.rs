@@ -32,6 +32,7 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
     let mut cfg_rx = rec.cfg.subscribe();
     let mut stop_rx = rec.stop.subscribe();
     let mut failures = 0u32;
+    let mut diagnosis = String::new();
     loop {
         if *stop_rx.borrow() {
             break;
@@ -61,10 +62,19 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                     failures += 1;
                     // A setting that cannot work is an error; anything else means the source is not there.
                     let broken = ["Address already in use", "Cannot assign requested address", "Permission denied", "Protocol not found", "Invalid argument", "cannot start", "Error opening output", "No space left"].iter().any(|k| message.contains(k));
-                    if !broken {
-                        rec.set_state(State::Nosignal, "");
-                    } else {
+                    if broken {
                         rec.set_state(State::Error, message);
+                    } else {
+                        // SRT as caller: FFmpeg only says "Input/output error"; ask once in a while why.
+                        if cfg.protocol == Protocol::Srt && cfg.mode == Mode::Caller && (failures == 1 || failures.is_multiple_of(10)) {
+                            if let Some(url) = input_args(&cfg).last() {
+                                diagnosis = srt_diagnose(&m.ffmpeg, url).await;
+                                if !diagnosis.is_empty() {
+                                    tracing::warn!("{}: {diagnosis}", cfg.name);
+                                }
+                            }
+                        }
+                        rec.set_state(State::Nosignal, if cfg.protocol == Protocol::Srt && cfg.mode == Mode::Caller { diagnosis.clone() } else { String::new() });
                     }
                 }
                 rec.refresh_status();
@@ -79,6 +89,44 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
     }
     rec.set_state(State::Off, "");
     rec.refresh_status();
+}
+
+/// Why an SRT call fails: FFmpeg hides it, SRT tells it in debug logs.
+async fn srt_diagnose(ffmpeg: &str, url: &str) -> String {
+    let run = tokio::process::Command::new(ffmpeg)
+        .args(["-hide_banner", "-nostdin", "-loglevel", "debug", "-i", url, "-t", "0.04", "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(15), run).await else { return String::new() };
+    // The SRT library writes its own log lines on stdout, FFmpeg on stderr.
+    let mut log = String::from_utf8_lossy(&out.stdout).into_owned();
+    log.push_str(&String::from_utf8_lossy(&out.stderr));
+    srt_reason(&log)
+}
+
+/// "…rejection HS response: ERROR:BADSECRET" → "srt: wrong passphrase".
+pub fn srt_reason(log: &str) -> String {
+    if let Some(code) = log.lines().find_map(|l| l.split("rejection HS response: ERROR:").nth(1)) {
+        let code = code.split_whitespace().next().unwrap_or("");
+        return match code {
+            "BADSECRET" => "srt: wrong passphrase",
+            "UNSECURE" => "srt: passphrase missing on one side",
+            "BACKLOG" | "RESOURCE" => "srt: the source accepts no more connections",
+            "VERSION" => "srt: srt versions do not match",
+            "CONGESTION" | "FILTER" | "MESSAGEAPI" | "GROUP" => "srt: settings refused by the source",
+            "TIMEOUT" => "srt: no answer from the source (address, port or firewall)",
+            _ => "srt: connection refused by the source (stream id?)",
+        }
+        .into();
+    }
+    if log.contains("Input #0") {
+        return String::new(); // it connects now
+    }
+    if log.contains("Connection to srt://") && log.contains("failed") {
+        return "srt: no answer from the source (address, port or firewall)".into();
+    }
+    String::new()
 }
 
 /// The FFmpeg input for a recorder.
@@ -505,6 +553,15 @@ mod tests {
         let mut c = cfg(Protocol::Srt, Mode::Listener);
         c.passphrase = "secret pass&1".into();
         assert_eq!(input_args(&c).last().unwrap(), "srt://0.0.0.0:9000?mode=listener&latency=120000&passphrase=secret%20pass%261");
+    }
+
+    #[test]
+    fn srt_reasons() {
+        assert_eq!(srt_reason("x processConnectResponse: rejecting per reception of a rejection HS response: ERROR:BADSECRET\n"), "srt: wrong passphrase");
+        assert_eq!(srt_reason("…rejection HS response: ERROR:UNSECURE"), "srt: passphrase missing on one side");
+        assert_eq!(srt_reason("…rejection HS response: ERROR:1403"), "srt: connection refused by the source (stream id?)");
+        assert_eq!(srt_reason("[srt @ 0x1] Connection to srt://1.2.3.4:9000 failed: Input/output error"), "srt: no answer from the source (address, port or firewall)");
+        assert_eq!(srt_reason("Input #0, mpegts"), "");
     }
 
     #[test]

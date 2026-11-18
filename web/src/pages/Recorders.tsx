@@ -198,9 +198,14 @@ function RecorderCard({ rec, st, admin, onEdit }: { rec: Recorder; st?: Recorder
             <TriangleAlert size={12} /> {t('No signal for {d}', { d: hms(now - st.since) })}
           </span>
         )}
+        {state === 'nosignal' && st?.message && (
+          <span className="sc-warnline sc-reason" title={st.message}>
+            {t(st.message)}
+          </span>
+        )}
         {state === 'error' && st?.message && (
           <span className="sc-errline" title={st.message}>
-            <TriangleAlert size={12} /> {st.message}
+            <TriangleAlert size={12} /> {t(st.message)}
           </span>
         )}
         <div className="sc-loop">

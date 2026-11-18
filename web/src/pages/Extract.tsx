@@ -641,6 +641,15 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
     go();
   };
 
+  // Pointer on the timeline: dragging the playhead, moving the view, or a click.
+  const drag = useRef<{ mode: 'pending' | 'pan' | 'scrub'; x0: number; s0: number } | null>(null);
+  const [grab, setGrab] = useState<'' | 'on-head' | 'grabbing' | 'scrubbing'>('');
+  const nearHead = (clientX: number) => {
+    if (!pos || !tracks.current) return false;
+    const r = tracks.current.getBoundingClientRect();
+    return Math.abs(clientX - (r.left + ((pos.wall - start) / span) * r.width)) <= 7;
+  };
+
   // Overview: the whole loop.
   const oFrom = loopFrom;
   const oSpan = now - loopFrom;
@@ -698,41 +707,49 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         {pos && <div className="sc-ov-head" style={{ left: `${ox(pos.wall)}%` }} />}
       </div>
       <div
-        className="sc-tracks"
+        className={`sc-tracks ${grab}`}
         ref={tracks}
         onPointerDown={(e) => {
           if (e.button !== 0) return;
           e.currentTarget.setPointerCapture(e.pointerId);
-          scrubbing.current = true;
-          scrubTo(wallAt(e.clientX));
+          // On the playhead: drag it. Elsewhere: drag = move the view, click = put the playhead there.
+          if (nearHead(e.clientX)) {
+            drag.current = { mode: 'scrub', x0: e.clientX, s0: start };
+            scrubbing.current = true;
+            setGrab('scrubbing');
+            scrubTo(wallAt(e.clientX));
+          } else {
+            drag.current = { mode: 'pending', x0: e.clientX, s0: start };
+          }
         }}
-        onPointerMove={(e) => scrubbing.current && scrubTo(wallAt(e.clientX))}
-        onPointerUp={() => (scrubbing.current = false)}
-        onPointerCancel={() => (scrubbing.current = false)}
+        onPointerMove={(e) => {
+          const d = drag.current;
+          if (!d) {
+            setGrab(nearHead(e.clientX) ? 'on-head' : '');
+            return;
+          }
+          if (d.mode === 'scrub') scrubTo(wallAt(e.clientX));
+          else if (d.mode === 'pan' || Math.abs(e.clientX - d.x0) > 4) {
+            d.mode = 'pan';
+            setGrab('grabbing');
+            pan(d.s0 - ((e.clientX - d.x0) / width) * span);
+          }
+        }}
+        onPointerUp={(e) => {
+          const d = drag.current;
+          drag.current = null;
+          scrubbing.current = false;
+          setGrab(nearHead(e.clientX) ? 'on-head' : '');
+          if (d?.mode === 'pending') onSeek(wallAt(e.clientX));
+        }}
+        onPointerCancel={() => {
+          drag.current = null;
+          scrubbing.current = false;
+          setGrab('');
+        }}
+        onPointerLeave={() => !drag.current && setGrab('')}
       >
-        <div
-          className="sc-ruler"
-          title={t('Drag to move the view')}
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            e.stopPropagation();
-            e.currentTarget.setPointerCapture(e.pointerId);
-            const x0 = e.clientX;
-            const s0 = start;
-            const el = e.currentTarget;
-            el.classList.add('grabbing');
-            const move = (ev: PointerEvent) => pan(s0 - ((ev.clientX - x0) / width) * span);
-            const up = () => {
-              el.classList.remove('grabbing');
-              el.removeEventListener('pointermove', move);
-              el.removeEventListener('pointerup', up);
-              el.removeEventListener('pointercancel', up);
-            };
-            el.addEventListener('pointermove', move);
-            el.addEventListener('pointerup', up);
-            el.addEventListener('pointercancel', up);
-          }}
-        >
+        <div className="sc-ruler">
           {ticks.out.filter((v) => x(v) < 94).map((v) => (
             <span key={v} style={{ left: `${x(v)}%` }}>
               {ticks.step >= 60_000 ? clock(v, timezone).slice(0, 5) : clock(v, timezone)}

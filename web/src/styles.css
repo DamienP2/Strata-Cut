@@ -629,3 +629,9 @@ a.btn { color: inherit; }
 .sc-tracks .sc-ruler { cursor: grab; }
 .sc-tracks .sc-ruler.grabbing { cursor: grabbing; }
 .sc-overview { cursor: ew-resize; }
+.sc-reason { padding-left: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+/* Timeline pointer: drag = move the view, click = playhead, the playhead itself is dragged */
+.sc-tracks, .sc-tracks .sc-ruler { cursor: grab; }
+.sc-tracks.grabbing, .sc-tracks.grabbing .sc-ruler { cursor: grabbing; }
+.sc-tracks.on-head, .sc-tracks.on-head .sc-ruler, .sc-tracks.scrubbing, .sc-tracks.scrubbing .sc-ruler { cursor: col-resize; }
+.sc-tracks.on-head .sc-head, .sc-tracks.scrubbing .sc-head { width: 3px; margin-left: -1.5px; box-shadow: 0 0 6px var(--live); }
