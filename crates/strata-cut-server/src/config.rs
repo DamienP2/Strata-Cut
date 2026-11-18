@@ -23,6 +23,9 @@ pub struct ServerConfig {
     /// Where the clips are written (empty = `<data>/clips`).
     #[serde(default)]
     pub clips_dir: String,
+    /// The machine's NTP servers (empty = the system's default).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ntp: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
@@ -77,6 +80,13 @@ impl ServerConfig {
         self.trusted_origins = self.trusted_origins.iter().map(|o| o.trim().trim_end_matches('/').to_string()).filter(|o| !o.is_empty()).collect();
         self.recordings_dir = self.recordings_dir.trim().to_string();
         self.clips_dir = self.clips_dir.trim().to_string();
+        let mut ntp: Vec<String> = Vec::new();
+        for s in self.ntp.iter().flat_map(|s| s.split([' ', ',', ';'])).map(str::trim).filter(|s| !s.is_empty()) {
+            if !ntp.iter().any(|x| x.eq_ignore_ascii_case(s)) {
+                ntp.push(s.to_string());
+            }
+        }
+        self.ntp = ntp;
         if jiff::tz::TimeZone::get(&self.timezone).is_err() {
             self.timezone = default_timezone();
         }
@@ -86,6 +96,13 @@ impl ServerConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.name.is_empty() {
             return Err("the server name cannot be empty".into());
+        }
+        if self.ntp.len() > 8 {
+            return Err("8 ntp servers at most".into());
+        }
+        if let Some(bad) = self.ntp.iter().find(|s| !crate::ntp::valid(s)) {
+            let _ = bad;
+            return Err("invalid ntp server name".into());
         }
         for d in [&self.recordings_dir, &self.clips_dir] {
             if !d.is_empty() && !Path::new(d).is_absolute() {

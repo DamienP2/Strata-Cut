@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, Check, ChevronsLeft, ChevronsRight, Download, Pause, Play, RadioTower, RotateCcw, Scissors, StepBack, StepForward, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, Check, ChevronsLeft, ChevronsRight, Crosshair, Download, Pause, Play, RadioTower, RotateCcw, Scissors, StepBack, StepForward, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { t, tn, locale } from '../i18n';
 import { navigate } from '../router';
@@ -198,11 +198,9 @@ function Editor({ rec }: { rec: Recorder }) {
   const togglePlay = () => {
     const pl = p();
     if (!pl) return;
+    setLive(false);
     if (pl.playing) pl.pause();
-    else {
-      setLive(false);
-      pl.play();
-    }
+    else pl.play();
   };
   const goLive = () => {
     setLive(true);
@@ -229,7 +227,10 @@ function Editor({ rec }: { rec: Recorder }) {
       else if (k === ' ' || k === 'k') {
         speed.current = 0;
         if (k === ' ') togglePlay();
-        else pl.pause();
+        else {
+          setLive(false);
+          pl.pause();
+        }
       } else if (k === 'l') {
         speed.current = speed.current > 0 ? Math.min(speed.current * 2, 8) : 1;
         setLive(false);
@@ -338,7 +339,7 @@ function Editor({ rec }: { rec: Recorder }) {
             <span className="sc-rec" /> {t('Live')}
           </button>
         </div>
-        <Timeline rec={rec} pos={pos} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} />
+        <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} />
       </div>
 
       <aside className="panel right">
@@ -449,8 +450,8 @@ function Jobs({ jobs }: { jobs: Job[] }) {
 /** Steps of the ruler, ms. */
 const TICKS = [1000, 2000, 5000, 10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000, 7_200_000, 10_800_000, 21_600_000];
 
-function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; span: number; setSpan: (ms: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; timezone: string }) {
-  const { rec, pos, fps, span, setSpan, spans, clips, mIn, mOut, onSeek, timezone } = props;
+function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fps: number; span: number; setSpan: (ms: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; timezone: string }) {
+  const { rec, pos, playing, fps, span, setSpan, spans, clips, mIn, mOut, onSeek, timezone } = props;
   const maxSpan = zoomMax(rec.loopHours);
   const tracks = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
@@ -463,12 +464,76 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; span: n
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  // Keep the playhead in view: recentre on zoom, page when it leaves.
-  useEffect(() => setStart((pos?.wall ?? serverNow()) - span / 2), [span]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** The view stays within the loop (a little margin at both ends). */
+  const clampStart = useCallback(
+    (s: number, sp: number) => {
+      const now = serverNow();
+      const lo = now - rec.loopHours * 3_600_000 - sp * 0.05;
+      const hi = now + sp * 0.05 - sp;
+      return Math.min(Math.max(s, lo), Math.max(lo, hi));
+    },
+    [rec.loopHours],
+  );
+  // Zooming keeps a point in place: the pointer (Ctrl + wheel), else the playhead when in view, else the middle.
+  const zoomAnchor = useRef<number | null>(null);
+  const prevSpan = useRef(span);
+  useEffect(() => {
+    const old = prevSpan.current;
+    prevSpan.current = span;
+    if (old === span) return;
+    setStart((st) => {
+      const anchor = zoomAnchor.current ?? (pos && pos.wall >= st && pos.wall <= st + old ? pos.wall : st + old / 2);
+      zoomAnchor.current = null;
+      return clampStart(anchor - ((anchor - st) * span) / old, span);
+    });
+  }, [span]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The view follows the playhead when it moves, unless the view was moved by hand during playback.
+  const follow = useRef(true);
+  const lastWall = useRef<number | null>(null);
   useEffect(() => {
     if (!pos || scrubbing.current) return;
-    if (pos.wall < start + span * 0.02 || pos.wall > start + span * 0.98) setStart(pos.wall - span * (pos.wall > start ? 0.8 : 0.2));
-  }, [pos, start, span]);
+    const moved = lastWall.current !== pos.wall;
+    lastWall.current = pos.wall;
+    if (!moved) return;
+    if (!follow.current && !playing) follow.current = true; // a frame moved by hand
+    if (!follow.current) return;
+    if (pos.wall < start + span * 0.02 || pos.wall > start + span * 0.98) setStart(clampStart(pos.wall - span * (pos.wall > start ? 0.8 : 0.2), span));
+  }, [pos, start, span, playing, clampStart]);
+  /** Moves the view by hand (the playhead stays). */
+  const pan = useCallback(
+    (to: number | ((s: number) => number)) => {
+      follow.current = false;
+      setStart((s) => clampStart(typeof to === 'function' ? to(s) : to, span));
+    },
+    [span, clampStart],
+  );
+  const centre = () => {
+    if (!pos) return;
+    follow.current = true;
+    setStart(clampStart(pos.wall - span / 2, span));
+  };
+  // Wheel / trackpad: move in time; Ctrl or ⌘ (and pinch): zoom around the pointer.
+  const view = useRef({ start, span, width });
+  view.current = { start, span, width };
+  useEffect(() => {
+    const el = tracks.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const { start: st, span: sp, width: w } = view.current;
+      if (e.ctrlKey || e.metaKey) {
+        const r = el.getBoundingClientRect();
+        zoomAnchor.current = st + ((e.clientX - r.left) / r.width) * sp;
+        const next = Math.min(zoomMax(rec.loopHours), Math.max(ZOOM_MIN, sp * Math.exp(e.deltaY * 0.004)));
+        setSpan(next);
+        return;
+      }
+      const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      pan((s) => s + (d / w) * sp);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [pan, setSpan, rec.loopHours]);
 
   const end = start + span;
   const x = (wall: number) => ((wall - start) / span) * 100;
@@ -598,15 +663,31 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; span: n
         <span className="muted">
           {day(start, timezone, locale())} {clock(start, timezone)} → {clock(end, timezone)}
         </span>
+        {pos && (pos.wall < start || pos.wall > end) && (
+          <button type="button" className="btn small" title={t('Centre on the playhead')} onClick={centre}>
+            <Crosshair size={13} /> {t('Playhead')}
+          </button>
+        )}
         <div className="spacer" />
         <span className="muted">
           {t('Loop {h} h · since {when}', { h: rec.loopHours, when: `${day(oldest, timezone, locale())} ${clock(oldest, timezone)}` })}
         </span>
       </div>
-      <div className="sc-overview" title={t('The whole loop')} onPointerDown={(e) => {
-        const r = e.currentTarget.getBoundingClientRect();
-        onSeek(oFrom + ((e.clientX - r.left) / r.width) * oSpan);
-      }}>
+      <div
+        className="sc-overview"
+        title={t('The whole loop: click or drag to move the view')}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const r = e.currentTarget.getBoundingClientRect();
+          pan(oFrom + ((e.clientX - r.left) / r.width) * oSpan - span / 2);
+        }}
+        onPointerMove={(e) => {
+          if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+          const r = e.currentTarget.getBoundingClientRect();
+          pan(oFrom + ((e.clientX - r.left) / r.width) * oSpan - span / 2);
+        }}
+      >
         {spans.map((s, i) => (
           <div key={i} className="sc-ov-rec" style={{ left: `${ox(s.from)}%`, width: `max(2px, ${ox(s.to) - ox(s.from)}%)` }} />
         ))}
@@ -629,7 +710,29 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; span: n
         onPointerUp={() => (scrubbing.current = false)}
         onPointerCancel={() => (scrubbing.current = false)}
       >
-        <div className="sc-ruler">
+        <div
+          className="sc-ruler"
+          title={t('Drag to move the view')}
+          onPointerDown={(e) => {
+            if (e.button !== 0) return;
+            e.stopPropagation();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            const x0 = e.clientX;
+            const s0 = start;
+            const el = e.currentTarget;
+            el.classList.add('grabbing');
+            const move = (ev: PointerEvent) => pan(s0 - ((ev.clientX - x0) / width) * span);
+            const up = () => {
+              el.classList.remove('grabbing');
+              el.removeEventListener('pointermove', move);
+              el.removeEventListener('pointerup', up);
+              el.removeEventListener('pointercancel', up);
+            };
+            el.addEventListener('pointermove', move);
+            el.addEventListener('pointerup', up);
+            el.addEventListener('pointercancel', up);
+          }}
+        >
           {ticks.out.filter((v) => x(v) < 94).map((v) => (
             <span key={v} style={{ left: `${x(v)}%` }}>
               {ticks.step >= 60_000 ? clock(v, timezone).slice(0, 5) : clock(v, timezone)}

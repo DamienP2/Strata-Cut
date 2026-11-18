@@ -13,6 +13,7 @@ mod config;
 mod guard;
 mod health;
 mod logs;
+mod ntp;
 mod paths;
 mod perf;
 mod prefs;
@@ -171,6 +172,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     loop {
         let config = config::ServerConfig::load(&data_dir);
         recorders.set_config(&config);
+        ntp::request(&data_dir, &config.ntp);
         clips.set_config(&config);
         let wanted = args.bind.or(config.bind).or(args.default_bind).unwrap_or(DEFAULT_BIND.parse()?);
         let listener = bind_retry(wanted).await?;

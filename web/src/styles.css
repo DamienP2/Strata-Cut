@@ -624,3 +624,8 @@ a.btn { color: inherit; }
 .sc-zoom input[type='range'] { width: 180px; min-height: 0; padding: 0; border: none; background: none; }
 .sc-zoom-v { min-width: 52px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .sc-wave svg path { vector-effect: non-scaling-stroke; }
+.sc-time { display: flex; align-items: center; gap: 8px; min-height: var(--h-control); flex-wrap: wrap; }
+/* Moving the view: the ruler is grabbed, the overview dragged */
+.sc-tracks .sc-ruler { cursor: grab; }
+.sc-tracks .sc-ruler.grabbing { cursor: grabbing; }
+.sc-overview { cursor: ew-resize; }

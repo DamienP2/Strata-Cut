@@ -93,6 +93,26 @@ export const business: Record<string, string> = {
   Zoom: 'Zoom',
   'Zoom to 1 min': 'Zoom à 1 min',
 
+  // System › General
+  'Web interface': 'Interface web',
+  'Network card': 'Carte réseau',
+  'All network cards': 'Toutes les cartes',
+  'Open this port in the firewall: sudo ufw allow {port}/tcp': 'Ouvrez ce port dans le pare-feu : sudo ufw allow {port}/tcp',
+  Clock: 'Heure',
+  'NTP servers': 'Serveurs NTP',
+  'System default': 'Ceux du système',
+  'Set when Strata Cut is installed with the install script.': 'Réglable quand Strata Cut est installé par le script d’installation.',
+  Synchronised: 'Synchronisée',
+  'Not synchronised': 'Non synchronisée',
+  'offset {ms} ms': 'décalage {ms} ms',
+  '8 ntp servers at most': '8 serveurs NTP au plus.',
+  'invalid ntp server name': 'Nom de serveur NTP non valide.',
+
+  'Centre on the playhead': 'Centrer sur la tête de lecture',
+  Playhead: 'Tête de lecture',
+  'The whole loop: click or drag to move the view': 'Toute la boucle : cliquez ou glissez pour déplacer la vue',
+  'Drag to move the view': 'Glissez pour déplacer la vue',
+
   // Clips
   '{n} clip': '{n} extrait',
   '{n} clips': '{n} extraits',

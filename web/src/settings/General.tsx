@@ -1,9 +1,12 @@
-/* Système › Serveur › Général. */
-import { useMemo } from 'react';
-import { Server } from 'lucide-react';
-import { t } from '../i18n';
+/* Système › Serveur › Général: name and time zone, where the web interface listens, the clock. */
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Clock, Network, Server } from 'lucide-react';
+import { locale, t } from '../i18n';
+import { api } from '../store';
 import { PageHead } from '../pages/SidePage';
 import { Dropdown, type DropOption } from '../ui/Dropdown';
+import { NumberField } from '../ui/fields';
+import { InfoTip } from '../ui/InfoTip';
 import { Card, Field, SaveBar } from './ui';
 import { useServerConfig } from './serverConfig';
 
@@ -20,25 +23,107 @@ function zones(current: string): DropOption[] {
   return list.map((z) => ({ value: z, label: z.replace(/_/g, ' '), group: z.includes('/') ? z.split('/')[0] : undefined }));
 }
 
+/** "0.0.0.0:8080" → ["0.0.0.0", 8080]; "[::]:8080" → ["::", 8080]. */
+function splitBind(bind: string): [string, number] {
+  const i = bind.lastIndexOf(':');
+  return [bind.slice(0, i).replace(/^\[|\]$/g, ''), Number(bind.slice(i + 1)) || 8080];
+}
+const joinBind = (ip: string, port: number) => (ip.includes(':') ? `[${ip}]:${port}` : `${ip}:${port}`);
+
+interface TimeStatus {
+  synchronized: boolean | null;
+  service: string;
+  server: string | null;
+  offsetMs: number | null;
+  managed: boolean;
+}
+
 export function General() {
-  const { cfg, setCfg, dirty, saving, save, discard } = useServerConfig();
+  const { info, cfg, setCfg, dirty, saving, save, discard } = useServerConfig();
   const options = useMemo(() => zones(cfg?.timezone ?? ''), [cfg?.timezone]);
+  const [time, setTime] = useState<TimeStatus | null>(null);
+  const loadTime = useCallback(async () => {
+    try {
+      setTime(await api<TimeStatus>('GET', '/api/system/time'));
+    } catch {
+      /* the next try */
+    }
+  }, []);
+  useEffect(() => {
+    void loadTime();
+    const i = setInterval(() => void loadTime(), 10_000);
+    return () => clearInterval(i);
+  }, [loadTime]);
+
+  const bind = (cfg?.bind as string | null | undefined) || info?.bind || '0.0.0.0:8080';
+  const [ip, port] = splitBind(bind);
+  const cards: DropOption[] = [{ value: '0.0.0.0', label: t('All network cards') }, ...(info?.interfaces ?? []).filter((i) => !i.ip.includes(':')).map((i) => ({ value: i.ip, label: i.name, detail: i.ip }))];
+  if (!cards.some((c) => c.value === ip)) cards.push({ value: ip, label: ip });
+  const ntp = Array.isArray(cfg?.ntp) ? (cfg.ntp as string[]) : [];
+  const offset = time?.offsetMs;
+
   return (
     <>
       <PageHead title={t('General')} />
       {!cfg ? (
         <div className="loading">{t('Loading…')}</div>
       ) : (
-        <Card icon={<Server size={16} />} title={t('General')}>
-          <div className="set-grid two">
-            <Field label={t('Server name')}>
-              <input value={cfg.name} aria-invalid={!cfg.name.trim()} onChange={(e) => setCfg((c) => ({ ...c, name: e.target.value }))} />
-            </Field>
-            <Field label={t('Time zone')}>
-              <Dropdown value={cfg.timezone} options={options} onChange={(timezone) => setCfg((c) => ({ ...c, timezone }))} />
-            </Field>
-          </div>
-        </Card>
+        <>
+          <Card icon={<Server size={16} />} title={t('General')}>
+            <div className="set-grid two">
+              <Field label={t('Server name')}>
+                <input value={cfg.name} aria-invalid={!cfg.name.trim()} onChange={(e) => setCfg((c) => ({ ...c, name: e.target.value }))} />
+              </Field>
+              <Field label={t('Time zone')}>
+                <Dropdown value={cfg.timezone} options={options} onChange={(timezone) => setCfg((c) => ({ ...c, timezone }))} />
+              </Field>
+            </div>
+          </Card>
+          <Card icon={<Network size={16} />} title={t('Web interface')}>
+            <div className="set-grid two">
+              <Field label={t('Network card')} group>
+                <Dropdown value={ip} options={cards} onChange={(v) => setCfg((c) => ({ ...c, bind: joinBind(v, port) }))} />
+              </Field>
+              <Field
+                label={
+                  <>
+                    {t('Port')}
+                    <InfoTip text={t('Open this port in the firewall: sudo ufw allow {port}/tcp', { port })} />
+                  </>
+                }
+                group
+              >
+                <NumberField value={port} min={1} max={65535} onChange={(v) => setCfg((c) => ({ ...c, bind: joinBind(ip, v) }))} />
+              </Field>
+            </div>
+          </Card>
+          <Card icon={<Clock size={16} />} title={t('Clock')}>
+            <div className="set-grid two">
+              <Field
+                label={
+                  <>
+                    {t('NTP servers')}
+                    {time && !time.managed && <InfoTip text={t('Set when Strata Cut is installed with the install script.')} />}
+                  </>
+                }
+              >
+                <input value={ntp.join(' ')} placeholder={t('System default')} spellCheck={false} disabled={!!time && !time.managed} onChange={(e) => setCfg((c) => ({ ...c, ntp: e.target.value.split(/[\s,;]+/) }))} />
+              </Field>
+              <Field label={t('State')} group>
+                <div className="sc-time">
+                  <span className={`nav-dot ${time?.synchronized ? 'ok' : time?.synchronized === false ? 'warn' : ''}`} />
+                  <span>{time?.synchronized ? t('Synchronised') : time?.synchronized === false ? t('Not synchronised') : '—'}</span>
+                  {time?.server && <span className="muted">{time.server}</span>}
+                  {offset !== null && offset !== undefined && (
+                    <span className="muted">
+                      {t('offset {ms} ms', { ms: offset.toLocaleString(locale(), { maximumFractionDigits: Math.abs(offset) < 10 ? 2 : 0, signDisplay: 'always' }) })}
+                    </span>
+                  )}
+                </div>
+              </Field>
+            </div>
+          </Card>
+        </>
       )}
       <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onDiscard={discard} />
     </>

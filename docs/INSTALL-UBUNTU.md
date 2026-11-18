@@ -208,6 +208,20 @@ Touche `?` : liste des raccourcis.
 
 Dans l'interface, **Système › Santé** regroupe les erreurs et les plantages, et **Système › Performances** montre le processeur et la mémoire.
 
+### Changer le port de l'interface web
+
+**Système › Général › Interface web** : choisissez la carte réseau (ou « Toutes les cartes ») et le port, puis **Enregistrer et appliquer**. Le serveur vérifie que le port est libre, change d'écoute sans arrêter les enregistrements, et la page suit vers le nouveau port. Ouvrez ce port dans le pare-feu :
+
+```bash
+sudo ufw allow 9090/tcp
+```
+
+Autre façon, depuis le serveur : `sudo ~/Strata-Cut/scripts/install-ubuntu.sh --no-pull --port 9090` (ouvre aussi le port dans `ufw`). Le réglage fait dans l'interface l'emporte sur celui du service.
+
+### Serveurs de temps (NTP)
+
+Le timecode est l'heure du serveur : **Système › Général › Heure** montre si elle est synchronisée, la source et le décalage. Indiquez-y vos serveurs NTP (séparés par des espaces, 8 au plus), puis **Enregistrer et appliquer** ; vide = ceux d'Ubuntu. Le service n'ayant pas les droits root, le script d'installation pose un petit relais (`strata-cut-ntp.path`) qui vérifie la liste et l'applique à systemd-timesyncd (ou à chrony s'il est utilisé).
+
 ### Sauvegarder
 
 Les réglages, comptes et la liste des extraits tiennent dans quelques fichiers du dossier des données :

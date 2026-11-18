@@ -34,6 +34,8 @@ LINK="/usr/local/bin/strata-cut"
 SERVICE_USER="strata-cut"
 UNIT="strata-cut"
 SYSCTL_FILE="/etc/sysctl.d/90-strata-cut.conf"
+NTP_HELPER="/usr/local/lib/strata-cut/apply-ntp"
+NTP_UNIT="strata-cut-ntp"
 NODE_MAJOR=22
 RUST_MIN="1.87.0"
 NODE_MIN="20.19.0"
@@ -132,7 +134,12 @@ if [ "$UNINSTALL" -eq 1 ]; then
     systemctl daemon-reload
     ok "service retiré"
   fi
-  rm -rf "$INSTALL_DIR" "$LINK" "$SYSCTL_FILE"
+  if has_systemd; then
+    systemctl disable --now "$NTP_UNIT.path" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$NTP_UNIT.path" "/etc/systemd/system/$NTP_UNIT.service"
+    systemctl daemon-reload
+  fi
+  rm -rf "$INSTALL_DIR" "$LINK" "$SYSCTL_FILE" "$(dirname "$NTP_HELPER")"
   ok "programme retiré ($INSTALL_DIR)"
   if [ "$PURGE" -eq 1 ]; then
     rm -rf "$DATA_DIR"
@@ -472,6 +479,68 @@ else
     warn "le service ne répond pas encore sur le port $PORT : journalctl -u $UNIT -n 50"
   fi
   if [ "$was_running" -eq 1 ]; then ok "mise à jour terminée"; fi
+
+  # Serveurs NTP choisis dans l'interface (Système › Général) : le service, sans droits,
+  # écrit <données>/ntp.conf ; cette unité root vérifie la liste et l'applique.
+  mkdir -p "$(dirname "$NTP_HELPER")"
+  cat >"$NTP_HELPER" <<'EOF'
+#!/bin/sh
+# Strata Cut : applique les serveurs NTP demandés dans l'interface ($1 = <données>/ntp.conf).
+set -eu
+servers=""
+if [ -f "$1" ]; then
+  for s in $(head -c 2048 "$1"); do
+    case "$s" in
+      -* | *[!A-Za-z0-9.:-]*) echo "serveur NTP refusé : $s" >&2; exit 1 ;;
+    esac
+    servers="$servers $s"
+  done
+fi
+servers="${servers# }"
+if systemctl is-active --quiet chrony 2>/dev/null; then
+  f=/etc/chrony/sources.d/strata-cut.sources
+  mkdir -p /etc/chrony/sources.d
+  if [ -n "$servers" ]; then
+    for s in $servers; do echo "server $s iburst"; done >"$f"
+  else
+    rm -f "$f"
+  fi
+  chronyc reload sources >/dev/null 2>&1 || systemctl restart chrony
+else
+  d=/etc/systemd/timesyncd.conf.d
+  mkdir -p "$d"
+  if [ -n "$servers" ]; then
+    printf '# Strata Cut (Système › Général)\n[Time]\nNTP=%s\n' "$servers" >"$d/50-strata-cut.conf"
+  else
+    rm -f "$d/50-strata-cut.conf"
+  fi
+  timedatectl set-ntp true 2>/dev/null || true
+  systemctl restart systemd-timesyncd
+fi
+EOF
+  chmod 0755 "$NTP_HELPER"
+  chown root:root "$NTP_HELPER"
+  cat >"/etc/systemd/system/$NTP_UNIT.service" <<EOF
+[Unit]
+Description=$BRAND: NTP servers chosen in the interface
+
+[Service]
+Type=oneshot
+ExecStart=$NTP_HELPER $DATA_DIR/ntp.conf
+EOF
+  cat >"/etc/systemd/system/$NTP_UNIT.path" <<EOF
+[Unit]
+Description=$BRAND: watches the NTP servers chosen in the interface
+
+[Path]
+PathChanged=$DATA_DIR/ntp.conf
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now "$NTP_UNIT.path" >/dev/null 2>&1
+  ok "serveurs NTP réglables dans Système › Général"
 fi
 
 # ---------------------------------------------------------------- 9. pare-feu
