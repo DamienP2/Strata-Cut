@@ -55,13 +55,15 @@ cd web && npm run build && node scripts/i18n-check.mjs
 
 ## Publier une version (mises à jour depuis l'interface)
 
-Le menu **Système › Mises à jour** des serveurs installés propose les **releases GitHub** du dépôt, pas les simples commits. Pour en publier une :
+Le menu **Système › Mises à jour** des serveurs installés propose les **releases GitHub** du dépôt, pas les simples commits. Pour en publier une, au choix :
 
-```bash
-scripts/set-version.sh v0.3.0
-git commit -am "Version 0.3.0"
-git tag v0.3.0
-git push && git push origin v0.3.0
-```
+- **depuis GitHub** : onglet **Actions › Release › Run workflow**, branche par défaut, version `0.3.0`, puis **Run workflow** ;
+- **depuis un poste** :
+  ```bash
+  scripts/set-version.sh v0.3.0 && git commit -am "Version 0.3.0" && git push
+  git tag v0.3.0 && git push origin v0.3.0
+  ```
 
-Le tag déclenche le workflow `Release` : il construit l'interface et le serveur, puis publie `Strata-Cut-0.3.0-linux-x86_64.tar.gz` et `…-linux-arm64.tar.gz` dans la release (quelques minutes). Les serveurs la voient à la vérification suivante (automatique toutes les 6 h, ou « Vérifier maintenant ») et l'installent en un clic, avec retour arrière possible.
+Le workflow `Release` construit l'interface et le serveur, puis publie `Strata-Cut-0.3.0-linux-x86_64.tar.gz` et `…-linux-arm64.tar.gz` dans la release (une dizaine de minutes). Les serveurs la voient à la vérification suivante (automatique toutes les 6 h, ou « Vérifier maintenant ») et l'installent en un clic, avec retour arrière possible.
+
+Pensez à passer aussi la version dans le code (`scripts/set-version.sh`, premier cas : faites-le avant ou après) pour que les serveurs mis à jour par le script d'installation affichent le même numéro.
