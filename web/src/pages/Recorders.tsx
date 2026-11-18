@@ -269,6 +269,11 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
             {t(st.message)}
           </span>
         )}
+        {recording && st && st.lost + st.damaged > 0 && (
+          <span className="sc-warnline" data-tip={t('Packets lost: {lost} (network, or a server too busy) · damaged stream: {damaged} (blocks or freezes in the picture). The last 10 minutes.', { lost: st.lost, damaged: st.damaged })}>
+            <TriangleAlert size={12} /> {t('Reception: {n} problems in 10 min', { n: st.lost + st.damaged })}
+          </span>
+        )}
         {st?.spaceLimited && (
           <span className="sc-warnline">
             <TriangleAlert size={12} /> {t('Loop shortened for lack of disk space')}
@@ -368,7 +373,7 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
   );
 }
 
-const blank: Recorder = { id: '', name: '', protocol: 'srt', url: '', mode: 'listener', port: 9000, path: 'live/stream', latency: 120, passphrase: '', iface: '', loopHours: 24, bitrate: 10, enabled: true };
+const blank: Recorder = { id: '', name: '', protocol: 'srt', url: '', mode: 'listener', port: 9000, path: 'live/stream', latency: 500, passphrase: '', iface: '', loopHours: 24, bitrate: 10, enabled: true };
 
 interface Space {
   capacity: number | null;
@@ -510,7 +515,7 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
           )}
           {c.protocol === 'srt' && (
             <>
-              <Field label={t('Latency')}>
+              <Field label={<>{t('Latency')}<InfoTip text={t('Over the internet: about 4 times the round trip, 500 ms or more. Too low, the lost packets come back too late: glitches.')} /></>}>
                 <NumberField value={c.latency} min={20} max={8000} step={10} suffix="ms" onChange={(v) => set({ latency: v })} />
               </Field>
               <Field label={t('Passphrase')}>

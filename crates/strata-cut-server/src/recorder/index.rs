@@ -243,7 +243,9 @@ pub mod wave {
     /// Decodes a proxy audio fragment (mono, 8 kHz) and measures it.
     pub fn compute(ffmpeg: &str, init: &Path, seg: &Path) -> Option<Vec<u8>> {
         let input = format!("concat:{}|{}", init.display(), seg.display());
-        let out = std::process::Command::new(ffmpeg)
+        let mut cmd = std::process::Command::new(ffmpeg);
+        super::super::background_std(&mut cmd);
+        let out = cmd
             .args(["-v", "error", "-i", &input, "-map", "0:a:0", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:1"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())

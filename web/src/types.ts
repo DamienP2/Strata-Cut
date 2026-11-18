@@ -70,6 +70,9 @@ export interface RecorderStatus {
   /** Programmed: the slot recording now, and the next one. */
   slot: SlotTime | null;
   nextSlot: SlotTime | null;
+  /** Reception problems in the last 10 minutes: packets lost before FFmpeg, damaged stream. */
+  lost: number;
+  damaged: number;
 }
 
 export interface SlotTime {

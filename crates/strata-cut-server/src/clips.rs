@@ -221,7 +221,7 @@ impl Clips {
     /// Cuts one clip; returns the clip or an error message.
     async fn cut(&self, job: &Job) -> Result<Clip, String> {
         let rec = self.recorders.get(&job.req.recorder).ok_or("the recorder was deleted")?;
-        let (segs, media, wall) = {
+        let (segs, media, wall, seg_t0) = {
             let runs = rec.runs.read().unwrap();
             let run = runs.iter().find(|r| r.meta.id == job.req.run).ok_or("this part of the loop was removed")?;
             let media = run.meta.media.clone().unwrap_or_default();
@@ -229,7 +229,7 @@ impl Clips {
             let half = 0.5 / fps;
             let segs = run.covering(job.req.t - half, job.req.t + job.req.frames as f64 / fps - half).ok_or("this part of the loop was removed")?;
             let paths: Vec<PathBuf> = segs.iter().map(|s| run.master_path(s.n)).collect();
-            (paths, media, run.wall_of(job.req.t).unwrap_or(0.0))
+            (paths, media, run.wall_of(job.req.t).unwrap_or(0.0), segs.first().map(|s| s.t0).unwrap_or(0.0))
         };
         let fps = if media.fps_den == 0 { 25.0 } else { media.fps() };
         let (fps_num, fps_den) = if media.fps_den == 0 { (25, 1) } else { (media.fps_num, media.fps_den) };
@@ -237,7 +237,9 @@ impl Clips {
         tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("{}: {e}", dir.display()))?;
         let part = dir.join(format!("{}.part.mp4", job.id));
         let out = dir.join(format!("{}.mp4", job.id));
-        let start = job.req.t - 0.5 / fps;
+        // The recorder's times go on past the 33-bit wrap; the files' start again from 0 at it.
+        let base = (seg_t0 / crate::recorder::PTS_WRAP).floor() * crate::recorder::PTS_WRAP;
+        let start = job.req.t - base - 0.5 / fps;
         let dur = job.req.frames as f64 / fps;
         let input = format!("concat:{}", segs.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join("|"));
         let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into(), "-i".into(), input];
@@ -251,7 +253,10 @@ impl Clips {
         }
         args.extend(["-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "-y"].map(String::from));
         args.push(part.to_string_lossy().into_owned());
-        let mut child = tokio::process::Command::new(&self.recorders.ffmpeg).args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn().map_err(|e| format!("cannot start ffmpeg: {e}"))?;
+        let mut cmd = tokio::process::Command::new(&self.recorders.ffmpeg);
+        cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+        crate::recorder::background(&mut cmd);
+        let mut child = cmd.spawn().map_err(|e| format!("cannot start ffmpeg: {e}"))?;
         *self.running.lock().unwrap() = child.id().map(|p| (job.req.recorder.clone(), p));
         let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
         let stderr = child.stderr.take().unwrap();
@@ -290,7 +295,9 @@ impl Clips {
         if let Some(d) = thumb.parent() {
             let _ = tokio::fs::create_dir_all(d).await;
         }
-        let _ = tokio::process::Command::new(&self.recorders.ffmpeg)
+        let mut thumb_cmd = tokio::process::Command::new(&self.recorders.ffmpeg);
+        crate::recorder::background(&mut thumb_cmd);
+        let _ = thumb_cmd
             .args(["-v", "error", "-ss", &format!("{:.3}", if dur > 1.0 { dur / 2.0 } else { 0.0 }), "-i"])
             .arg(&out)
             .args(["-frames:v", "1", "-vf", "scale=-2:144", "-q:v", "5", "-y"])

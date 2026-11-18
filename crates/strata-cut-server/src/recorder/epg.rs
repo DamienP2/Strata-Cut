@@ -19,7 +19,8 @@ pub struct Event {
 }
 
 /// What FFmpeg says of the source: the EPG stream to map, and the service of the video.
-#[derive(Clone, Default, Debug, PartialEq)]
+/// Kept in `<data>/epg/<id>.stream.json`: the next start maps it at once (no restart).
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Found {
     pub stream: Option<String>,
     pub service: Option<u16>,
@@ -336,6 +337,10 @@ impl Guide {
     pub fn between(&self, from: f64, to: f64) -> Vec<Event> {
         self.events.iter().filter(|e| e.end > from && e.start < to).cloned().collect()
     }
+}
+
+pub fn found_path(data_dir: &Path, id: &str) -> PathBuf {
+    data_dir.join("epg").join(format!("{id}.stream.json"))
 }
 
 pub fn path(data_dir: &Path, id: &str) -> PathBuf {

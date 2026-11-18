@@ -135,7 +135,9 @@ fn best_line(lines: &[String]) -> String {
         let l = clean_message(raw);
         // The input's description and the files opened are not errors.
         raw.starts_with(' ') || l.contains("for writing") || l.starts_with("Input #") || l.starts_with("Output #") || l.starts_with("Stream mapping") ||
-        l.is_empty() || l.starts_with("Error opening input") || l.starts_with("Error opening output") || l.starts_with("Exiting") || l.starts_with("Conversion failed")
+        l.is_empty() || l.starts_with("Error opening input") || l.starts_with("Error opening output") || l.starts_with("Exiting") || l.starts_with("Conversion failed") ||
+        // A warning about the system's network buffers, not the reason it stopped.
+        l.contains("attempted to set receive buffer")
     };
     lines.iter().rev().find(|l| !generic(l)).or_else(|| lines.iter().rev().find(|l| !l.trim().is_empty())).cloned().unwrap_or_default()
 }
@@ -195,14 +197,16 @@ pub fn input_args(c: &RecorderConfig) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     let url = match c.protocol {
         Protocol::Udp => {
-            let mut extra = "fifo_size=1000000&overrun_nonfatal=1&buffer_size=8388608&timeout=5000000".to_string();
+            // The receiving thread's buffer (in 188-byte packets): ~47 MB, about 37 s at 10 Mb/s of
+            // FFmpeg held up before a packet is lost; the kernel's buffer behind it (16 MB).
+            let mut extra = "fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000".to_string();
             if !c.iface.is_empty() {
                 extra = format!("localaddr={}&{extra}", c.iface);
             }
             join(&c.url, &extra)
         }
         Protocol::Rtp => {
-            let mut extra = "timeout=5000000&buffer_size=8388608".to_string();
+            let mut extra = "timeout=5000000&buffer_size=16777216".to_string();
             if !c.iface.is_empty() {
                 extra = format!("localaddr={}&{extra}", c.iface);
             }
@@ -358,14 +362,24 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     if let Some(err) = child.stderr.take() {
         let log = log.clone();
         let name = cfg.name.clone();
-        let (rec2, epg_new2, mapped) = (rec.clone(), epg_new.clone(), epg_map.is_some());
+        let (rec2, epg_new2, mapped, data_dir2) = (rec.clone(), epg_new.clone(), epg_map.is_some(), m.data_dir().to_path_buf());
         tokio::spawn(async move {
             let mut lines = tokio::io::BufReader::new(err).lines();
             let mut info = super::epg::InfoReader::default();
             while let Ok(Some(l)) = lines.next_line().await {
+                if let Some(kind) = glitch_of(&l) {
+                    rec2.glitch(kind);
+                }
                 if ts && info.line(&l) && !mapped && !rec2.epg_failed.load(Ordering::Relaxed) {
                     tracing::info!("{name}: the source carries a programme guide");
                     *rec2.epg_found.lock().unwrap() = info.found.clone();
+                    rec2.epg_from_disk.store(false, Ordering::Relaxed);
+                    // Remembered: the next start (another run, a restart) maps it at once.
+                    let path = super::epg::found_path(&data_dir2, &rec2.id);
+                    if let Some(d) = path.parent() {
+                        let _ = std::fs::create_dir_all(d);
+                    }
+                    let _ = crate::paths::write_json(&path, &info.found, false);
                     epg_new2.notify_one();
                 }
                 tracing::debug!("{name}: {l}");
@@ -407,9 +421,18 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     tracing::debug!("{}: ffmpeg said: {}", cfg.name, tail.into_iter().rev().collect::<Vec<_>>().join(" | "));
                     // The guide written along may be what FFmpeg refuses: record without it from now on.
                     if epg_map.is_some() {
-                        rec.epg_failed.store(true, Ordering::Relaxed);
+                        // Remembered from an earlier start, the source may have changed: found again.
+                        // Found this time and refused all the same: recorded without it.
+                        let remembered = super::epg::found_path(m.data_dir(), &rec.id);
+                        if rec.epg_from_disk.swap(false, Ordering::Relaxed) {
+                            let _ = std::fs::remove_file(&remembered);
+                            tracing::info!("{}: the programme guide is looked for again", cfg.name);
+                        } else {
+                            rec.epg_failed.store(true, Ordering::Relaxed);
+                            let _ = std::fs::remove_file(&remembered);
+                            tracing::warn!("{}: recording without the programme guide (FFmpeg did not start with it)", cfg.name);
+                        }
                         rec.epg_found.lock().unwrap().stream = None;
-                        tracing::warn!("{}: recording without the programme guide (FFmpeg did not start with it)", cfg.name);
                         break Outcome::Restart;
                     }
                 }
@@ -446,6 +469,12 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             _ = tick.tick() => {
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, false));
                 measure(m, rec, &run_id, std::mem::take(&mut scan.waves));
+                if let Some((from, to)) = scan.jumped {
+                    tracing::warn!("{}: the source's clock jumped ({from:.1} s → {to:.1} s): a new recording starts", cfg.name);
+                    stop_child(&mut child).await;
+                    tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                    break Outcome::Restart;
+                }
                 // Programmed: the slot is over (or was removed).
                 if !cfg.enabled && !m.wants(&rec.id, now_ms()) {
                     tracing::info!("{}: end of the programmed slot", cfg.name);
@@ -462,6 +491,23 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     }
     finish_run(rec, &run_id);
     outcome
+}
+
+/// A reception problem in FFmpeg's words: packets lost before FFmpeg (the network or a
+/// receiver too slow), or a damaged stream (what the picture shows as blocks, freezes).
+fn glitch_of(line: &str) -> Option<super::Glitch> {
+    let l = line.to_ascii_lowercase();
+    const DAMAGED: [&str; 12] = [
+        "packet corrupt", "corrupt input", "pes packet size mismatch", "error while decoding", "decode_slice_header error", "concealing",
+        "invalid nal unit", "missing picture", "non-existing pps", "continuity check failed", "corrupt decoded frame", "no frame!",
+    ];
+    if l.contains("circular buffer overrun") || l.contains("packet loss") || l.contains("missed") && l.contains("packets") {
+        Some(super::Glitch::Lost)
+    } else if DAMAGED.iter().any(|k| l.contains(k)) {
+        Some(super::Glitch::Damaged)
+    } else {
+        None
+    }
 }
 
 /// Decodes the guide FFmpeg writes on its output, keeps it, saves it now and then.
@@ -568,6 +614,10 @@ struct Scanner {
     still_ticks: u32,
     /// New audio fragments to measure: (number, init, fragment, level file).
     waves: Vec<(u32, PathBuf, PathBuf, PathBuf)>,
+    /// The end of the last segment read (source time, s).
+    last_t1: Option<f64>,
+    /// The source's clock jumped (a new encoder, a splice): (from, to).
+    jumped: Option<(f64, f64)>,
 }
 
 impl Scanner {
@@ -660,6 +710,15 @@ impl Scanner {
             if t1 <= t0 {
                 continue;
             }
+            // The source's clock jumped back or far ahead: the times no longer follow the
+            // server's; the recording starts again (a new run keeps the index right).
+            if let Some(prev) = self.last_t1 {
+                if t0 < prev - 1.0 || t0 > prev + 30.0 {
+                    self.jumped = Some((prev, t0));
+                    break;
+                }
+            }
+            self.last_t1 = Some(t1);
             // The segment closed when its last packet arrived: now.
             let sample = now - t1 * 1000.0;
             let anchor = match self.anchor {
@@ -762,8 +821,16 @@ mod tests {
     }
 
     #[test]
+    fn glitches() {
+        assert_eq!(glitch_of("[udp @ 0x5] Circular buffer overrun. Surge of data? To avoid, increase fifo_size URL option."), Some(super::super::Glitch::Lost));
+        assert_eq!(glitch_of("[h264 @ 0x7] concealing 845 DC, 845 AC, 845 MV errors in P frame"), Some(super::super::Glitch::Damaged));
+        assert_eq!(glitch_of("[mpegts @ 0x9] Packet corrupt (stream = 0, dts = 1234)."), Some(super::super::Glitch::Damaged));
+        assert_eq!(glitch_of("[segment @ 0x1] Opening 'x.ts' for writing"), None);
+    }
+
+    #[test]
     fn inputs() {
-        assert_eq!(input_args(&cfg(Protocol::Udp, Mode::Listener)).last().unwrap(), "udp://239.1.1.1:5000?localaddr=10.0.0.2&fifo_size=1000000&overrun_nonfatal=1&buffer_size=8388608&timeout=5000000");
+        assert_eq!(input_args(&cfg(Protocol::Udp, Mode::Listener)).last().unwrap(), "udp://239.1.1.1:5000?localaddr=10.0.0.2&fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000");
         let r = input_args(&cfg(Protocol::Rtmp, Mode::Listener));
         assert_eq!(r, vec!["-listen", "1", "-i", "rtmp://0.0.0.0:9000/live/a"]);
         let mut c = cfg(Protocol::Srt, Mode::Listener);

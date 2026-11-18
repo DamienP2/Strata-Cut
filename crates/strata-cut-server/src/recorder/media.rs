@@ -409,6 +409,7 @@ async fn frame(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id)
 async fn grab(ffmpeg: &str, init: &Path, seg: &Path, t: f64, h: u32, fast: bool) -> Option<Vec<u8>> {
     let input = format!("concat:{}|{}", init.display(), seg.display());
     let mut cmd = tokio::process::Command::new(ffmpeg);
+    super::background(&mut cmd);
     cmd.args(["-v", "error", "-threads", "1"]);
     // Key frames only (one per second in the proxy): no decoding of the frames between.
     if fast {

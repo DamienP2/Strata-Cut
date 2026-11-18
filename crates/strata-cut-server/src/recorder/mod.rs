@@ -25,6 +25,33 @@ pub use media::routes;
 
 pub const MASKED: &str = "••••••••";
 
+/// Work that may wait (clips, stills, levels) runs with a lower CPU priority, so that it
+/// never slows the recorders' FFmpeg down (a slowed reception loses packets: glitches).
+pub fn background(cmd: &mut tokio::process::Command) {
+    // SAFETY: setpriority is async-signal-safe and only touches the child.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+            Ok(())
+        });
+    }
+}
+
+/// The same for a std Command.
+pub fn background_std(cmd: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: as above.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+            Ok(())
+        });
+    }
+}
+
+/// MPEG timestamps (33 bits at 90 kHz) start again from 0 every 26 h 30 or so.
+pub const PTS_WRAP: f64 = 8_589_934_592.0 / 90_000.0;
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {
@@ -177,6 +204,15 @@ pub enum State {
     Waiting,
 }
 
+/// A reception problem seen in FFmpeg's words.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Glitch {
+    /// Packets lost before FFmpeg (network, or a receiver too slow).
+    Lost,
+    /// A damaged stream (blocks, freezes in the picture).
+    Damaged,
+}
+
 /// A slot of the programme, for the interface.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct SlotInfo {
@@ -207,6 +243,9 @@ pub struct Status {
     /// Programmed: the slot recording now, and the next one.
     pub slot: Option<SlotInfo>,
     pub next_slot: Option<SlotInfo>,
+    /// Reception problems in the last 10 minutes: packets lost, damaged stream.
+    pub lost: u32,
+    pub damaged: u32,
 }
 
 pub fn now_ms() -> i64 {
@@ -235,12 +274,33 @@ pub struct Rec {
     pub epg_found: Mutex<epg::Found>,
     /// FFmpeg could not write the guide of this source: recorded without it.
     pub epg_failed: std::sync::atomic::AtomicBool,
+    /// The guide's place in the source comes from an earlier start (it may have changed).
+    pub epg_from_disk: std::sync::atomic::AtomicBool,
+    /// Reception problems of the last 10 minutes (when, which), and when the log last told them.
+    glitches: Mutex<(std::collections::VecDeque<(i64, Glitch)>, i64)>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Rec {
     pub fn config(&self) -> RecorderConfig {
         self.cfg.borrow().clone()
+    }
+
+    /// Counts a reception problem; the log says how many once a minute at most.
+    pub fn glitch(&self, kind: Glitch) {
+        let now = now_ms();
+        let mut g = self.glitches.lock().unwrap();
+        g.0.push_back((now, kind));
+        while g.0.front().is_some_and(|(t, _)| now - t > 600_000) {
+            g.0.pop_front();
+        }
+        if now - g.1 >= 60_000 {
+            let minute: Vec<_> = g.0.iter().filter(|(t, _)| now - t < 60_000).collect();
+            let lost = minute.iter().filter(|(_, k)| *k == Glitch::Lost).count();
+            let damaged = minute.len() - lost;
+            g.1 = now;
+            tracing::warn!("{}: reception problems in the last minute: {lost} packet losses, {damaged} damaged stream", self.config().name);
+        }
     }
 
     pub fn set_state(&self, state: State, message: impl Into<String>) {
@@ -285,6 +345,16 @@ impl Rec {
         drop(g);
         let cut = self.space_trimmed.load(std::sync::atomic::Ordering::Relaxed);
         let cfg = self.config();
+        // The reception problems of the last 10 minutes (the status is already held: no new lock on it).
+        {
+            let now = now_ms();
+            let g = self.glitches.lock().unwrap();
+            let recent = g.0.iter().filter(|(t, _)| now - t < 600_000);
+            let (lost, damaged) = recent.fold((0u32, 0u32), |(a, b), (_, k)| if *k == Glitch::Lost { (a + 1, b) } else { (a, b + 1) });
+            drop(g);
+            s.lost = lost;
+            s.damaged = damaged;
+        }
         let short = matches!((oldest, newest), (Some(a), Some(b)) if ((b - a) as f64) < cfg.loop_hours as f64 * 3_600_000.0 * 0.98);
         s.space_limited = cut > 0 && now_ms() - cut < 15 * 60_000 && short;
         if media.is_some() {
@@ -663,9 +733,11 @@ impl Manager {
         let mut runs: Vec<Run> = self.dirs.lock().unwrap().iter().flat_map(|d| load_runs(&d.join(&c.id))).collect();
         runs.sort_by_key(|r| r.meta.started);
         let guide = epg::Guide::load(&epg::path(&self.data_dir, &c.id));
+        let found: epg::Found = crate::paths::read_json(&epg::found_path(&self.data_dir, &c.id)).unwrap_or_default();
+        let found_known = found.stream.is_some();
         let rec = Arc::new(Rec {
             id: c.id.clone(),
-            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None }),
+            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None, lost: 0, damaged: 0 }),
             cfg: watch::channel(c).0,
             runs: RwLock::new(runs),
             stop: watch::channel(false).0,
@@ -674,8 +746,10 @@ impl Manager {
             space_trimmed: 0.into(),
             new_run: tokio::sync::Notify::new(),
             epg: Mutex::new(guide),
-            epg_found: Mutex::new(epg::Found::default()),
+            epg_found: Mutex::new(found),
             epg_failed: false.into(),
+            epg_from_disk: found_known.into(),
+            glitches: Mutex::new((std::collections::VecDeque::new(), 0)),
             task: Mutex::new(None),
         });
         rec.refresh_status();
@@ -829,6 +903,7 @@ impl Manager {
         let dirs: Vec<PathBuf> = self.dirs.lock().unwrap().iter().map(|d| d.join(id)).collect();
         let _ = std::fs::remove_file(self.data_dir.join("cookies").join(format!("{id}.txt")));
         let _ = std::fs::remove_file(epg::path(&self.data_dir, id));
+        let _ = std::fs::remove_file(epg::found_path(&self.data_dir, id));
         self.schedules.delete_recorder(id);
         let name = rec.config().name;
         let _ = tokio::task::spawn_blocking(move || {
