@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Strata Cut</title>
+<style>
+/* ===== Jetons (styles.css de la référence, § 3.1) ===== */
+:root {
+  --bg: #0b0c12; --panel: #12141d; --panel-2: #181b26; --panel-3: #1f2331;
+  --line: #262a3a; --line-2: #323750;
+  --text: #e6e8f2; --text-2: #a3a8bf; --text-3: #8a90ad;
+  --accent: #8fa3ff; --accent-2: #bfcaff; --accent-soft: rgba(143, 163, 255, 0.16);
+  --on-accent: #0b1236;
+  --live: #ff3b5c; --live-soft: rgba(255, 59, 92, 0.16);
+  --live-btn: #e11d48;
+  --pvw: #22c55e;
+  --warn: #f5a524;
+  --key: #f5c542; --mask: #2dd4bf;
+  --radius: 8px;
+  --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-15: 15px; --fs-20: 20px;
+  --h-control: 32px; --h-control-dense: 28px; --hit-min: 28px;
+  --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Consolas, 'DejaVu Sans Mono', monospace;
+  color-scheme: dark;
+}
+/* styles-light.css */
+:root[data-theme='light'] {
+  --bg: #eef0f5; --panel: #ffffff; --panel-2: #f5f6fa; --panel-3: #e9ecf3;
+  --line: #dde1ea; --line-2: #cfd4e0;
+  --text: #161925; --text-2: #4f5670; --text-3: #6b7290;
+  --accent: #4f63e6; --accent-2: #3a4bc4; --accent-soft: rgba(79, 99, 230, 0.12);
+  --mask: #0d9488; --on-accent: #ffffff;
+  --live: #e11d48; --live-soft: rgba(225, 29, 72, 0.12); --live-btn: #e11d48;
+  --pvw: #15803d; --warn: #b45309; --key: #a16207;
+  --pvw-fill: #22c55e; --warn-fill: #f5a524;
+  --t-red: #c8183f; --t-green: #15803d; --t-blue: #0369a1; --t-yellow: #a16207; --t-pink: #be185d; --t-violet: #6d28d9; --t-orange: #c2410c;
+  color-scheme: light;
+}
+/* Les images restent sombres dans les deux thèmes */
+:root[data-theme='light'] :is(.sc-thumb, .sc-viewer, .sc-strip) { --bg: #0b0c12; --panel: #12141d; --panel-2: #181b26; --panel-3: #1f2331; --line: #262a3a; --line-2: #323750; --text: #e6e8f2; --text-2: #a3a8bf; --text-3: #8a90ad; color-scheme: dark; }
+
+/* ===== Base (§ 3.2) ===== */
+* { box-sizing: border-box; }
+input, textarea, pre, code { user-select: text; -webkit-user-select: text; }
+html, body { height: 100%; margin: 0; }
+body { user-select: none; -webkit-user-select: none; background: var(--bg); color: var(--text); font: 13px/1.4 Inter, system-ui, sans-serif; -webkit-font-smoothing: antialiased; overflow: hidden; }
+button, input, select, textarea { font: inherit; color: inherit; }
+input, select, textarea { background: var(--panel-3); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; min-width: 0; outline: none; transition: border-color 0.12s; }
+input:focus { border-color: var(--accent); }
+hr { border: none; border-top: 1px solid var(--line); margin: 6px 0; width: 100%; }
+kbd { font-family: var(--mono); font-size: 10px; background: var(--panel-3); border: 1px solid var(--line-2); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; }
+code { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 10px; border: 2px solid transparent; background-clip: padding-box; }
+:focus, :focus-visible { outline: none; }
+:is(.projects-page, .settings, .modal-back, .sc-edit) :is(input:not([type='checkbox']):not([type='range'])) { min-height: var(--h-control); }
+:is(.projects-page, .settings, .modal-back) .search input { min-height: 0; }
+.spacer { flex: 1; }
+.muted { color: var(--text-3); font-size: 12px; }
+.empty, .loading { color: var(--text-3); padding: 24px 16px; text-align: center; }
+.row { display: flex; gap: 6px; align-items: center; }
+.row > input { flex: 1; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes blink { 50% { opacity: 0.3; } }
+svg.lucide { display: block; flex: none; }
+
+/* ===== Coquille (§ 4.1 – 4.6) ===== */
+.app { display: flex; flex-direction: column; height: 100%; }
+.topbar { height: 46px; flex: none; display: flex; align-items: center; gap: 18px; padding: 0 14px; border-bottom: 1px solid var(--line); background: linear-gradient(180deg, #141623, #10121a); }
+.topbar .tabs button { white-space: nowrap; }
+.content { flex: 1; min-height: 0; }
+:root[data-theme='light'] .topbar { background: var(--panel); }
+.brand { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; flex: none; }
+.brand-lockup { display: flex; align-items: flex-end; gap: 6px; }
+.brand .brand-f-lead { color: #fff; margin-right: 2px; margin-bottom: -1px; }
+.brand-name, .brand-module { font-weight: 800; font-size: 16px; letter-spacing: -0.035em; line-height: 1; color: #fff; }
+.brand-module { font-weight: 400; letter-spacing: -0.02em; color: var(--accent); }
+.brand svg { display: block; flex: none; overflow: visible; }
+:root[data-theme='light'] :is(.brand .brand-f-lead, .brand-name) { color: var(--text); }
+.tabs { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); padding: 3px; border-radius: 9px; }
+.tabs button { display: flex; align-items: center; gap: 6px; border: none; background: none; padding: 5px 12px; border-radius: 6px; cursor: pointer; color: var(--text-2); font-weight: 500; }
+.tabs button.on { background: var(--panel-3); color: var(--text); box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset; }
+:root[data-theme='light'] .tabs button.on { box-shadow: 0 1px 2px rgba(22, 25, 37, 0.08); }
+.menu { position: absolute; z-index: 50; top: calc(100% + 6px); left: 0; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); padding: 6px; }
+.menu-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+.ux1-mi { display: flex; align-items: center; gap: 10px; width: 100%; height: 32px; padding: 0 8px; border: none; border-radius: 6px; background: none; color: var(--text); font-size: 13px; font-weight: 500; text-align: left; white-space: nowrap; cursor: pointer; }
+.ux1-mi:hover { background: var(--accent-soft); }
+.ux1-mi svg { flex: none; color: var(--text-2); }
+.ux1-mi .ux1-cap { margin-left: auto; }
+.ux1-mi.danger, .ux1-mi.danger svg { color: #ff8aa0; }
+:root[data-theme='light'] :is(.ux1-mi.danger, .ux1-mi.danger svg) { color: var(--t-red); }
+.ux1-pill { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 28px; padding: 0 10px; border-radius: 14px; border: 1px solid transparent; background: none; color: var(--pvw); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.ux1-pill .ux1-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+.learn-help { width: 30px; height: 30px; display: grid; place-items: center; border: 0; border-radius: 8px; background: none; color: var(--text-2); cursor: pointer; flex: none; }
+.learn-help:hover { background: var(--panel-3); color: var(--text); }
+.avatar { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: var(--on-accent); }
+.user-name { font-size: 12px; color: var(--text-2); }
+.ux1-user { position: relative; flex: none; }
+.ux1-user-btn { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 9px 0 2px; border: none; border-radius: 16px; background: none; color: var(--text-2); cursor: pointer; }
+.ux1-user-btn .avatar { width: 28px; height: 28px; font-size: 12px; }
+.ux1-user-btn:hover, .ux1-user-btn.on { background: var(--panel-2); }
+.ux1-user-btn.on .avatar { box-shadow: 0 0 0 2px #12141f, 0 0 0 4px var(--accent); }
+:root[data-theme='light'] .ux1-user-btn.on .avatar { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent); }
+.ux1-umenu { left: auto; right: 0; top: calc(100% + 8px); z-index: 300; min-width: 250px; }
+.ux1-who { display: flex; align-items: center; gap: 10px; padding: 6px 8px 8px; }
+.ux1-who b { display: block; font-size: 13px; color: var(--text); }
+.ux1-who small { font-size: 12px; color: var(--text-3); }
+.ux1-mrow { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 8px; font-size: 13px; color: var(--text); }
+.ux1-mrow svg { color: var(--text-2); }
+.ux1-mrow .lang-switch { margin-left: auto; }
+.lang-switch { display: flex; padding: 2px; gap: 1px; border-radius: 7px; background: var(--panel-2); border: 1px solid var(--line); }
+.lang-switch button { border: none; background: none; color: var(--text-3); font-size: var(--fs-11); font-weight: 700; letter-spacing: 0.04em; padding: 3px 7px; border-radius: 5px; cursor: pointer; }
+.lang-switch button:hover { color: var(--text); }
+.lang-switch button.on { background: var(--accent-soft); color: var(--accent-2); }
+.ux1-cap { font: 600 11px/15px var(--mono); padding: 1px 5px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, 0.28); border-bottom-width: 2px; background: rgba(0, 0, 0, 0.22); color: inherit; opacity: 0.9; }
+:root[data-theme='light'] .ux1-cap { border-color: color-mix(in srgb, currentColor 30%, transparent); background: color-mix(in srgb, currentColor 8%, transparent); }
+
+/* ===== Pages (§ 4.7 – 4.9) ===== */
+.projects-page { height: 100%; display: grid; grid-template-columns: 240px minmax(0, 1fr); }
+.projects-page > .library { min-width: 0; }
+.lib-nav { border-right: 1px solid var(--line); background: var(--panel); padding: 18px 10px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.lib-nav-section { display: flex; align-items: center; font-size: var(--fs-11); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); padding: 14px 10px 6px; min-height: 38px; }
+.lib-nav-section:first-child { padding-top: 0; min-height: 0; }
+.lib-nav-item { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border-radius: 8px; color: var(--text-2); cursor: pointer; border: 1px dashed transparent; transition: background 0.12s, color 0.12s; }
+.lib-nav-item:hover { background: var(--panel-2); color: var(--text); }
+.lib-nav-item.on { background: var(--accent-soft); color: var(--text); }
+.lib-nav-item.on svg { color: var(--accent-2); }
+.lib-nav-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.count { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.library, .settings { height: 100%; overflow: auto; background: radial-gradient(ellipse at top, #141725 0%, #0b0c12 60%); }
+:root[data-theme='light'] :is(.library, .settings) { background: var(--bg); }
+.library-inner { max-width: 1180px; margin: 0 auto; padding: 28px 24px 80px; display: flex; flex-direction: column; gap: 20px; }
+.library-inner.wide { max-width: 1400px; }
+.settings-head { display: flex; align-items: center; gap: 12px; }
+.settings-head h1 { margin: 0; font-size: 22px; font-weight: 800; }
+.settings-head p { margin: 4px 0 0; }
+.set-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.set-card > header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); color: var(--accent-2); }
+.set-card h2 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text); }
+.set-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.set-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.set-grid.two { grid-template-columns: 1fr 1fr; }
+.set-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.set-field.span2 { grid-column: span 2; }
+.set-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-2); }
+.set-field input { padding: 7px 10px; font-size: 13px; }
+.set-field input[readonly] { color: var(--text-2); }
+.sys-list { display: grid; grid-template-columns: 160px 1fr; gap: 8px 16px; margin: 0; }
+.sys-list dt { color: var(--text-3); }
+.sys-list dd { margin: 0; }
+.project-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 18px; }
+.project-card { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; overflow: visible; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+.project-card:hover { border-color: var(--line-2); transform: translateY(-2px); box-shadow: 0 14px 34px rgba(0, 0, 0, 0.35); }
+:root[data-theme='light'] .project-card:hover { box-shadow: 0 6px 18px rgba(22, 25, 37, 0.1); }
+.project-body { padding: 12px 14px 4px; display: flex; flex-direction: column; gap: 6px; }
+.project-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11.5px; color: var(--text-3); }
+.project-meta > span { display: inline-flex; align-items: center; gap: 5px; }
+.project-new { border: 1.5px dashed var(--line-2); border-radius: 14px; background: none; color: var(--text-3); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 260px; cursor: pointer; font: inherit; transition: border-color 0.15s, color 0.15s, background 0.15s; }
+.project-new:hover { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+
+/* ===== Panneaux (§ 4.11) ===== */
+.panel { background: var(--panel); display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.panel.left { border-right: 1px solid var(--line); }
+.panel.right { border-left: 1px solid var(--line); }
+.insp-section { border-bottom: 1px solid var(--line); }
+.insp-section header { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-11); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); padding: 12px 12px 6px; }
+.insp-body { padding: 2px 12px 12px; display: flex; flex-direction: column; gap: 10px; }
+
+/* ===== Contrôles (§ 4.12 – 4.17) ===== */
+.btn { display: inline-flex; align-items: center; gap: 6px; min-height: var(--h-control); background: var(--panel-3); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; transition: background 0.12s, border-color 0.12s; white-space: nowrap; }
+.btn:hover:not(:disabled) { background: var(--line); }
+.btn.small { min-height: var(--h-control-dense); padding: 4px 9px; font-size: 12px; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.primary:hover:not(:disabled) { background: var(--accent-2); }
+.btn.ghost { background: none; border-color: transparent; color: var(--text-2); }
+.btn.ghost:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.btn.danger { color: var(--live); }
+.btn.block { justify-content: center; padding: 9px 12px; }
+.icon-btn { display: inline-grid; place-items: center; width: var(--hit-min); height: var(--hit-min); border-radius: 6px; border: 1px solid var(--line); background: var(--panel-3); cursor: pointer; color: var(--text-2); transition: all 0.12s; flex: none; padding: 0; }
+.icon-btn:hover:not(:disabled) { color: var(--text); background: var(--line); }
+.icon-btn.ghost { background: transparent; border-color: transparent; }
+.icon-btn.ghost:hover:not(:disabled) { background: var(--panel-3); }
+.segmented { display: inline-flex; background: var(--panel-3); border: 1px solid var(--line); border-radius: 6px; padding: 2px; }
+.segmented button { border: none; background: none; padding: 3px 8px; border-radius: 4px; cursor: pointer; color: var(--text-2); display: grid; place-items: center; font-size: 11.5px; }
+.segmented button.on { background: var(--line-2); color: var(--text); }
+.set-field .segmented { align-self: flex-start; min-height: var(--h-control); }
+.set-field .segmented button { padding: 3px 12px; font-size: 12.5px; }
+.dd-btn { display: inline-flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 26px; padding: 0 8px 0 9px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.set-field .dd-btn, .insp-body .dd-btn { height: var(--h-control); font-size: 13px; }
+.dd-btn:hover { border-color: var(--text-3); background: var(--panel-3); }
+.dd-btn > svg { flex: none; color: var(--text-3); }
+.dd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd-detail { margin-left: 8px; font: 11px var(--mono); color: var(--text-3); }
+.num-field { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.num-field input { width: 100%; min-width: 46px; font-family: var(--mono); font-size: 12px; text-align: right; }
+.num-field .suffix { color: var(--text-3); font-size: 11px; min-width: 14px; }
+.check { display: flex; gap: 8px; align-items: center; color: var(--text-2); }
+.check input[type='checkbox'] { appearance: none; width: 34px; height: 18px; border-radius: 9px; background: var(--panel-3); position: relative; cursor: pointer; margin: 0; flex: none; border: none; padding: 0; min-height: 0; }
+.check input[type='checkbox']::after { content: ''; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--text-2); transition: left 0.15s; }
+.check input[type='checkbox']:checked { background: var(--accent); }
+.check input[type='checkbox']:checked::after { left: 18px; background: #fff; }
+.media-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.search { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 32px; width: 280px; max-width: 100%; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text-3); }
+.search input { flex: 1; min-width: 0; border: none; background: none; padding: 0; outline: none; }
+.asr-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.asr-chip { border: 1px solid var(--line-2); background: none; border-radius: 999px; padding: 3px 9px; font-size: 11px; color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.asr-chip:hover { color: var(--text); }
+.asr-chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.asr-chip-n { margin-left: 4px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+.user-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.user-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.user-table td { padding: 8px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.user-table tr:last-child td { border-bottom: none; }
+.user-table td.num { font-family: var(--mono); font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.badge { font-size: var(--fs-11); padding: 1px 6px; border-radius: 10px; background: var(--panel-3); color: var(--text-3); }
+.badge.warn { background: rgba(245, 165, 36, 0.15); color: var(--warn); }
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--text-3); }
+.nav-dot.ok { background: var(--pvw); box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.15); }
+.nav-dot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(245, 165, 36, 0.15); }
+.nav-dot.bad { background: var(--live); box-shadow: 0 0 0 3px rgba(255, 59, 92, 0.15); }
+.tone-ok { --tone: var(--pvw); } .tone-warn { --tone: var(--warn); } .tone-bad { --tone: var(--live); } .tone-idle { --tone: var(--text-3); } .tone-accent { --tone: var(--accent); }
+.perf-bar { position: relative; display: block; height: 6px; min-width: 40px; border-radius: 4px; background: rgba(255, 255, 255, 0.07); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04); overflow: hidden; }
+:root[data-theme='light'] .perf-bar { background: var(--panel-3); }
+.perf-bar-fill { position: absolute; inset: 0; border-radius: inherit; background: var(--tone, var(--pvw)); }
+.modal-back { position: fixed; inset: 0; z-index: 100; background: rgba(5, 6, 10, 0.65); backdrop-filter: blur(3px); display: grid; place-items: center; padding: 16px; }
+:root[data-theme='light'] .modal-back { background: rgba(22, 25, 37, 0.35); }
+.modal { width: min(460px, 100%); max-height: calc(100vh - 32px); overflow: auto; background: var(--panel); border: 1px solid var(--line-2); border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5); }
+.modal.wide { width: min(720px, 100%); }
+.modal header, .modal footer { display: flex; align-items: center; gap: 8px; }
+.modal header h2 { font-size: 16px; margin: 0; flex: 1; }
+.modal footer { justify-content: flex-end; padding-top: 4px; }
+.toasts { position: fixed; bottom: 18px; right: 18px; display: flex; flex-direction: column; gap: 8px; z-index: 1600; }
+.toast { background: var(--panel-3); border: 1px solid var(--line-2); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 8px; max-width: 380px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); }
+:root[data-theme='light'] :is(.toast, .menu, .modal) { box-shadow: 0 12px 32px rgba(22, 25, 37, 0.16); }
+
+/* ===================================================================
+   Strata Cut — éléments métier (nouveaux, sur les jetons uniquement)
+   =================================================================== */
+
+/* Image (vignette, visionneuse) : toujours sombre */
+.sc-thumb { position: relative; aspect-ratio: 16 / 9; border-radius: 13px 13px 0 0; overflow: hidden; background: #05060a; color: var(--text); }
+.sc-pic { position: absolute; inset: 0; }
+.sc-pic.p1 { background: radial-gradient(ellipse at 30% 40%, #3a4a7a 0%, transparent 55%), radial-gradient(ellipse at 75% 70%, #6b3a52 0%, transparent 50%), linear-gradient(160deg, #1a1f33, #0a0b12); }
+.sc-pic.p2 { background: radial-gradient(ellipse at 60% 30%, #2f6b62 0%, transparent 55%), radial-gradient(ellipse at 20% 80%, #22304f 0%, transparent 55%), linear-gradient(200deg, #12202a, #07080c); }
+.sc-pic.p3 { background: radial-gradient(ellipse at 50% 55%, #7a5a2a 0%, transparent 50%), linear-gradient(180deg, #23283b, #0b0c12); }
+.sc-pic.p4 { background: radial-gradient(ellipse at 35% 35%, #4b3a7a 0%, transparent 55%), radial-gradient(ellipse at 80% 60%, #2a5a7a 0%, transparent 50%), linear-gradient(140deg, #171a2b, #08090e); }
+.sc-pic.p5 { background: linear-gradient(90deg, #c0c0c0 0 14.28%, #c0c000 0 28.56%, #00c0c0 0 42.84%, #00c000 0 57.12%, #c000c0 0 71.4%, #c00000 0 85.68%, #0000c0 0); opacity: 0.85; }
+.sc-pic.lost { background: repeating-linear-gradient(135deg, #14161f 0 10px, #101219 10px 20px); }
+.sc-pic .sc-third { position: absolute; left: 7%; bottom: 14%; width: 36%; height: 7%; border-radius: 3px; background: rgba(255, 255, 255, 0.85); }
+.sc-pic .sc-third::after { content: ''; position: absolute; left: 0; top: 100%; width: 60%; height: 55%; background: var(--accent); opacity: 0.9; }
+.sc-onpic { position: absolute; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: 10px; background: rgba(5, 6, 10, 0.68); color: #fff; font-size: 11px; font-weight: 700; backdrop-filter: blur(4px); }
+.sc-onpic.tl { top: 8px; left: 8px; } .sc-onpic.tr { top: 8px; right: 8px; } .sc-onpic.bl { bottom: 8px; left: 8px; } .sc-onpic.br { bottom: 8px; right: 8px; }
+.sc-onpic.mono { font: 600 11px var(--mono); letter-spacing: 0.02em; }
+.sc-rec { width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 6px var(--live); animation: blink 1.4s infinite; }
+.sc-onpic.lostmsg { left: 50%; top: 50%; transform: translate(-50%, -50%); height: 26px; padding: 0 12px; color: var(--warn); gap: 7px; }
+
+/* Carte d'enregistreur */
+.sc-card-title { display: flex; align-items: center; gap: 8px; }
+.sc-card-title strong { font-size: 14.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-addr { font: 11.5px var(--mono); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-loop { display: flex; flex-direction: column; gap: 5px; padding: 6px 0 2px; }
+.sc-loop-head { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.sc-loop-head b { color: var(--text-2); font-weight: 600; }
+.sc-card-foot { display: flex; align-items: center; gap: 6px; padding: 10px 14px 12px; margin-top: 8px; border-top: 1px solid var(--line); }
+.sc-proto { font: 700 10.5px var(--mono); letter-spacing: 0.04em; padding: 1px 6px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-2); }
+.sc-warnline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--warn); }
+
+/* Écran d'extraction */
+.sc-edit { height: 100%; display: grid; grid-template-columns: 240px minmax(0, 1fr) 300px; }
+.sc-center { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: radial-gradient(ellipse at top, #141725 0%, #0b0c12 60%); }
+:root[data-theme='light'] .sc-center { background: var(--bg); }
+.sc-viewer-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 16px 16px 10px; }
+.sc-viewer { position: relative; height: 100%; max-height: 100%; aspect-ratio: 16 / 9; max-width: 100%; background: #000; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); color: var(--text); }
+.sc-transport { flex: none; display: flex; align-items: center; gap: 14px; padding: 4px 16px 12px; }
+.sc-tc-big { font: 600 22px var(--mono); letter-spacing: 0.02em; font-variant-numeric: tabular-nums; color: var(--text); }
+.sc-tc-big small { font-size: 12px; color: var(--text-3); margin-left: 6px; font-weight: 500; }
+.sc-ctrls { display: flex; align-items: center; gap: 4px; }
+.sc-ctrls .icon-btn { width: 32px; height: 32px; }
+.sc-ctrls .icon-btn.play { width: 40px; height: 32px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.sc-sep { width: 1px; height: 20px; background: var(--line-2); flex: none; }
+.sc-io { display: flex; align-items: center; gap: 10px; font: 12px var(--mono); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.sc-io span { display: inline-flex; align-items: center; gap: 5px; }
+.sc-io i.k { font-style: normal; font: 600 10.5px Inter, system-ui, sans-serif; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
+.sc-live-btn { display: inline-flex; align-items: center; gap: 6px; }
+.sc-live-btn .sc-rec { animation: none; }
+
+.sc-timeline { flex: none; border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px 14px; display: flex; flex-direction: column; gap: 8px; }
+.sc-tl-head { display: flex; align-items: center; gap: 10px; }
+.sc-tl-head .muted { font-variant-numeric: tabular-nums; }
+.sc-overview { position: relative; height: 16px; border-radius: 4px; background: var(--panel-3); overflow: hidden; cursor: pointer; }
+.sc-ov-rec { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.sc-ov-gap { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--warn) 55%, transparent) 0 3px, transparent 3px 6px); }
+.sc-ov-win { position: absolute; top: 0; bottom: 0; border: 1.5px solid var(--accent); border-radius: 3px; background: var(--accent-soft); }
+.sc-ov-head { position: absolute; top: -2px; bottom: -2px; width: 2px; background: var(--live); }
+.sc-ov-clip { position: absolute; top: 3px; bottom: 3px; width: 3px; border-radius: 1px; background: var(--key); }
+.sc-tracks { position: relative; display: flex; flex-direction: column; gap: 4px; }
+.sc-ruler { position: relative; height: 22px; border-bottom: 1px solid var(--line-2); font: 10.5px var(--mono); color: var(--text-3);
+  background-image: repeating-linear-gradient(90deg, var(--line-2) 0 1px, transparent 1px calc(100% / 60)); background-size: 100% 6px; background-position: bottom; background-repeat: no-repeat; }
+.sc-ruler span { position: absolute; bottom: 0; height: 14px; padding-left: 4px; border-left: 1px solid var(--text-3); line-height: 10px; white-space: nowrap; }
+.sc-strip { position: relative; height: 54px; border-radius: 4px; overflow: hidden; display: flex; background: #05060a; }
+.sc-strip > div { flex: 1; border-right: 1px solid rgba(0, 0, 0, 0.6); position: relative; }
+.sc-wave { position: relative; height: 30px; border-radius: 4px; background: var(--panel-2); overflow: hidden; }
+.sc-wave svg { position: absolute; inset: 0; width: 100%; height: 100%; color: color-mix(in srgb, var(--pvw) 70%, transparent); }
+:root[data-theme='light'] .sc-wave svg { color: var(--pvw); }
+.sc-sel { position: absolute; top: 22px; bottom: 0; border-left: 2px solid var(--key); border-right: 2px solid var(--key); background: color-mix(in srgb, var(--key) 14%, transparent); pointer-events: none; }
+.sc-sel::before, .sc-sel::after { position: absolute; top: -22px; font: 700 10px var(--mono); color: var(--on-accent); background: var(--key); padding: 1px 4px; border-radius: 3px; }
+.sc-sel::before { content: 'E'; left: -2px; border-top-left-radius: 0; }
+.sc-sel::after { content: 'S'; right: -2px; border-top-right-radius: 0; }
+:root[data-theme='light'] .sc-sel::before, :root[data-theme='light'] .sc-sel::after { color: #fff; }
+.sc-head { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--live); pointer-events: none; }
+.sc-head::before { content: ''; position: absolute; top: 0; left: -5px; border: 6px solid transparent; border-top: 8px solid var(--live); border-bottom: none; }
+.sc-gap { position: absolute; top: 22px; bottom: 0; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--warn) 40%, transparent) 0 4px, transparent 4px 8px); border-left: 1px solid var(--warn); border-right: 1px solid var(--warn); }
+
+.sc-tc-input { display: flex; gap: 6px; }
+.sc-tc-input input { flex: 1; font-family: var(--mono); font-size: 13px; text-align: center; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+.sc-tc-input .icon-btn { width: var(--h-control); height: var(--h-control); }
+.sc-dur { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); }
+.sc-dur b { font: 600 15px var(--mono); font-variant-numeric: tabular-nums; }
+.sc-job { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border-radius: 8px; background: var(--panel-2); }
+.sc-job-top { display: flex; align-items: center; gap: 8px; }
+.sc-job-top strong { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-job-top .muted { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.sc-job .ok { color: var(--pvw); }
+.sc-mini { width: 64px; aspect-ratio: 16 / 9; border-radius: 4px; position: relative; overflow: hidden; flex: none; }
+.sc-name { display: flex; align-items: center; gap: 10px; }
+.sc-name strong { font-weight: 600; }
+
+/* Disque */
+.sc-disk { display: flex; flex-direction: column; gap: 8px; }
+.sc-disk-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--panel-3); }
+.sc-disk-bar > div { height: 100%; }
+.sc-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--text-2); }
+.sc-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sc-legend i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+/* Sélecteur d'écran de la maquette (hors application) */
+.mock-note { position: fixed; left: 50%; transform: translateX(-30%); top: 8px; z-index: 9000; display: flex; gap: 6px; align-items: center; padding: 6px 8px; border-radius: 10px; background: #000; color: #fff; font: 11px Inter, system-ui, sans-serif; opacity: 0.85; }
+.mock-note button { border: 1px solid #444; background: #111; color: #ddd; border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 11px; }
+.mock-note button.on { background: #fff; color: #000; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="topbar">
+    <div class="brand" aria-label="Strata Cut, Le Figaro AudioVisuel">
+      <span class="brand-lockup">
+        <svg class="brand-f-lead" viewBox="93.8 -0.2 52.3 52.95" width="23.7" height="24" aria-hidden="true"><path fill="currentColor" d="M145.93,22.93v-10.33h-35.97c2.12,2.08,7.43,7.77,7.92,13.05-.05-.42-.28-1.57-1.25-3.27-.98-1.72-2.72-4-5.8-6.66-.03-.03-.06-.05-.09-.08-1.11-.96-2.39-1.98-3.87-3.03C98.07,5.95,95.14,2.38,94.38.01c0,0-2.69,9.66,4.5,17.36,0,0-1.74-.36-3.41-1.02,0,0,2.98,7.41,11.12,11.33,0,0-2.11.07-3.92-.14,0,0,1.93,2.92,7.66,5.88v8.46c0,.57-.46,1.04-1.04,1.04h-3.97v7.83h24.8v-7.85h-3.76c-.57,0-1.04-.46-1.04-1.04v-3.41c1.19.21,4.51,1.95,5.96,3.12,3.92,3.17,8.11,8.05,8.11,8.05l1.83,1.13s-5.07-6.05-8.33-9.3c-2.27-2.27-6.1-6.1-6.1-6.1l-.2-.22h9.57v-7.19h-10.82v-7.51l9.78-.04c.58,0,1.04.46,1.04,1.04v1.5h9.8-.03Z"/></svg>
+        <span class="brand-name">Strata</span><span class="brand-module">Cut</span>
+      </span>
+    </div>
+    <div class="tabs home-tabs" id="tabs">
+      <button data-go="rec" class="on"><i data-i="radio-tower" data-s="14"></i> <span>Enregistreurs</span></button>
+      <button data-go="cut"><i data-i="scissors" data-s="14"></i> <span>Extraction</span></button>
+      <button data-go="clips"><i data-i="clapperboard" data-s="14"></i> <span>Extraits</span></button>
+      <button data-go="sys"><i data-i="server" data-s="14"></i> <span>Système</span></button>
+    </div>
+    <div class="spacer"></div>
+    <span class="ux1-pill" title="Strata Cut · Connecté&#10;CPU 34 % · 32 cœurs&#10;Mémoire 21 Go sur 64 Go&#10;cut-01"><span class="ux1-dot"></span>Connecté</span>
+    <button class="learn-help" title="Aide"><i data-i="circle-help" data-s="17"></i></button>
+    <div class="ux1-user">
+      <button class="ux1-user-btn" id="userBtn"><span class="avatar">D</span><span class="user-name">Damien</span><i data-i="chevron-down" data-s="13"></i></button>
+      <div class="menu ux1-umenu" id="userMenu" hidden>
+        <div class="ux1-who"><span class="avatar">D</span><div><b>Damien</b><small>Administrateur</small></div></div>
+        <div class="menu-sep"></div>
+        <div class="ux1-mrow"><i data-i="languages" data-s="14"></i> Langue<div class="lang-switch"><button>EN</button><button class="on">FR</button></div></div>
+        <div class="ux1-mrow"><i data-i="sun-moon" data-s="14"></i> Thème<div class="lang-switch" id="themeSw"><button data-t="dark" class="on">Sombre</button><button data-t="light">Clair</button><button data-t="dark">Système</button></div></div>
+        <button class="ux1-mi"><i data-i="keyboard" data-s="14"></i> Raccourcis clavier <span class="ux1-cap">?</span></button>
+        <div class="menu-sep"></div>
+        <button class="ux1-mi danger"><i data-i="log-out" data-s="14"></i> Se déconnecter</button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="content">
+
+    <!-- ============ ENREGISTREURS ============ -->
+    <section data-screen="rec" class="library" style="height:100%">
+      <div class="library-inner wide">
+        <div class="settings-head">
+          <div><h1>Enregistreurs</h1><p class="muted">6 enregistreurs · 5 en marche</p></div>
+          <div class="spacer"></div>
+          <button class="btn primary" data-open="newRec"><i data-i="plus" data-s="14"></i> Nouvel enregistreur</button>
+        </div>
+        <div class="media-toolbar">
+          <label class="search"><i data-i="search" data-s="14"></i><input placeholder="Rechercher des enregistreurs" /></label>
+          <div class="asr-chips">
+            <button class="asr-chip on">Tous les enregistreurs <span class="asr-chip-n">6</span></button>
+            <button class="asr-chip">En marche <span class="asr-chip-n">5</span></button>
+            <button class="asr-chip">Sans signal <span class="asr-chip-n">1</span></button>
+          </div>
+        </div>
+        <div class="project-grid" id="recGrid"></div>
+      </div>
+    </section>
+
+    <!-- ============ EXTRACTION ============ -->
+    <section data-screen="cut" class="sc-edit" hidden>
+      <aside class="lib-nav">
+        <div class="lib-nav-section"><span class="grow">Enregistreurs</span></div>
+        <div id="cutSources"></div>
+      </aside>
+
+      <div class="sc-center">
+        <div class="sc-viewer-wrap">
+          <div class="sc-viewer">
+            <div class="sc-pic p1"><div class="sc-third"></div></div>
+            <span class="sc-onpic tl">Plateau 1</span>
+            <span class="sc-onpic tr mono">1080i50 · 8 pistes</span>
+            <span class="sc-onpic br mono" title="Retard sur le direct">−00:14:31</span>
+          </div>
+        </div>
+        <div class="sc-transport">
+          <div class="sc-tc-big">14:32:01:08</div>
+          <div class="sc-ctrls">
+            <button class="icon-btn ghost" title="Aller à l’entrée  (Maj+I)"><i data-i="arrow-right-to-line" data-s="16"></i></button>
+            <button class="icon-btn ghost" title="Image précédente  (←)"><i data-i="step-back" data-s="16"></i></button>
+            <button class="icon-btn ghost" title="Lecture arrière  (J)"><i data-i="chevrons-left" data-s="16"></i></button>
+            <button class="icon-btn play" title="Lecture / pause  (K, Espace)"><i data-i="play" data-s="16"></i></button>
+            <button class="icon-btn ghost" title="Lecture avant  (L)"><i data-i="chevrons-right" data-s="16"></i></button>
+            <button class="icon-btn ghost" title="Image suivante  (→)"><i data-i="step-forward" data-s="16"></i></button>
+            <button class="icon-btn ghost" title="Aller à la sortie  (Maj+O)"><i data-i="arrow-left-to-line" data-s="16"></i></button>
+          </div>
+          <div class="sc-sep"></div>
+          <button class="btn small" title="I"><i data-i="arrow-right-to-line" data-s="13"></i> Entrée</button>
+          <button class="btn small" title="O"><i data-i="arrow-left-to-line" data-s="13"></i> Sortie</button>
+          <div class="spacer"></div>
+          <button class="btn small sc-live-btn" title="Revenir au direct"><span class="sc-rec"></span> Direct</button>
+        </div>
+
+        <div class="sc-timeline">
+          <div class="sc-tl-head">
+            <div class="segmented" title="Zoom">
+              <button>24 h</button><button>1 h</button><button>10 min</button><button class="on">1 min</button><button>10 s</button>
+            </div>
+            <span class="muted">mer. 18 nov. 14:31:30 → 14:32:30</span>
+            <div class="spacer"></div>
+            <span class="muted">Boucle 24 h · depuis mar. 17 nov. 14:46:39</span>
+          </div>
+          <div class="sc-overview" title="Les 24 dernières heures">
+            <div class="sc-ov-rec" style="left:0;right:0"></div>
+            <div class="sc-ov-gap" style="left:38.2%;width:1.1%"></div>
+            <div class="sc-ov-clip" style="left:21%"></div>
+            <div class="sc-ov-clip" style="left:63.5%"></div>
+            <div class="sc-ov-clip" style="left:88%"></div>
+            <div class="sc-ov-win" style="left:98.9%;width:0.6%"></div>
+            <div class="sc-ov-head" style="left:99.1%"></div>
+          </div>
+          <div class="sc-tracks" id="tracks">
+            <div class="sc-ruler" id="ruler"></div>
+            <div class="sc-strip" id="strip"></div>
+            <div class="sc-wave"><svg id="wave1" viewBox="0 0 600 30" preserveAspectRatio="none"></svg></div>
+            <div class="sc-wave"><svg id="wave2" viewBox="0 0 600 30" preserveAspectRatio="none"></svg></div>
+            <div class="sc-sel" style="left:36.9%;width:25.6%"></div>
+            <div class="sc-head" style="left:52.2%"></div>
+          </div>
+        </div>
+      </div>
+
+      <aside class="panel right">
+        <section class="insp-section">
+          <header><span>Extrait</span></header>
+          <div class="insp-body">
+            <label class="set-field"><span class="set-label">Nom</span><input value="Plateau 1 — Interview ministre" /></label>
+            <label class="set-field"><span class="set-label">Entrée</span>
+              <div class="sc-tc-input"><input value="14:31:52:04" /><button class="icon-btn" title="Prendre l’image courante  (I)"><i data-i="arrow-right-to-line" data-s="14"></i></button></div>
+            </label>
+            <label class="set-field"><span class="set-label">Sortie</span>
+              <div class="sc-tc-input"><input value="14:32:07:12" /><button class="icon-btn" title="Prendre l’image courante  (O)"><i data-i="arrow-left-to-line" data-s="14"></i></button></div>
+            </label>
+            <div class="sc-dur"><span class="muted">Durée</span><b>00:00:15:08</b></div>
+            <label class="set-field"><span class="set-label">Format</span>
+              <button class="dd-btn"><span class="dd-label">Flux d’origine</span><span class="dd-detail">.ts</span><i data-i="chevron-down" data-s="12"></i></button>
+            </label>
+            <label class="set-field"><span class="set-label">Audio</span>
+              <button class="dd-btn"><span class="dd-label">Toutes les pistes</span><span class="dd-detail">8</span><i data-i="chevron-down" data-s="12"></i></button>
+            </label>
+            <button class="btn primary block"><i data-i="scissors" data-s="14"></i> Extraire</button>
+          </div>
+        </section>
+        <section class="insp-section" style="border-bottom:none">
+          <header><span>En cours</span><span class="count">2</span></header>
+          <div class="insp-body">
+            <div class="sc-job">
+              <div class="sc-job-top"><strong>Plateau 1 — Ouverture JT</strong><span class="muted">62 %</span></div>
+              <span class="perf-bar tone-accent"><span class="perf-bar-fill" style="transform:translateX(-38%)"></span></span>
+            </div>
+            <div class="sc-job">
+              <div class="sc-job-top"><strong>Régie 2 — Duplex Lyon</strong><span class="muted">En attente</span></div>
+              <span class="perf-bar tone-idle"><span class="perf-bar-fill" style="transform:translateX(-100%)"></span></span>
+            </div>
+            <div class="sc-job">
+              <div class="sc-job-top"><strong>Plateau 1 — Météo</strong><span class="ok"><i data-i="check" data-s="14"></i></span></div>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </section>
+
+    <!-- ============ EXTRAITS ============ -->
+    <section data-screen="clips" class="library" style="height:100%" hidden>
+      <div class="library-inner wide">
+        <div class="settings-head">
+          <div><h1>Extraits</h1><p class="muted">128 extraits · 46 Go</p></div>
+        </div>
+        <div class="media-toolbar">
+          <label class="search"><i data-i="search" data-s="14"></i><input placeholder="Rechercher des extraits" /></label>
+          <div class="asr-chips">
+            <button class="asr-chip on">Tous les extraits <span class="asr-chip-n">128</span></button>
+            <button class="asr-chip">Plateau 1 <span class="asr-chip-n">54</span></button>
+            <button class="asr-chip">Régie 2 <span class="asr-chip-n">31</span></button>
+            <button class="asr-chip">Duplex SRT <span class="asr-chip-n">22</span></button>
+            <button class="asr-chip">Antenne <span class="asr-chip-n">21</span></button>
+          </div>
+        </div>
+        <table class="user-table">
+          <thead><tr><th>Extrait</th><th>Source</th><th>Entrée</th><th>Durée</th><th>Format</th><th>Taille</th><th>Créé</th><th></th></tr></thead>
+          <tbody id="clipRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ============ SYSTÈME ============ -->
+    <section data-screen="sys" class="projects-page" hidden>
+      <aside class="lib-nav">
+        <div class="lib-nav-section"><span class="grow">Supervision</span></div>
+        <div class="lib-nav-item"><i data-i="gauge" data-s="15"></i><span class="grow">Performances</span></div>
+        <div class="lib-nav-item"><i data-i="heart-pulse" data-s="15"></i><span class="grow">Santé</span></div>
+        <div class="lib-nav-section"><span class="grow">Accès</span></div>
+        <div class="lib-nav-item"><i data-i="users" data-s="15"></i><span class="grow">Utilisateurs</span><span class="count">4</span></div>
+        <div class="lib-nav-item"><i data-i="lock" data-s="15"></i><span class="grow">Sécurité</span></div>
+        <div class="lib-nav-section"><span class="grow">Serveur</span></div>
+        <div class="lib-nav-item on"><i data-i="sliders-horizontal" data-s="15"></i><span class="grow">Général</span></div>
+        <div class="lib-nav-item"><i data-i="hard-drive" data-s="15"></i><span class="grow">Stockage</span></div>
+        <div class="lib-nav-item"><i data-i="cloud-download" data-s="15"></i><span class="grow">Mises à jour</span></div>
+        <div class="lib-nav-item"><i data-i="rotate-ccw" data-s="15"></i><span class="grow">Maintenance</span></div>
+      </aside>
+      <main class="library">
+        <div class="library-inner">
+          <div class="settings-head"><div><h1>Général</h1></div></div>
+          <section class="set-card">
+            <header><i data-i="server" data-s="16"></i><h2>Général</h2></header>
+            <div class="set-body">
+              <div class="set-grid two">
+                <label class="set-field"><span class="set-label">Nom du serveur</span><input value="Strata Cut — Régie A" /></label>
+                <label class="set-field"><span class="set-label">Fuseau horaire</span><button class="dd-btn"><span class="dd-label">Europe/Paris</span><i data-i="chevron-down" data-s="12"></i></button></label>
+              </div>
+            </div>
+          </section>
+          <section class="set-card">
+            <header><i data-i="hard-drive" data-s="16"></i><h2>Stockage</h2></header>
+            <div class="set-body">
+              <div class="set-grid two">
+                <label class="set-field"><span class="set-label">Dossier des enregistrements</span><input value="/srv/strata-cut/loop" /></label>
+                <label class="set-field"><span class="set-label">Dossier des extraits</span><input value="/srv/strata-cut/clips" /></label>
+              </div>
+              <div class="sc-disk">
+                <div class="sc-disk-bar">
+                  <div style="width:52%;background:var(--accent)"></div>
+                  <div style="width:6%;background:var(--key)"></div>
+                  <div style="width:9%;background:var(--line-2)"></div>
+                </div>
+                <div class="sc-legend">
+                  <span><i style="background:var(--accent)"></i>Boucles 4,2 To</span>
+                  <span><i style="background:var(--key)"></i>Extraits 0,5 To</span>
+                  <span><i style="background:var(--line-2)"></i>Autres 0,7 To</span>
+                  <span class="muted">Libre 2,6 To sur 8 To</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </section>
+  </div>
+</div>
+
+<!-- ============ MODALE : NOUVEL ENREGISTREUR ============ -->
+<div class="modal-back" id="newRec" hidden>
+  <form class="modal wide" onsubmit="return false">
+    <header><h2>Nouvel enregistreur</h2><button type="button" class="icon-btn ghost" title="Fermer" data-close><i data-i="x" data-s="16"></i></button></header>
+    <div class="set-grid two">
+      <label class="set-field"><span class="set-label">Nom</span><input value="Duplex Lyon" /></label>
+      <label class="set-field"><span class="set-label">Source</span>
+        <button type="button" class="dd-btn" title="UDP · RTP · RTMP · SRT · NDI · SDI · ST 2110"><span class="dd-label">SRT</span><span class="dd-detail">srt://</span><i data-i="chevron-down" data-s="12"></i></button>
+      </label>
+      <label class="set-field"><span class="set-label">Mode</span>
+        <div class="segmented"><button type="button" class="on">Écoute</button><button type="button">Appel</button></div>
+      </label>
+      <label class="set-field"><span class="set-label">Port</span><input value="9001" style="font-family:var(--mono)" /></label>
+      <label class="set-field"><span class="set-label">Latence</span><div class="num-field"><input value="120" /><span class="suffix">ms</span></div></label>
+      <label class="set-field"><span class="set-label">Phrase secrète</span><input type="password" placeholder="Facultatif" /></label>
+      <label class="set-field"><span class="set-label">Durée de la boucle</span><div class="num-field"><input value="24" /><span class="suffix">h</span></div></label>
+      <label class="set-field"><span class="set-label">Enregistrement</span>
+        <div class="segmented"><button type="button" class="on" title="Le flux reçu est écrit tel quel, sans réencodage">Flux d’origine</button><button type="button" title="Réencodé en mezzanine, extraction plus rapide">Mezzanine</button></div>
+      </label>
+      <label class="set-field"><span class="set-label">État</span><label class="check"><input type="checkbox" checked /> Enregistrer</label></label>
+    </div>
+    <footer><button type="button" class="btn" data-close>Annuler</button><button type="button" class="btn primary" data-close><i data-i="plus" data-s="14"></i> Créer l’enregistreur</button></footer>
+  </form>
+</div>
+
+<div class="mock-note">Maquette ·
+  <button data-go="rec" class="on">Enregistreurs</button><button data-go="cut">Extraction</button><button data-go="clips">Extraits</button><button data-go="sys">Système</button><button data-open="newRec">Modale</button><button id="mockTheme">Clair / Sombre</button>
+</div>
+
+<script>
+const ICONS = {"radio-tower":"<path d=\"M4.9 16.1C1 12.2 1 5.8 4.9 1.9\" /><path d=\"M7.8 4.7a6.14 6.14 0 0 0-.8 7.5\" /><circle cx=\"12\" cy=\"9\" r=\"2\" /><path d=\"M16.2 4.8c2 2 2.26 5.11.8 7.47\" /><path d=\"M19.1 1.9a9.96 9.96 0 0 1 0 14.1\" /><path d=\"M9.5 18h5\" /><path d=\"m8 22 4-11 4 11\" />","scissors":"<circle cx=\"6\" cy=\"6\" r=\"3\" /><path d=\"M8.12 8.12 12 12\" /><path d=\"M20 4 8.12 15.88\" /><circle cx=\"6\" cy=\"18\" r=\"3\" /><path d=\"M14.8 14.8 20 20\" />","clapperboard":"<path d=\"m12.296 3.464 3.02 3.956\" /><path d=\"M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z\" /><path d=\"M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" /><path d=\"m6.18 5.276 3.1 3.899\" />","server":"<rect width=\"20\" height=\"8\" x=\"2\" y=\"2\" rx=\"2\" ry=\"2\" /><rect width=\"20\" height=\"8\" x=\"2\" y=\"14\" rx=\"2\" ry=\"2\" /><line x1=\"6\" x2=\"6.01\" y1=\"6\" y2=\"6\" /><line x1=\"6\" x2=\"6.01\" y1=\"18\" y2=\"18\" />","circle-help":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M9 9.5a3 2.5 0 016 0c0 2-2 2-3 3.5\" /><path d=\"M12 17h.01\" />","chevron-down":"<path d=\"m6 9 6 6 6-6\" />","languages":"<path d=\"m5 8 6 6\" /><path d=\"m4 14 6-6 2-3\" /><path d=\"M2 5h12\" /><path d=\"M7 2h1\" /><path d=\"m22 22-5-10-5 10\" /><path d=\"M14 18h6\" />","sun-moon":"<path d=\"M12 2v2\" /><path d=\"M14.837 16.385a6 6 0 1 1-7.223-7.222c.624-.147.97.66.715 1.248a4 4 0 0 0 5.26 5.259c.589-.255 1.396.09 1.248.715\" /><path d=\"M16 12a4 4 0 0 0-4-4\" /><path d=\"m19 5-1.256 1.256\" /><path d=\"M20 12h2\" />","keyboard":"<path d=\"M10 8h.01\" /><path d=\"M12 12h.01\" /><path d=\"M14 8h.01\" /><path d=\"M16 12h.01\" /><path d=\"M18 8h.01\" /><path d=\"M6 8h.01\" /><path d=\"M7 16h10\" /><path d=\"M8 12h.01\" /><rect width=\"20\" height=\"16\" x=\"2\" y=\"4\" rx=\"2\" />","log-out":"<path d=\"m16 17 5-5-5-5\" /><path d=\"M21 12H9\" /><path d=\"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","search":"<path d=\"m21 21-4.34-4.34\" /><circle cx=\"11\" cy=\"11\" r=\"8\" />","arrow-right-to-line":"<path d=\"M17 12H3\" /><path d=\"m11 18 6-6-6-6\" /><path d=\"M21 5v14\" />","step-back":"<path d=\"M13.971 4.285A2 2 0 0 1 17 6v12a2 2 0 0 1-3.029 1.715l-9.997-5.998a2 2 0 0 1-.003-3.432z\" /><path d=\"M21 20V4\" />","chevrons-left":"<path d=\"m11 17-5-5 5-5\" /><path d=\"m18 17-5-5 5-5\" />","play":"<path d=\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\" />","chevrons-right":"<path d=\"m6 17 5-5-5-5\" /><path d=\"m13 17 5-5-5-5\" />","step-forward":"<path d=\"M10.029 4.285A2 2 0 0 0 7 6v12a2 2 0 0 0 3.029 1.715l9.997-5.998a2 2 0 0 0 .003-3.432z\" /><path d=\"M3 4v16\" />","arrow-left-to-line":"<path d=\"M3 19V5\" /><path d=\"m13 6-6 6 6 6\" /><path d=\"M7 12h14\" />","check":"<path d=\"M20 6 9 17l-5-5\" />","gauge":"<path d=\"m12 14 4-4\" /><path d=\"M3.34 19a10 10 0 1 1 17.32 0\" />","heart-pulse":"<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" /><path d=\"M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27\" />","users":"<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\" /><path d=\"M16 3.128a4 4 0 0 1 0 7.744\" /><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\" /><circle cx=\"9\" cy=\"7\" r=\"4\" />","lock":"<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\" ry=\"2\" /><path d=\"M7 11V7a5 5 0 0 1 10 0v4\" />","sliders-horizontal":"<path d=\"M10 5H3\" /><path d=\"M12 19H3\" /><path d=\"M14 3v4\" /><path d=\"M16 17v4\" /><path d=\"M21 12h-9\" /><path d=\"M21 19h-5\" /><path d=\"M21 5h-7\" /><path d=\"M8 10v4\" /><path d=\"M8 12H3\" />","hard-drive":"<path d=\"M10 16h.01\" /><path d=\"M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z\" /><path d=\"M21.946 12.013H2.054\" /><path d=\"M6 16h.01\" />","cloud-download":"<path d=\"M12 13v8l-4-4\" /><path d=\"m12 21 4-4\" /><path d=\"M4.393 15.269A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.436 8.284\" />","rotate-ccw":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","x":"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />","wifi-off":"<path d=\"M12 20h.01\" /><path d=\"M8.5 16.429a5 5 0 0 1 7 0\" /><path d=\"M5 12.859a10 10 0 0 1 5.17-2.69\" /><path d=\"M19 12.859a10 10 0 0 0-2.007-1.523\" /><path d=\"M2 8.82a15 15 0 0 1 4.177-2.643\" /><path d=\"M22 8.82a15 15 0 0 0-11.288-3.764\" /><path d=\"m2 2 20 20\" />","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /><path d=\"M12 9v4\" /><path d=\"M12 17h.01\" />","ellipsis":"<circle cx=\"12\" cy=\"12\" r=\"1\" /><circle cx=\"19\" cy=\"12\" r=\"1\" /><circle cx=\"5\" cy=\"12\" r=\"1\" />","download":"<path d=\"M12 15V3\" /><path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\" /><path d=\"m7 10 5 5 5-5\" />","trash-2":"<path d=\"M10 11v6\" /><path d=\"M14 11v6\" /><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\" /><path d=\"M3 6h18\" /><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\" />","square":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" />","circle-dot":"<circle cx=\"12\" cy=\"12\" r=\"1\" /><circle cx=\"12\" cy=\"12\" r=\"10\" />"};
+const svg = (n, s) => `<svg class="lucide" xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n] || ''}</svg>`;
+const ic = (n, s) => `<i data-i="${n}" data-s="${s}"></i>`;
+
+const RECS = [
+  { name: 'Plateau 1', proto: 'SDI', addr: 'DeckLink 8K Pro · entrée 1', fmt: '1080i50 · XDCAM HD422 · 50 Mb/s', fill: 100, buf: '24 h 00', loop: 24, pic: 'p1', tc: '14:46:38:11', st: 'ok' },
+  { name: 'Régie 2', proto: 'ST 2110', addr: '239.10.2.1:5004 · −20 / −30 / −40', fmt: '1080i50 · non compressé → ProRes', fill: 100, buf: '24 h 00', loop: 24, pic: 'p4', tc: '14:46:38:11', st: 'ok' },
+  { name: 'Duplex SRT', proto: 'SRT', addr: 'srt://0.0.0.0:9001 · écoute', fmt: '1080p25 · H.264 · 8 Mb/s', fill: 100, buf: '24 h 00', loop: 24, pic: 'p2', tc: '14:46:38:11', st: 'ok' },
+  { name: 'Antenne', proto: 'UDP', addr: 'udp://239.1.1.10:1234', fmt: '1080i50 · H.264 · 12 Mb/s', fill: 100, buf: '48 h 00', loop: 48, pic: 'p3', tc: '14:46:38:11', st: 'ok' },
+  { name: 'Caméra NDI', proto: 'NDI', addr: 'CAM-PTZ-03 (Studio B)', fmt: '1080p50 · NDI HX3', fill: 31, buf: '7 h 26', loop: 24, pic: 'p5', tc: '14:46:38:11', st: 'ok' },
+  { name: 'Streaming web', proto: 'RTMP', addr: 'rtmp://0.0.0.0/live/web', fmt: '720p25 · H.264 · 4 Mb/s', fill: 100, buf: '24 h 00', loop: 24, pic: 'lost', tc: '', st: 'lost' },
+];
+
+document.getElementById('recGrid').innerHTML = RECS.map((r) => `
+  <article class="project-card">
+    <div class="sc-thumb">
+      <div class="sc-pic ${r.pic}">${r.pic === 'p1' || r.pic === 'p4' ? '<div class="sc-third"></div>' : ''}</div>
+      ${r.st === 'ok' ? '<span class="sc-onpic tl"><span class="sc-rec"></span>REC</span>' : `<span class="sc-onpic lostmsg">${ic('wifi-off', 14)} Sans signal</span>`}
+      <span class="sc-onpic tr mono">${r.proto}</span>
+      ${r.tc ? `<span class="sc-onpic br mono">${r.tc}</span>` : ''}
+    </div>
+    <div class="project-body">
+      <div class="sc-card-title"><span class="nav-dot ${r.st === 'ok' ? 'ok' : 'warn'}"></span><strong>${r.name}</strong></div>
+      <div class="sc-addr">${r.addr}</div>
+      <div class="project-meta"><span>${r.fmt}</span></div>
+      ${r.st === 'lost' ? `<span class="sc-warnline">${ic('triangle-alert', 12)} Sans signal depuis 00:02:14</span>` : ''}
+      <div class="sc-loop">
+        <div class="sc-loop-head"><span>Boucle <b>${r.buf}</b> sur ${r.loop} h</span><span>${r.fill === 100 ? 'pleine' : r.fill + ' %'}</span></div>
+        <span class="perf-bar tone-accent"><span class="perf-bar-fill" style="transform:translateX(${r.fill - 100}%)"></span></span>
+      </div>
+    </div>
+    <div class="sc-card-foot">
+      <button class="btn small" data-go="cut">${ic('scissors', 13)} Extraire</button>
+      <div class="spacer"></div>
+      <button class="icon-btn ghost" title="${r.st === 'ok' ? 'Arrêter l’enregistrement' : 'Démarrer l’enregistrement'}">${ic(r.st === 'ok' ? 'square' : 'circle-dot', 14)}</button>
+      <button class="icon-btn ghost" title="Plus">${ic('ellipsis', 14)}</button>
+    </div>
+  </article>`).join('') + `<button class="project-new" data-open="newRec">${ic('plus', 22)}<span>Nouvel enregistreur</span></button>`;
+
+document.getElementById('cutSources').innerHTML = RECS.map((r, i) => `
+  <div class="lib-nav-item ${i === 0 ? 'on' : ''}"><i data-i="radio-tower" data-s="15"></i><span class="grow">${r.name}</span><span class="count">${r.proto}</span><span class="nav-dot ${r.st === 'ok' ? 'ok' : 'warn'}"></span></div>`).join('');
+
+// Règle : 1 min, graduations toutes les 10 s
+const ruler = document.getElementById('ruler');
+['14:31:30', '14:31:40', '14:31:50', '14:32:00', '14:32:10', '14:32:20'].forEach((l, i) => { ruler.insertAdjacentHTML('beforeend', `<span style="left:${(i * 100) / 6}%">${l}</span>`); });
+// Bande d'images
+const pics = ['p1', 'p1', 'p1', 'p4', 'p4', 'p4', 'p4', 'p1', 'p1', 'p1', 'p1', 'p1', 'p3', 'p3', 'p3', 'p1', 'p1', 'p1', 'p1', 'p1'];
+document.getElementById('strip').innerHTML = pics.map((p) => `<div><div class="sc-pic ${p}"></div></div>`).join('');
+// Formes d'onde
+function wave(id, seed) {
+  let x = seed, d = 'M0 15';
+  const up = [], dn = [];
+  for (let i = 0; i <= 600; i += 3) { x = (x * 9301 + 49297) % 233280; const a = 2 + (x / 233280) * 11 * (0.6 + 0.4 * Math.sin(i / 37)); up.push(`${i} ${15 - a}`); dn.unshift(`${i} ${15 + a}`); }
+  d = 'M' + up.join(' L') + ' L' + dn.join(' L') + 'Z';
+  document.getElementById(id).innerHTML = `<path d="${d}" fill="currentColor"/>`;
+}
+wave('wave1', 7); wave('wave2', 91);
+
+const CLIPS = [
+  ['Interview ministre', 'Plateau 1', 'p1', '14:31:52:04', '00:00:15:08', 'Flux d’origine · .mxf', '96 Mo', 'il y a 2 min'],
+  ['Ouverture JT', 'Plateau 1', 'p1', '13:00:00:00', '00:01:12:00', 'ProRes 422 HQ · .mov', '1,6 Go', 'il y a 4 min'],
+  ['Duplex Lyon', 'Duplex SRT', 'p2', '12:47:21:13', '00:03:04:20', 'Flux d’origine · .ts', '184 Mo', 'il y a 1 h'],
+  ['Météo', 'Plateau 1', 'p3', '12:56:10:00', '00:01:45:12', 'H.264 · .mp4', '62 Mo', 'il y a 2 h'],
+  ['Conférence de presse', 'Régie 2', 'p4', '10:02:44:07', '00:12:30:00', 'ProRes 422 HQ · .mov', '27 Go', 'ce matin'],
+  ['Pub 30 s', 'Antenne', 'p3', '08:59:30:00', '00:00:30:00', 'Flux d’origine · .ts', '45 Mo', 'hier'],
+];
+document.getElementById('clipRows').innerHTML = CLIPS.map((c) => `
+  <tr>
+    <td><div class="sc-name"><div class="sc-mini"><div class="sc-pic ${c[2]}"></div></div><strong>${c[0]}</strong></div></td>
+    <td>${c[1]}</td><td class="num">${c[3]}</td><td class="num">${c[4]}</td><td>${c[5]}</td><td class="num">${c[6]}</td><td class="muted">${c[7]}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="icon-btn ghost" title="Télécharger">${ic('download', 14)}</button> <button class="icon-btn ghost" title="Supprimer">${ic('trash-2', 14)}</button></td>
+  </tr>`).join('');
+
+// Icônes
+function paint() { document.querySelectorAll('i[data-i]').forEach((el) => { el.outerHTML = svg(el.dataset.i, +el.dataset.s || 14); }); }
+paint();
+
+// Navigation de la maquette
+function go(s) {
+  document.querySelectorAll('[data-screen]').forEach((el) => (el.hidden = el.dataset.screen !== s));
+  document.querySelectorAll('[data-go]').forEach((b) => b.classList.toggle('on', b.dataset.go === s));
+  history.replaceState(null, '', '#' + s);
+}
+document.addEventListener('click', (e) => {
+  const g = e.target.closest('[data-go]'); if (g) go(g.dataset.go);
+  const o = e.target.closest('[data-open]'); if (o) document.getElementById(o.dataset.open).hidden = false;
+  if (e.target.closest('[data-close]') || e.target.classList.contains('modal-back')) document.querySelectorAll('.modal-back').forEach((m) => (m.hidden = true));
+  const ub = e.target.closest('#userBtn'); const um = document.getElementById('userMenu');
+  if (ub) { um.hidden = !um.hidden; ub.classList.toggle('on', !um.hidden); } else if (!e.target.closest('#userMenu')) { um.hidden = true; document.getElementById('userBtn').classList.remove('on'); }
+  const tb = e.target.closest('#themeSw button'); if (tb) setTheme(tb.dataset.t, tb);
+  const seg = e.target.closest('.segmented button'); if (seg) { seg.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === seg)); }
+  if (e.target.closest('#mockTheme')) setTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+});
+function setTheme(t, btn) {
+  if (t === 'light') document.documentElement.dataset.theme = 'light'; else delete document.documentElement.dataset.theme;
+  document.querySelectorAll('#themeSw button').forEach((b) => b.classList.toggle('on', btn ? b === btn : b.dataset.t === t && b.textContent !== 'Système'));
+}
+const q = new URLSearchParams(location.search);
+if (q.get('theme') === 'light') setTheme('light');
+go((location.hash || '#rec').slice(1));
+addEventListener('hashchange', () => go((location.hash || '#rec').slice(1)));
+if (q.get('modal')) document.getElementById('newRec').hidden = false;
+</script>
+</body>
+</html>
