@@ -601,3 +601,26 @@ a.btn { color: inherit; }
 
 /* Mises à jour (§ 5.6) */
 .update-history { display: flex; flex-direction: column; gap: 2px; }
+
+/* VU-meters over the picture, volume */
+.sc-meters { position: absolute; z-index: 1; right: 8px; top: 36px; height: calc(100% - 72px); width: 48px; border-radius: 6px; background: rgba(5, 6, 10, 0.72); backdrop-filter: blur(4px); pointer-events: none; }
+.sc-volume { display: flex; align-items: center; gap: 2px; flex: none; }
+.sc-volume input[type='range'] { width: 84px; min-height: 0; padding: 0; border: none; background: none; }
+
+/* Clip player */
+.sc-clip-modal { width: min(1040px, 100%); gap: 10px; }
+.sc-clip-modal header h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-clip-view { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); cursor: pointer; }
+.sc-scrub { width: 100%; margin: 2px 0 0; padding: 0; border: none; background: none; min-height: 0; }
+.sc-clip-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.sc-clip-count { font-variant-numeric: tabular-nums; min-width: 120px; }
+.sc-clip-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--text-3); padding-top: 8px; border-top: 1px solid var(--line); }
+.sc-clip-open { cursor: pointer; }
+.sc-clip-open:hover strong { color: var(--accent-2); }
+
+/* Timeline: stills side by side, zoom slider, waveform */
+.sc-strip > .sc-tile { position: absolute; flex: none; }
+.sc-zoom { display: flex; align-items: center; gap: 6px; color: var(--text-3); }
+.sc-zoom input[type='range'] { width: 180px; min-height: 0; padding: 0; border: none; background: none; }
+.sc-zoom-v { min-width: 52px; font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.sc-wave svg path { vector-effect: non-scaling-stroke; }

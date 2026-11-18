@@ -437,11 +437,15 @@ impl Manager {
             }
             let start = run.master.front().map(|s| s.t0).unwrap_or(f64::INFINITY);
             for video in [true, false] {
-                while let Some(p) = run.track(video).segs.front() {
+                while let Some(p) = run.track(video).segs.front().cloned() {
                     if p.t1 > start || (run.live && run.track(video).segs.len() == 1) {
                         break;
                     }
                     doomed.push(run.proxy_path(video, p.n));
+                    if !video {
+                        doomed.push(run.wave_path(p.n));
+                        run.audio.waves.remove(&p.n);
+                    }
                     run.track_mut(video).segs.pop_front();
                     changed = true;
                 }

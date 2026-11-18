@@ -230,11 +230,32 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             }
             _ = tick.tick() => {
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, false));
+                measure(m, rec, &run_id, std::mem::take(&mut scan.waves));
             }
         }
     };
     finish_run(rec, &run_id);
     outcome
+}
+
+/// Measures new audio fragments for the timeline's waveform, off the async threads.
+fn measure(m: &Arc<Manager>, rec: &Arc<Rec>, run_id: &str, todo: Vec<(u32, PathBuf, PathBuf, PathBuf)>) {
+    if todo.is_empty() {
+        return;
+    }
+    let (ffmpeg, rec, run_id) = (m.ffmpeg.clone(), rec.clone(), run_id.to_string());
+    tokio::task::spawn_blocking(move || {
+        for (n, init, seg, out) in todo {
+            let Some(w) = super::index::wave::compute(&ffmpeg, &init, &seg) else { continue };
+            let _ = std::fs::write(&out, &w);
+            let mut runs = rec.runs.write().unwrap();
+            if let Some(r) = runs.iter_mut().find(|r| r.meta.id == run_id) {
+                if r.audio.segs.iter().any(|s| s.n == n) {
+                    r.audio.waves.insert(n, Arc::new(w));
+                }
+            }
+        }
+    });
 }
 
 /// "[in#0 @ 0x55…] Error opening input: Connection refused" → "Error opening input: Connection refused".
@@ -282,6 +303,8 @@ struct Scanner {
     had_data: bool,
     growing_size: u64,
     still_ticks: u32,
+    /// New audio fragments to measure: (number, init, fragment, level file).
+    waves: Vec<(u32, PathBuf, PathBuf, PathBuf)>,
 }
 
 impl Scanner {
@@ -319,6 +342,9 @@ impl Scanner {
                 for (n, dur, tfdt) in segs {
                     let t0 = offset + tfdt as f64 / ts;
                     run.append_proxy(video, PSeg { n, t0, t1: t0 + dur });
+                    if !video {
+                        self.waves.push((n, run.track_dir(false).join("init.mp4"), run.proxy_path(false, n), run.wave_path(n)));
+                    }
                 }
             }
             if media.is_some() {

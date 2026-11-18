@@ -95,8 +95,11 @@ export class LoopPlayer {
   onFrame: (wall: number, t: number) => void = () => {};
   /** Called when the run changes (new media). */
   onRun: (run: RunInfo | null) => void = () => {};
+  /** Called when a frame is shown by hand (paused): to hear it. */
+  onScrub: (t: number) => void = () => {};
 
   private bufs: Buffer[] = [];
+  private audioBuf: Buffer | null = null;
   private map = new Map<number, [number, number, number]>();
   private alive = { dead: false };
   private timer = 0;
@@ -210,6 +213,7 @@ export class LoopPlayer {
     this.base = Math.floor(r.video?.offset ?? 0);
     this.map = new Map(r.map.map((s) => [s[0], s]));
     this.bufs = [];
+    this.audioBuf = null;
     const ms = new MediaSource();
     this.video.src = URL.createObjectURL(ms);
     await new Promise((res) => ms.addEventListener('sourceopen', res, { once: true }));
@@ -223,6 +227,7 @@ export class LoopPlayer {
       const b = new Buffer(sb, (f) => `/api/recorders/${this.recorder}/runs/${r.id}/${name}/${f}`);
       for (const s of tr.segs) b.segs.set(s[0], s);
       this.bufs.push(b);
+      if (name === 'audio') this.audioBuf = b;
     }
     // Every buffer exists before the first append (MediaSource accepts no new one after).
     await Promise.all(this.bufs.map((b) => b.append('init', alive)));
@@ -248,6 +253,16 @@ export class LoopPlayer {
   private async refresh() {
     const r = this.run;
     if (!r || this.alive.dead) return;
+    // Live: when the source came back, the recording goes on in a new run.
+    if (this.live) {
+      const now = Date.now();
+      const latest = (await this.fetchInfo(now - 30_000, now + 5_000)).at(-1);
+      if (latest && latest.id !== r.id && latest.to - latest.from > 4000) {
+        await this.open(latest);
+        if (this.live) await this.seekWall(latest.to - 4000, true);
+        return;
+      }
+    }
     const near = this.wallOf(this.t);
     const runs = await this.fetchInfo(near - 20_000, near + 60_000);
     const same = runs.find((x) => x.id === r.id);
@@ -258,6 +273,16 @@ export class LoopPlayer {
       // Stay close to the edge.
       if (!this.video.paused && lastEnd - (this.video.currentTime + this.base) > 10) this.video.currentTime = lastEnd - 4 - this.base;
     }
+  }
+
+  /** The proxy audio fragment holding the source time t: its URLs and start. */
+  audioAt(t: number): { init: string; seg: string; t0: number } | null {
+    const b = this.audioBuf;
+    if (!b) return null;
+    for (const s of b.segs.values()) {
+      if (s[1] <= t && t < s[2]) return { init: b.url('init.mp4'), seg: b.url(`p${String(s[0]).padStart(8, '0')}.m4s`), t0: s[1] };
+    }
+    return null;
   }
 
   /** Shows the frame at a server time (ms). */
@@ -282,7 +307,7 @@ export class LoopPlayer {
   }
 
   /** Shows the frame at a source time. */
-  async seekT(t: number, play = false) {
+  async seekT(t: number, play = false, scrub = true) {
     if (!this.run) return;
     const first = this.run.video?.offset ?? t;
     const segs = this.bufs[0] ? [...this.bufs[0].segs.values()] : [];
@@ -290,6 +315,7 @@ export class LoopPlayer {
     t = this.snap(Math.min(Math.max(t, first), last - 1 / this.fps));
     this.t = t;
     this.onFrame(this.wallOf(t), t);
+    if (scrub && !play && this.video.paused) this.onScrub(t);
     await this.fill(t);
     if (this.alive.dead) return;
     // A hair after the frame's start so that this very frame is shown.
@@ -298,8 +324,7 @@ export class LoopPlayer {
   }
 
   step(frames: number) {
-    this.stopReverse();
-    this.video.pause();
+    this.halt();
     void this.seekT(this.t + frames / this.fps);
   }
 
@@ -310,10 +335,18 @@ export class LoopPlayer {
     void this.video.play().catch(() => {});
   }
 
+  /** Stops playing (live included) without moving. */
+  halt() {
+    this.stopReverse();
+    this.live = false;
+    this.video.pause();
+  }
+
   pause() {
     this.stopReverse();
+    this.live = false;
     this.video.pause();
-    void this.seekT(this.t);
+    void this.seekT(this.t, false, false);
   }
 
   /** Browsers do not play backwards: step back frame by frame. */

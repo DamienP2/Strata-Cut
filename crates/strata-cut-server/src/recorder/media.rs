@@ -31,6 +31,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders/{id}/media", get(media))
         .route("/api/recorders/{id}/coverage", get(coverage))
         .route("/api/recorders/{id}/frame.jpg", get(frame))
+        .route("/api/recorders/{id}/wave", get(wave))
         .route("/api/recorders/{id}/runs/{run}/{track}/{file}", get(fragment))
         .route("/api/storage", get(storage))
 }
@@ -180,6 +181,54 @@ async fn fragment(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(
     };
     let data = tokio::fs::read(&path).await.map_err(|_| not_found("fragment"))?;
     Ok(file_response(data, "video/mp4", "private, max-age=86400"))
+}
+
+#[derive(Deserialize)]
+struct WaveQuery {
+    from: f64,
+    to: f64,
+    n: usize,
+}
+
+/// The sound level between two server times, in `n` columns (peak of each;
+/// -1 where nothing was recorded).
+async fn wave(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<WaveQuery>) -> ApiResult<Json<Value>> {
+    let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    let n = q.n.clamp(1, 4000);
+    if q.to <= q.from {
+        return Err(bad("empty window"));
+    }
+    let per = (q.to - q.from) / n as f64;
+    let mut out = vec![-1i16; n];
+    let step = 1000.0 / super::index::wave::PER_SECOND;
+    let runs = rec.runs.read().unwrap();
+    for run in runs.iter() {
+        let (Some(first), Some(last)) = (run.first_wall(), run.last_wall()) else { continue };
+        if last < q.from || first > q.to {
+            continue;
+        }
+        for seg in &run.audio.segs {
+            let Some(w) = run.audio.waves.get(&seg.n) else { continue };
+            let Some(w0) = run.wall_of(seg.t0) else { continue };
+            let w1 = w0 + w.len() as f64 * step;
+            if w1 < q.from || w0 > q.to {
+                continue;
+            }
+            // Skip the values before the window at once.
+            let skip = if w0 < q.from { ((q.from - w0) / step) as usize } else { 0 };
+            for (j, v) in w.iter().enumerate().skip(skip) {
+                let at = w0 + j as f64 * step;
+                if at >= q.to {
+                    break;
+                }
+                let i = ((at - q.from) / per) as usize;
+                if let Some(o) = out.get_mut(i) {
+                    *o = (*o).max(*v as i16);
+                }
+            }
+        }
+    }
+    Ok(Json(json!({"from": q.from, "to": q.to, "levels": out})))
 }
 
 #[derive(Deserialize)]

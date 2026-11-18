@@ -70,6 +70,8 @@ pub struct Track {
     pub offset: Option<f64>,
     pub timescale: u32,
     pub segs: VecDeque<PSeg>,
+    /// Audio only: the sound level of each fragment, one byte per 10 ms (see `wave`).
+    pub waves: std::collections::HashMap<u32, std::sync::Arc<Vec<u8>>>,
 }
 
 pub struct Run {
@@ -155,6 +157,9 @@ impl Run {
     pub fn proxy_path(&self, video: bool, n: u32) -> PathBuf {
         self.track_dir(video).join(format!("p{n:08}.m4s"))
     }
+    pub fn wave_path(&self, n: u32) -> PathBuf {
+        self.track_dir(false).join(format!("w{n:08}.bin"))
+    }
 
     pub fn append_master(&mut self, s: Seg) {
         append_line(&self.dir.join("master.jsonl"), &s);
@@ -186,6 +191,10 @@ impl Run {
                     t.segs = segs;
                 }
             }
+        }
+        let waves: Vec<(u32, Vec<u8>)> = run.audio.segs.iter().filter_map(|s| std::fs::read(run.wave_path(s.n)).ok().map(|w| (s.n, w))).collect();
+        for (n, w) in waves {
+            run.audio.waves.insert(n, std::sync::Arc::new(w));
         }
         if run.master.is_empty() { None } else { Some(run) }
     }
@@ -219,6 +228,47 @@ pub fn rewrite_index(run: &Run) {
     write("master.jsonl", run.master.iter().filter_map(|s| serde_json::to_string(s).ok()).collect());
     write("video.jsonl", run.video.segs.iter().filter_map(|s| serde_json::to_string(s).ok()).collect());
     write("audio.jsonl", run.audio.segs.iter().filter_map(|s| serde_json::to_string(s).ok()).collect());
+}
+
+/// The sound level drawn under the timeline: 100 values per second, the
+/// peak of each 10 ms in dBFS mapped to 0 (−60 dB or less) … 255 (0 dB).
+pub mod wave {
+    use std::path::Path;
+
+    pub const PER_SECOND: f64 = 100.0;
+
+    /// Decodes a proxy audio fragment (mono, 8 kHz) and measures it.
+    pub fn compute(ffmpeg: &str, init: &Path, seg: &Path) -> Option<Vec<u8>> {
+        let input = format!("concat:{}|{}", init.display(), seg.display());
+        let out = std::process::Command::new(ffmpeg)
+            .args(["-v", "error", "-i", &input, "-map", "0:a:0", "-ac", "1", "-ar", "8000", "-f", "s16le", "pipe:1"])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        if out.stdout.len() < 2 {
+            return None;
+        }
+        Some(levels(&out.stdout))
+    }
+
+    /// 16-bit little-endian samples at 8 kHz → one level per 80 samples.
+    pub fn levels(pcm: &[u8]) -> Vec<u8> {
+        pcm.chunks(160)
+            .map(|c| {
+                let peak = c.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs()).max().unwrap_or(0);
+                level(peak as f64 / 32768.0)
+            })
+            .collect()
+    }
+
+    pub fn level(peak: f64) -> u8 {
+        if peak <= 0.0 {
+            return 0;
+        }
+        let db = 20.0 * peak.log10();
+        (((db + 60.0) / 60.0).clamp(0.0, 1.0) * 255.0).round() as u8
+    }
 }
 
 /// Just enough ISO-BMFF reading for the proxies.
@@ -333,6 +383,17 @@ mod tests {
         assert_eq!(r.wall_of(107.0), Some(1_007_000.5));
         assert_eq!(r.t_of(1_007_000.5), Some(107.0));
         assert_eq!(r.t_of(1_002_000.0), Some(102.0));
+    }
+
+    #[test]
+    fn wave_levels() {
+        assert_eq!(wave::level(1.0), 255);
+        assert_eq!(wave::level(0.001), 0); // -60 dB
+        assert_eq!(wave::level(0.0), 0);
+        // 160 bytes = 80 samples = 10 ms; a full-scale sample in the second slice.
+        let mut pcm = vec![0u8; 320];
+        pcm[200..202].copy_from_slice(&i16::MIN.to_le_bytes());
+        assert_eq!(wave::levels(&pcm), vec![0, 255]);
     }
 
     #[test]

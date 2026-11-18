@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, Check, ChevronsLeft, ChevronsRight, Download, Pause, Play, RadioTower, Scissors, StepBack, StepForward, X } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, Check, ChevronsLeft, ChevronsRight, Download, Pause, Play, RadioTower, RotateCcw, Scissors, StepBack, StepForward, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { t, tn, locale } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer, type RunInfo } from '../player';
 import { behind, clock, day, duration, fpsOf, parseTimecode, scanFormat, timecode } from '../tc';
-import { Segmented } from '../ui/fields';
 import { Empty } from '../ui/Empty';
+import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
+import { GrainCache } from '../audio';
 import type { Clip, Job, Recorder } from '../types';
 
 /** A marked frame: its run, its source time and its server time. */
@@ -23,13 +24,34 @@ interface Span {
   to: number;
 }
 
-const ZOOMS = [
-  { ms: 86_400_000, label: '24 h' },
-  { ms: 3_600_000, label: '1 h' },
-  { ms: 600_000, label: '10 min' },
-  { ms: 60_000, label: '1 min' },
-  { ms: 10_000, label: '10 s' },
-];
+/** The zoom: the timeline shows from 10 s to the whole loop; reset = 1 min. */
+const ZOOM_MIN = 10_000;
+const ZOOM_RESET = 60_000;
+const zoomMax = (loopHours: number) => Math.max(3_600_000, loopHours * 3_600_000);
+/** Slider position 0 (whole loop) … 1000 (10 s), logarithmic. */
+const toSlider = (span: number, max: number) => Math.round((1000 * Math.log(max / span)) / Math.log(max / ZOOM_MIN));
+const fromSlider = (v: number, max: number) => max * Math.pow(ZOOM_MIN / max, v / 1000);
+/** "10 s", "1 min", "2 h 30". */
+function spanLabel(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return m % 60 ? `${h} h ${String(m % 60).padStart(2, '0')}` : `${h} h`;
+}
+/** Durations of a strip still, ms (so that stills are reused while zooming). */
+const TILE_STEPS = [200, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 10_800_000];
+
+/** `value`, once it has not changed for `ms`. */
+function useSettled<T>(value: T, ms: number): T {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const i = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(i);
+  }, [value, ms]);
+  return v;
+}
 
 export function Extract({ recorder }: { recorder?: string }) {
   const recorders = useApp((s) => s.recorders);
@@ -79,10 +101,11 @@ function Editor({ rec }: { rec: Recorder }) {
   const [mIn, setIn] = useState<Mark | null>(null);
   const [mOut, setOut] = useState<Mark | null>(null);
   const [name, setName] = useState('');
-  const [zoom, setZoom] = useState(3);
+  const [span, setSpan] = useState(ZOOM_RESET);
   const [spans, setSpans] = useState<Span[]>([]);
   const [clips, setClips] = useState<Clip[]>([]);
   const fps = fpsOf(run?.media?.fpsNum, run?.media?.fpsDen);
+  const audio = useAudioOut(videoRef);
 
   // The player lives as long as this recorder is open.
   useEffect(() => {
@@ -138,11 +161,32 @@ function Editor({ rec }: { rec: Recorder }) {
   useEffect(() => void loadClips(), [loadClips]);
   useChanged('clips', loadClips);
 
+  // Moving the playhead by hand plays a short grain of sound at the new frame.
+  const out = audio.out;
+  useEffect(() => {
+    const pl = playerRef.current;
+    if (!pl || !out) return;
+    const cache = new GrainCache(out.ctx);
+    pl.onScrub = (tt) => {
+      const a = pl.audioAt(tt);
+      if (!a) return;
+      void cache.get(a.init, a.seg).then((buf) => {
+        if (buf && pl.t === tt && pl.video.paused) out.grain(buf, tt - a.t0, Math.max(2 / pl.fps, 0.08));
+      });
+    };
+    return () => {
+      pl.onScrub = () => {};
+    };
+  }, [out, rec.id]);
+
   const p = () => playerRef.current;
+  /** Touching the playhead pauses (the live too) and shows that frame. */
   const seekWall = useCallback((wall: number) => {
     setLive(false);
-    if (p()) p()!.live = false;
-    void p()?.seekWall(wall, p()?.playing);
+    const pl = playerRef.current;
+    if (!pl) return;
+    pl.halt();
+    void pl.seekWall(wall);
   }, []);
 
   const markIn = () => pos && setIn(pos);
@@ -179,6 +223,7 @@ function Editor({ rec }: { rec: Recorder }) {
       else if (k === 'arrowright') step(e.shiftKey ? Math.round(fps) : 1);
       else if (k === 'i' && e.shiftKey) mIn && seekWall(mIn.wall);
       else if (k === 'o' && e.shiftKey) mOut && seekWall(mOut.wall);
+      else if (k === 'm') audio.setMuted(!audio.muted);
       else if (k === 'i') markIn();
       else if (k === 'o') markOut();
       else if (k === ' ' || k === 'k') {
@@ -221,6 +266,7 @@ function Editor({ rec }: { rec: Recorder }) {
     setLive(false);
     const pl = p();
     if (!pl) return;
+    pl.halt();
     void pl.seekWall(wall).then(() => set({ run: pl.run?.id ?? '', t: pl.t, wall: pl.wallOf(pl.t) }));
   };
 
@@ -235,6 +281,7 @@ function Editor({ rec }: { rec: Recorder }) {
         <div className="sc-viewer-wrap">
           <div className="sc-viewer">
             <video ref={videoRef} className="sc-video" playsInline />
+            {run?.audio && <Meters out={audio.out} />}
             <span className="sc-onpic tl">{rec.name}</span>
             {media && (
               <span className="sc-onpic tr mono">
@@ -286,11 +333,12 @@ function Editor({ rec }: { rec: Recorder }) {
             <ArrowLeftToLine size={13} /> {t('Out')}
           </button>
           <div className="spacer" />
+          <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
           <button className={`btn small sc-live-btn ${live ? 'on' : ''}`} title={t('Back to live')} onClick={goLive}>
             <span className="sc-rec" /> {t('Live')}
           </button>
         </div>
-        <Timeline rec={rec} pos={pos} fps={fps} zoom={zoom} setZoom={setZoom} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} />
+        <Timeline rec={rec} pos={pos} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} />
       </div>
 
       <aside className="panel right">
@@ -401,9 +449,9 @@ function Jobs({ jobs }: { jobs: Job[] }) {
 /** Steps of the ruler, ms. */
 const TICKS = [1000, 2000, 5000, 10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000, 7_200_000, 10_800_000, 21_600_000];
 
-function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; zoom: number; setZoom: (z: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; timezone: string }) {
-  const { rec, pos, fps, zoom, setZoom, spans, clips, mIn, mOut, onSeek, timezone } = props;
-  const span = ZOOMS[zoom].ms;
+function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; span: number; setSpan: (ms: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; timezone: string }) {
+  const { rec, pos, fps, span, setSpan, spans, clips, mIn, mOut, onSeek, timezone } = props;
+  const maxSpan = zoomMax(rec.loopHours);
   const tracks = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
   const [start, setStart] = useState(() => (pos?.wall ?? serverNow()) - span / 2);
@@ -434,15 +482,65 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; zoom: n
     return { step, out };
   }, [start, end, span, width]);
 
-  const tile = 96;
+  // Stills about 96 px wide, on a fixed grid of durations: reused while zooming,
+  // and asked for only once the zoom has settled.
+  const settledSpan = useSettled(span, 200);
   const strip = useMemo(() => {
-    const n = Math.max(1, Math.floor(width / tile));
-    const d = span / n;
-    const first = Math.floor(start / d) * d;
+    const want = settledSpan / Math.max(1, Math.floor(width / 96));
+    const d = TILE_STEPS.find((x) => x >= want) ?? TILE_STEPS[TILE_STEPS.length - 1];
     const out: number[] = [];
-    for (let v = first; v < end; v += d) out.push(v + d / 2);
+    for (let v = Math.floor(start / d) * d; v < end; v += d) out.push(v + d / 2);
     return { d, out };
-  }, [start, end, span, width]);
+  }, [start, end, settledSpan, width]);
+
+  // The sound level under the stills (one channel), for the window.
+  const [wave, setWave] = useState<{ from: number; to: number; levels: number[] } | null>(null);
+  const waveKey = useSettled(`${Math.round(start)}|${Math.round(span)}|${width}`, 150);
+  const liveWindow = end > now - 10_000;
+  useEffect(() => {
+    let dead = false;
+    const [a, sp] = waveKey.split('|').map(Number);
+    const load = async () => {
+      try {
+        const w = await api<{ from: number; to: number; levels: number[] }>('GET', `/api/recorders/${rec.id}/wave?from=${a}&to=${a + sp}&n=${Math.max(50, Math.round(width / 2))}`);
+        if (!dead) setWave(w);
+      } catch {
+        /* the next try */
+      }
+    };
+    void load();
+    const i = liveWindow ? setInterval(() => void load(), 4000) : 0;
+    return () => {
+      dead = true;
+      clearInterval(i);
+    };
+  }, [waveKey, rec.id, width, liveWindow]);
+  const wavePath = useMemo(() => {
+    if (!wave) return '';
+    const n = wave.levels.length;
+    const col = (wave.to - wave.from) / n;
+    const X = (i: number) => (((wave.from + i * col - start) / span) * 1000).toFixed(1);
+    let d = '';
+    let i = 0;
+    while (i < n) {
+      if (wave.levels[i] < 0) {
+        i++;
+        continue;
+      }
+      let j = i;
+      while (j < n && wave.levels[j] >= 0) j++;
+      const top: string[] = [];
+      const bottom: string[] = [];
+      for (let k = i; k < j; k++) {
+        const a = Math.max(0.4, (wave.levels[k] / 255) * 14);
+        top.push(`${X(k)} ${(15 - a).toFixed(1)} ${X(k + 1)} ${(15 - a).toFixed(1)}`);
+        bottom.unshift(`${X(k + 1)} ${(15 + a).toFixed(1)} ${X(k)} ${(15 + a).toFixed(1)}`);
+      }
+      d += `M${top.join(' L')} L${bottom.join(' L')}Z`;
+      i = j;
+    }
+    return d;
+  }, [wave, start, span]);
   const recorded = (w: number) => spans.some((s) => w >= s.from && w < s.to);
 
   const gaps = useMemo(() => {
@@ -488,7 +586,15 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; zoom: n
   return (
     <div className="sc-timeline">
       <div className="sc-tl-head">
-        <Segmented value={String(zoom)} options={ZOOMS.map((z, i) => ({ value: String(i), label: z.label }))} onChange={(v) => setZoom(Number(v))} />
+        <div className="sc-zoom" title={t('Zoom')}>
+          <ZoomOut size={14} />
+          <input type="range" min={0} max={1000} step={1} value={toSlider(span, maxSpan)} aria-label={t('Zoom')} onChange={(e) => setSpan(fromSlider(Number(e.target.value), maxSpan))} onKeyDown={(e) => e.stopPropagation()} />
+          <ZoomIn size={14} />
+          <span className="sc-zoom-v">{spanLabel(span)}</span>
+          <button type="button" className="icon-btn ghost" title={t('Zoom to 1 min')} disabled={Math.abs(span - ZOOM_RESET) < 500} onClick={() => setSpan(ZOOM_RESET)}>
+            <RotateCcw size={14} />
+          </button>
+        </div>
         <span className="muted">
           {day(start, timezone, locale())} {clock(start, timezone)} → {clock(end, timezone)}
         </span>
@@ -536,6 +642,11 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; fps: number; zoom: n
               {recorded(w) && w < now - 6000 && <img src={`/api/recorders/${rec.id}/frame.jpg?at=${Math.round(w)}&h=54`} alt="" draggable={false} onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />}
             </div>
           ))}
+        </div>
+        <div className="sc-wave">
+          <svg viewBox="0 0 1000 30" preserveAspectRatio="none" aria-hidden="true">
+            <path d={wavePath} fill="currentColor" />
+          </svg>
         </div>
         {gaps.map(([a, b], i) => (
           <div key={i} className="sc-gap" style={{ left: `${x(a)}%`, width: `${x(b) - x(a)}%` }} title={t('Not recorded')} />

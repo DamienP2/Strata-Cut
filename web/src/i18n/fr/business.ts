@@ -80,6 +80,19 @@ export const business: Record<string, string> = {
   'The whole loop': 'Toute la boucle',
   'Not recorded': 'Non enregistré',
 
+  // Players
+  Volume: 'Volume',
+  'Mute  (M)': 'Couper le son  (M)',
+  'Sound on  (M)': 'Remettre le son  (M)',
+  Play: 'Lire',
+  Position: 'Position',
+  'Frame {n} of {total}': 'Image {n} sur {total}',
+  'First frame  (Home)': 'Première image  (Début)',
+  'Last frame  (End)': 'Dernière image  (Fin)',
+
+  Zoom: 'Zoom',
+  'Zoom to 1 min': 'Zoom à 1 min',
+
   // Clips
   '{n} clip': '{n} extrait',
   '{n} clips': '{n} extraits',

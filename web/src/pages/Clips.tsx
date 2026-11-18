@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Clapperboard, Download, Search, Trash2 } from 'lucide-react';
+import { Clapperboard, Download, Play, Search, Trash2 } from 'lucide-react';
 import { api, can, useApp, useChanged } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { confirmDialog } from '../ui/dialogs';
 import { day, duration, fpsOf, size, timecode } from '../tc';
 import type { Clip } from '../types';
+import { ClipPlayer } from './ClipPlayer';
 
 /** "il y a 2 min", "il y a 3 h", else the date. */
 function ago(ms: number, now: number, tz: string): string {
@@ -22,6 +23,7 @@ export function Clips() {
   const [clips, setClips] = useState<Clip[] | null>(null);
   const [q, setQ] = useState('');
   const [source, setSource] = useState<string | null>(null);
+  const [open, setOpen] = useState<Clip | null>(null);
   const load = useCallback(async () => {
     try {
       setClips(await api<Clip[]>('GET', '/api/clips'));
@@ -102,7 +104,7 @@ export function Clips() {
                 return (
                   <tr key={c.id}>
                     <td>
-                      <div className="sc-clip-name">
+                      <div className="sc-clip-name sc-clip-open" title={t('Play')} onClick={() => setOpen(c)}>
                         <div className="sc-mini">
                           <img src={`/api/clips/${c.id}/thumb.jpg`} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
                         </div>
@@ -120,6 +122,9 @@ export function Clips() {
                       {ago(c.createdAt, now, timezone)}
                     </td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button className="icon-btn ghost" title={t('Play')} onClick={() => setOpen(c)}>
+                        <Play size={14} />
+                      </button>{' '}
                       <a className="icon-btn ghost" title={t('Download')} href={`/api/clips/${c.id}/download`}>
                         <Download size={14} />
                       </a>{' '}
@@ -136,6 +141,7 @@ export function Clips() {
           </table>
         )}
       </div>
+      {open && <ClipPlayer clip={open} onClose={() => setOpen(null)} />}
     </div>
   );
 }

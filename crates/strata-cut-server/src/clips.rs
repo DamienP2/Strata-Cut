@@ -406,7 +406,12 @@ fn file_name(name: &str) -> String {
 
 async fn download(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>, req: Request) -> ApiResult<Response> {
     let clip = s.clips.clips.lock().unwrap().iter().find(|c| c.id == id).cloned().ok_or_else(|| not_found("clip"))?;
+    // `?inline=1`: played in the page (the clips' player), not saved.
+    let inline = req.uri().query().is_some_and(|q| q.split('&').any(|p| p == "inline=1"));
     let mut res = tower_http::services::ServeFile::new(&clip.file).oneshot(req).await.map_err(internal)?.into_response();
+    if inline {
+        return Ok(res);
+    }
     let name = file_name(&clip.name);
     let ascii: String = name.chars().map(|c| if c.is_ascii() && c != '"' { c } else { '_' }).collect();
     let encoded: String = name.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
