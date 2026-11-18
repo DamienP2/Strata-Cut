@@ -103,7 +103,6 @@ impl User {
         self.role == Role::Admin
     }
     /// Admins and operators cut clips.
-    #[allow(dead_code)] // used by the clips routes
     pub fn can_extract(&self) -> bool {
         matches!(self.role, Role::Admin | Role::Operator)
     }

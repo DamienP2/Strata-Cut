@@ -269,7 +269,7 @@ impl Manager {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 let Some(m) = weak.upgrade() else { return };
                 for r in m.recs() {
-                    if tick % 5 == 0 {
+                    if tick.is_multiple_of(5) {
                         m.trim(&r);
                     }
                     r.refresh_status();
