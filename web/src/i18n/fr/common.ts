@@ -1,0 +1,21 @@
+// French texts of the shell, login, users and system pages.
+export const common: Record<string, string> = {
+  'Connecting…': 'Connexion…',
+  'Loading…': 'Chargement…',
+  Cancel: 'Annuler',
+  Confirm: 'Confirmer',
+  Close: 'Fermer',
+  Save: 'Enregistrer',
+  Delete: 'Supprimer',
+  Edit: 'Modifier',
+  System: 'Système',
+  Help: 'Aide',
+  'theme|Dark': 'Sombre',
+  'theme|Light': 'Clair',
+  'theme|System': 'Système',
+  'role|admin': 'Administrateur',
+  'role|operator': 'Opérateur',
+  'role|viewer': 'Lecteur',
+  'The server does not answer': 'Le serveur ne répond pas',
+  'Settings saved': 'Paramètres enregistrés',
+};

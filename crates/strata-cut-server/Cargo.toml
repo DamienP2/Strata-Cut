@@ -1,0 +1,43 @@
+[package]
+name = "strata-cut-server"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "strata-cut"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+axum = { version = "0.8", features = ["ws", "multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "signal", "net", "process", "io-util"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+rust-embed = { version = "8", features = ["mime-guess", "include-exclude"] }
+clap = { version = "4", features = ["derive", "env"] }
+argon2 = "0.5"
+rpassword = "7"
+directories = "6"
+arc-swap = "1"
+futures-util = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+sha2 = "0.10"
+ring = "0.17"
+base64 = "0.22"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+jiff = "0.2"
+gethostname = "1"
+if-addrs = "0.15"
+sysinfo = { version = "0.37", default-features = false, features = ["system", "disk"] }
+libc = "0.2"
+
+[build-dependencies]
+flate2 = "1"
