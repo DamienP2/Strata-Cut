@@ -101,6 +101,7 @@ export const business: Record<string, string> = {
   'Used now': 'Occupé',
   'Full loop': 'Boucle pleine',
   Disk: 'Disque',
+  'At the current bit rate': 'Au débit actuel',
 
   // Server answers (plain English texts from the engine)
   'the name cannot be empty': 'Le nom ne peut pas être vide.',

@@ -96,7 +96,6 @@ export class LoopPlayer {
   /** Called when the run changes (new media). */
   onRun: (run: RunInfo | null) => void = () => {};
 
-  private ms: MediaSource | null = null;
   private bufs: Buffer[] = [];
   private map = new Map<number, [number, number, number]>();
   private alive = { dead: false };
@@ -212,7 +211,6 @@ export class LoopPlayer {
     this.map = new Map(r.map.map((s) => [s[0], s]));
     this.bufs = [];
     const ms = new MediaSource();
-    this.ms = ms;
     this.video.src = URL.createObjectURL(ms);
     await new Promise((res) => ms.addEventListener('sourceopen', res, { once: true }));
     if (alive.dead) return;
@@ -254,9 +252,8 @@ export class LoopPlayer {
     const runs = await this.fetchInfo(near - 20_000, near + 60_000);
     const same = runs.find((x) => x.id === r.id);
     if (same) this.merge(same);
-    if (this.live) {
-      const end = this.run?.video?.segs.at(-1)?.[2] ?? (this.bufs[0] ? Math.max(...[...this.bufs[0].segs.values()].map((s) => s[2])) : 0);
-      const lastEnd = Math.max(...(this.bufs[0] ? [...this.bufs[0].segs.values()].map((s) => s[2]) : [end]));
+    if (this.live && this.bufs[0]) {
+      const lastEnd = Math.max(...[...this.bufs[0].segs.values()].map((s) => s[2]));
       await this.fill(lastEnd - 6, 8);
       // Stay close to the edge.
       if (!this.video.paused && lastEnd - (this.video.currentTime + this.base) > 10) this.video.currentTime = lastEnd - 4 - this.base;

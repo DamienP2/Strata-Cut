@@ -106,6 +106,8 @@ let socket: WebSocket | null = null;
 let retry = 500;
 let wanted = false;
 let toastId = 0;
+/** A hello was already received in this session: the next one follows a reconnection. */
+let greeted = false;
 
 function applyUser(u: PublicUser | null) {
   if (!u) return;
@@ -165,6 +167,7 @@ export const useApp = create<AppStore>((set, get) => ({
 
   logout: async () => {
     wanted = false;
+    greeted = false;
     socket?.close();
     socket = null;
     try {
@@ -192,7 +195,6 @@ export const useApp = create<AppStore>((set, get) => ({
       }
       switch (e.type) {
         case 'hello': {
-          const was = get().connected;
           set({
             connected: true,
             serverOffset: (e.serverTime as number) - Date.now(),
@@ -203,7 +205,8 @@ export const useApp = create<AppStore>((set, get) => ({
           });
           const a = get().auth;
           if (a && e.user) set({ auth: { ...a, user: e.user as PublicUser, serverName: (e.serverName as string) ?? a.serverName } });
-          if (was) changeEvents.dispatchEvent(new Event('*')); // reload what is open
+          if (greeted) changeEvents.dispatchEvent(new Event('*')); // reconnected: reload what is open
+          greeted = true;
           break;
         }
         case 'changed':

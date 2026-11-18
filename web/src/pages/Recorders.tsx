@@ -279,11 +279,11 @@ function RecorderModal({ rec, onClose }: { rec: Recorder | null; onClose: () => 
           <Field label={t('Name')}>
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
-          <Field label={t('Source')}>
+          <Field label={t('Source')} group>
             <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label, detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol })} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
-            <Field label={t('Mode')}>
+            <Field label={t('Mode')} group>
               <Segmented value={c.mode} options={[{ value: 'listener', label: t('Listen'), title: t('The source connects to this server') }, { value: 'caller', label: t('Call'), title: t('This server connects to the source') }]} onChange={(v) => set({ mode: v as Recorder['mode'] })} />
             </Field>
           )}
@@ -297,7 +297,7 @@ function RecorderModal({ rec, onClose }: { rec: Recorder | null; onClose: () => 
                   <input value={c.path} placeholder="live/stream" onChange={(e) => set({ path: e.target.value })} />
                 </Field>
               )}
-              <Field label={t('Address for the source')}>
+              <Field label={t('Address for the source')} group>
                 <div className="sc-url">
                   <code>{pushUrl}</code>
                   <button type="button" className="icon-btn" title={t('Copy')} onClick={() => void navigator.clipboard?.writeText(pushUrl)}>
@@ -329,7 +329,7 @@ function RecorderModal({ rec, onClose }: { rec: Recorder | null; onClose: () => 
           <Field label={t('Loop length')}>
             <NumberField value={c.loopHours} min={1} max={168} suffix="h" onChange={(v) => set({ loopHours: v })} />
           </Field>
-          <Field label={t('State')}>
+          <Field label={t('State')} group>
             <label className="check">
               <input type="checkbox" checked={c.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> {t('Record')}
             </label>
