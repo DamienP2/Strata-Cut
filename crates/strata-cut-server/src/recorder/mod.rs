@@ -3,6 +3,7 @@
 mod media;
 pub mod index;
 mod run;
+pub mod web;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -29,6 +30,8 @@ pub enum Protocol {
     Rtp,
     Rtmp,
     Srt,
+    /// A live on a web page (YouTube, Facebook, Instagram, X, LinkedIn…), read with yt-dlp.
+    Web,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +63,9 @@ pub struct RecorderConfig {
     pub passphrase: String,
     #[serde(default)]
     pub iface: String,
+    /// Web pages: the cookies of a signed-in account (Netscape cookies.txt), for lives that need one.
+    #[serde(default)]
+    pub cookies: String,
     #[serde(default = "default_loop")]
     pub loop_hours: u32,
     /// Expected bitrate of the source, Mb/s (reserves the loop's space; 0 = unknown).
@@ -112,9 +118,20 @@ impl RecorderConfig {
             Protocol::Rtp => "rtp://",
             Protocol::Rtmp => "rtmp://",
             Protocol::Srt => "srt://",
+            Protocol::Web => "https://",
         };
-        if !listens && !self.url.starts_with(scheme) {
+        if self.protocol == Protocol::Web {
+            if !self.url.starts_with("https://") && !self.url.starts_with("http://") {
+                return Err("the address of the page starts with https://".into());
+            }
+        } else if !listens && !self.url.starts_with(scheme) {
             return Err(format!("the address starts with {scheme}"));
+        }
+        if self.cookies != MASKED && !self.cookies.trim().is_empty() && !self.cookies.contains('\t') {
+            return Err("the cookies are a cookies.txt file (netscape format)".into());
+        }
+        if self.cookies.len() > 1_000_000 {
+            return Err("the cookies file is too big".into());
         }
         if self.protocol == Protocol::Srt && !self.passphrase.is_empty() && self.passphrase != MASKED && !(10..=79).contains(&self.passphrase.chars().count()) {
             return Err("the srt passphrase has 10 to 79 characters".into());
@@ -135,6 +152,12 @@ impl RecorderConfig {
         let mut v = serde_json::to_value(self).unwrap_or_default();
         if !self.passphrase.is_empty() {
             v["passphrase"] = json!(MASKED);
+        }
+        if !self.cookies.is_empty() {
+            v["cookies"] = json!(MASKED);
+        }
+        if self.protocol == Protocol::Web {
+            v["platform"] = json!(web::platform(&self.url));
         }
         v
     }
@@ -364,6 +387,7 @@ impl Manager {
             ffmpeg: std::env::var("SC_FFMPEG").unwrap_or_else(|_| "ffmpeg".into()),
             grabs: tokio::sync::Semaphore::new(4),
         });
+        web::keep_updated(data_dir.to_path_buf());
         let list: Vec<RecorderConfig> = crate::paths::read_json(&m.config_path()).unwrap_or_default();
         for c in list {
             m.add(c);
@@ -405,6 +429,10 @@ impl Manager {
 
     fn config_path(&self) -> PathBuf {
         self.data_dir.join("recorders.json")
+    }
+
+    pub fn data_dir(&self) -> &Path {
+        &self.data_dir
     }
 
     pub fn recordings_dir(&self) -> PathBuf {
@@ -654,6 +682,9 @@ impl Manager {
         if c.passphrase == MASKED {
             c.passphrase.clear();
         }
+        if c.cookies == MASKED {
+            c.cookies.clear();
+        }
         if c.bitrate <= 0.0 {
             return Err("give the expected bitrate".into());
         }
@@ -675,6 +706,9 @@ impl Manager {
         c.normalize();
         if c.passphrase == MASKED {
             c.passphrase = old.passphrase.clone();
+        }
+        if c.cookies == MASKED {
+            c.cookies = old.cookies.clone();
         }
         self.check(&c)?;
         self.check_space(&c)?;
@@ -699,6 +733,7 @@ impl Manager {
             let _ = t.await;
         }
         let dirs: Vec<PathBuf> = self.dirs.lock().unwrap().iter().map(|d| d.join(id)).collect();
+        let _ = std::fs::remove_file(self.data_dir.join("cookies").join(format!("{id}.txt")));
         let name = rec.config().name;
         let _ = tokio::task::spawn_blocking(move || {
             for dir in dirs {

@@ -1,7 +1,7 @@
 // The app's own data, as the server sends it.
 
-export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt';
-export const PROTOCOLS: Protocol[] = ['udp', 'rtp', 'rtmp', 'srt'];
+export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'web';
+export const PROTOCOLS: Protocol[] = ['udp', 'rtp', 'rtmp', 'srt', 'web'];
 
 /** A recorder's settings. */
 export interface Recorder {
@@ -22,6 +22,10 @@ export interface Recorder {
   passphrase: string;
   /** Network interface address for multicast (udp / rtp), empty = any. */
   iface: string;
+  /** web: cookies.txt of a signed-in account ("••••••••" when set). */
+  cookies?: string;
+  /** web: the platform found from the address (sent by the server). */
+  platform?: string;
   /** Loop length, hours. */
   loopHours: number;
   /** Expected bitrate, Mb/s: the loop's space is reserved from it (0 = unknown). */

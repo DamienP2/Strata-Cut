@@ -50,7 +50,10 @@ struct CopyOf {
 async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<CopyOf>, Json(mut c): Json<RecorderConfig>) -> ApiResult<Json<Value>> {
     require(me.is_admin())?;
     if c.passphrase == super::MASKED {
-        c.passphrase = q.copy_of.and_then(|id| s.recorders.get(&id)).map(|r| r.config().passphrase).unwrap_or_default();
+        c.passphrase = q.copy_of.as_ref().and_then(|id| s.recorders.get(id)).map(|r| r.config().passphrase).unwrap_or_default();
+    }
+    if c.cookies == super::MASKED {
+        c.cookies = q.copy_of.as_ref().and_then(|id| s.recorders.get(id)).map(|r| r.config().cookies).unwrap_or_default();
     }
     s.recorders.create(c).map(Json).map_err(bad)
 }

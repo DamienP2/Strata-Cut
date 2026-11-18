@@ -9,6 +9,7 @@ import { confirmDialog } from '../ui/dialogs';
 import { Dropdown } from '../ui/Dropdown';
 import { NumberField, Segmented } from '../ui/fields';
 import { Field } from '../settings/ui';
+import { InfoTip } from '../ui/InfoTip';
 import type { Protocol, Recorder, RecorderStatus } from '../types';
 
 const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
@@ -16,7 +17,24 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'rtp', label: 'RTP', detail: 'rtp://' },
   { value: 'rtmp', label: 'RTMP', detail: 'rtmp://' },
   { value: 'srt', label: 'SRT', detail: 'srt://' },
+  { value: 'web', label: 'Web', detail: 'https://' },
 ];
+
+/** The platform of a web page, from its address (the server says the same). */
+export function platformOf(url: string): string {
+  const host = (url.split('://')[1] ?? url).split(/[/?#]/)[0].toLowerCase();
+  const is = (d: string) => host === d || host.endsWith(`.${d}`);
+  if (is('youtube.com') || is('youtu.be')) return 'youtube';
+  if (is('facebook.com') || is('fb.watch') || is('fb.com')) return 'facebook';
+  if (is('instagram.com')) return 'instagram';
+  if (is('x.com') || is('twitter.com')) return 'x';
+  if (is('linkedin.com')) return 'linkedin';
+  return 'web';
+}
+const PLATFORM_NAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', x: 'X', linkedin: 'LinkedIn', web: 'Web' };
+/** The badge on a recorder's picture: the protocol, or the platform of a web page. */
+const badge = (r: Recorder) => (r.protocol === 'web' ? PLATFORM_NAME[platformOf(r.url)] : r.protocol.toUpperCase());
+const MASKED = '••••••••';
 
 const CODECS: Record<string, string> = { h264: 'H.264', hevc: 'HEVC', mpeg2video: 'MPEG-2', mpeg4: 'MPEG-4', prores: 'ProRes', dnxhd: 'DNxHD' };
 
@@ -198,9 +216,9 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
             <WifiOff size={14} /> {t('No signal')}
           </span>
         )}
-        {state === 'starting' && <span className="sc-onpic mid">{rec.protocol !== 'udp' && rec.protocol !== 'rtp' && rec.mode === 'listener' ? t('Waiting for the source') : t('Connecting…')}</span>}
+        {state === 'starting' && <span className="sc-onpic mid">{(rec.protocol === 'rtmp' || rec.protocol === 'srt') && rec.mode === 'listener' ? t('Waiting for the source') : t('Connecting…')}</span>}
         {state === 'off' && <span className="sc-onpic mid">{t('Stopped')}</span>}
-        <span className="sc-onpic tr mono">{rec.protocol.toUpperCase()}</span>
+        <span className={`sc-onpic tr ${rec.protocol === 'web' ? '' : 'mono'}`}>{badge(rec)}</span>
       </div>
       <div className="project-body">
         <div className="sc-card-title">
@@ -313,7 +331,12 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<Recorder>) => setC((x) => ({ ...x, ...patch }));
   const listens = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
-  const placeholder = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000' }[c.protocol];
+  const placeholder = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', web: 'https://www.youtube.com/watch?v=…' }[c.protocol];
+  const web = c.protocol === 'web';
+  const importCookies = (file: File | undefined) => {
+    if (!file) return;
+    void file.text().then((text) => set({ cookies: text }));
+  };
   const pushUrl = c.protocol === 'rtmp' ? `rtmp://${location.hostname}:${c.port}/${c.path}` : `srt://${location.hostname}:${c.port}`;
 
   // The loop's space: reserved from the bitrate (the measured one if higher), against what the disk gives the loops.
@@ -352,7 +375,7 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label={t('Source')} group>
-            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label, detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol })} />
+            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label, detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '', bitrate: c.bitrate === blank.bitrate ? 6 : c.bitrate } : {}) })} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
             <Field label={t('Mode')} group>
@@ -379,8 +402,40 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
               </Field>
             </>
           ) : (
-            <Field label={t('Address')}>
+            <Field label={web ? t('Address of the live') : t('Address')} hint={web ? (c.url.startsWith('http') && platformOf(c.url) !== 'web' ? PLATFORM_NAME[platformOf(c.url)] : 'YouTube · Facebook · Instagram · X · LinkedIn') : undefined}>
               <input value={c.url} placeholder={placeholder} spellCheck={false} onChange={(e) => set({ url: e.target.value })} />
+            </Field>
+          )}
+          {web && (
+            <Field
+              className="span2"
+              group
+              label={
+                <>
+                  {t('Cookies of a signed-in account')}
+                  <InfoTip text={t('Only for lives that need an account (Instagram, some Facebook, LinkedIn or X lives). Export the cookies.txt of that account from a browser (extension “Get cookies.txt”) and import it here. Use an account made for this.')} />
+                </>
+              }
+              hint={c.cookies === MASKED ? t('Cookies saved: they stay until you import others or remove them.') : t('Optional. The page is read without an account if empty.')}
+            >
+              <div className="sc-cookies">
+                {c.cookies === MASKED ? (
+                  <span className="sc-cookies-set">{t('Cookies saved')}</span>
+                ) : (
+                  <textarea rows={3} value={c.cookies ?? ''} spellCheck={false} placeholder="# Netscape HTTP Cookie File" onChange={(e) => set({ cookies: e.target.value })} />
+                )}
+                <div className="sc-cookies-btns">
+                  <label className="btn small">
+                    {t('Import cookies.txt')}
+                    <input type="file" accept=".txt,text/plain" hidden onChange={(e) => importCookies(e.target.files?.[0])} />
+                  </label>
+                  {!!c.cookies && (
+                    <button type="button" className="btn small ghost" onClick={() => set({ cookies: '' })}>
+                      {t('Remove')}
+                    </button>
+                  )}
+                </div>
+              </div>
             </Field>
           )}
           {(c.protocol === 'udp' || c.protocol === 'rtp') && (

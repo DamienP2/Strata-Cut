@@ -61,7 +61,7 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                 } else {
                     failures += 1;
                     // A setting that cannot work is an error; anything else means the source is not there.
-                    let broken = ["Address already in use", "Cannot assign requested address", "Permission denied", "Protocol not found", "Invalid argument", "cannot start", "Error opening output", "No space left"].iter().any(|k| message.contains(k));
+                    let broken = ["Address already in use", "Cannot assign requested address", "Permission denied", "Protocol not found", "Invalid argument", "cannot start", "Error opening output", "No space left", "not installed", "javascript runtime"].iter().any(|k| message.contains(k));
                     if broken {
                         rec.set_state(State::Error, message);
                     } else {
@@ -77,13 +77,19 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                         let reason = match cfg.protocol {
                             Protocol::Srt if cfg.mode == Mode::Caller => diagnosis.clone(),
                             Protocol::Udp | Protocol::Rtp => udp_reason(&message),
+                            Protocol::Web if message.starts_with("web: ") => message.clone(),
                             _ => String::new(),
                         };
                         rec.set_state(State::Nosignal, reason);
                     }
                 }
                 rec.refresh_status();
-                let wait = Duration::from_secs((1 + failures.min(5) * 2) as u64);
+                // A web page is asked less often (the platforms limit the requests): 15 s, 30 s, then every minute.
+                let wait = if cfg.protocol == Protocol::Web && !had_data {
+                    Duration::from_secs(15 * (1u64 << failures.clamp(1, 3).saturating_sub(1)).min(4))
+                } else {
+                    Duration::from_secs((1 + failures.min(5) * 2) as u64)
+                };
                 tokio::select! {
                     _ = tokio::time::sleep(wait) => {}
                     r = cfg_rx.changed() => { if r.is_ok() { rec.no_audio.store(false, Ordering::Relaxed); failures = 0; } }
@@ -196,6 +202,8 @@ pub fn input_args(c: &RecorderConfig) -> Vec<String> {
                 Mode::Caller => join(&c.url, &format!("mode=caller&{extra}")),
             }
         }
+        // Read from the page before each recording (super::web).
+        Protocol::Web => c.url.clone(),
     };
     a.extend(["-i".into(), url]);
     a
@@ -206,10 +214,10 @@ fn urlencode(s: &str) -> String {
 }
 
 /// The whole FFmpeg command line (without the program).
-pub fn ffmpeg_args(c: &RecorderConfig, run_dir: &Path, thumb: &Path, audio: bool) -> Vec<String> {
+pub fn ffmpeg_args(input: Vec<String>, run_dir: &Path, thumb: &Path, audio: bool) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
     let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-y", "-loglevel", "warning", "-copyts", "-fflags", "+discardcorrupt", "-thread_queue_size", "4096"].map(String::from).to_vec();
-    a.extend(input_args(c));
+    a.extend(input);
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     // 1. The stream as received, in segments.
     a.extend(s(&["-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
@@ -233,6 +241,18 @@ pub fn ffmpeg_args(c: &RecorderConfig, run_dir: &Path, thumb: &Path, audio: bool
 }
 
 async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg_rx: &mut watch::Receiver<RecorderConfig>, stop_rx: &mut watch::Receiver<bool>) -> Outcome {
+    // A web page: is it live, and where is its stream? (No run is opened while it is not.)
+    let source = if cfg.protocol == Protocol::Web {
+        match super::web::resolve(m.data_dir(), cfg).await {
+            Ok(s) => Some(s),
+            Err(reason) => {
+                tracing::info!("{}: {reason}", cfg.name);
+                return Outcome::Exited { had_data: false, message: reason };
+            }
+        }
+    } else {
+        None
+    };
     let base = m.recordings_dir().join(&rec.id);
     *rec.dir.lock().unwrap() = base.clone();
     let started = now_ms();
@@ -248,9 +268,43 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     rec.runs.write().unwrap().push(run);
 
     let audio = !rec.no_audio.load(Ordering::Relaxed);
-    let args = ffmpeg_args(cfg, &run_dir, &base.join("thumb.jpg"), audio);
+    let input = match &source {
+        Some(s) => super::web::input_args(s),
+        None => input_args(cfg),
+    };
+    let args = ffmpeg_args(input, &run_dir, &base.join("thumb.jpg"), audio);
     tracing::debug!("{}: ffmpeg {}", cfg.name, args.join(" "));
-    let child = Command::new(&m.ffmpeg).args(&args).current_dir(&run_dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
+    // Picture and sound apart on the page: yt-dlp joins them and feeds FFmpeg.
+    let mut feeder = None;
+    let mut stdin = Stdio::null();
+    if let Some(super::web::Source::Piped) = source {
+        match super::web::pipe_command(m.data_dir(), cfg).spawn() {
+            Ok(mut f) => {
+                match f.stdout.take().map(TryInto::<Stdio>::try_into) {
+                    Some(Ok(out)) => stdin = out,
+                    _ => {
+                        finish_run(rec, &run_id);
+                        return Outcome::Exited { had_data: false, message: "web: cannot read yt-dlp's output".into() };
+                    }
+                }
+                if let Some(err) = f.stderr.take() {
+                    let name = cfg.name.clone();
+                    tokio::spawn(async move {
+                        let mut lines = tokio::io::BufReader::new(err).lines();
+                        while let Ok(Some(l)) = lines.next_line().await {
+                            tracing::info!("{name}: yt-dlp: {l}");
+                        }
+                    });
+                }
+                feeder = Some(f);
+            }
+            Err(e) => {
+                finish_run(rec, &run_id);
+                return Outcome::Exited { had_data: false, message: format!("web: cannot start yt-dlp: {e}") };
+            }
+        }
+    }
+    let child = Command::new(&m.ffmpeg).args(&args).current_dir(&run_dir).stdin(stdin).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
@@ -326,6 +380,10 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             }
         }
     };
+    if let Some(mut f) = feeder {
+        let _ = f.start_kill();
+        let _ = f.wait().await;
+    }
     finish_run(rec, &run_id);
     outcome
 }
@@ -587,7 +645,7 @@ mod tests {
     use super::*;
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
-        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), loop_hours: 24, bitrate: 8.0, enabled: true }
+        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true }
     }
 
     #[test]

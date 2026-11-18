@@ -471,6 +471,33 @@ fi
 ok "données : $DATA_DIR"
 ok "boucles : ${RECORDINGS_DIR:-$DATA_DIR/loops}"
 ok "extraits : ${CLIPS_DIR:-$DATA_DIR/clips}"
+# yt-dlp pour les directs YouTube, Facebook, Instagram, X et LinkedIn : dans le dossier des données,
+# au compte du service, qui le tient à jour chaque jour (les plateformes changent souvent).
+YTDLP="$DATA_DIR/bin/yt-dlp"
+case "$(uname -m)" in aarch64) ytdlp_asset=yt-dlp_linux_aarch64 ;; *) ytdlp_asset=yt-dlp_linux ;; esac
+mkdir -p "$DATA_DIR/bin"
+if [ -x "$YTDLP" ]; then
+  runuser -u "$SERVICE_USER" -- "$YTDLP" -U >/dev/null 2>&1 || true
+elif curl -fsSL --retry 3 -o "$YTDLP.tmp" "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$ytdlp_asset"; then
+  chmod 0755 "$YTDLP.tmp"
+  mv "$YTDLP.tmp" "$YTDLP"
+else
+  rm -f "$YTDLP.tmp"
+  warn "yt-dlp non téléchargé : les directs web (YouTube, Facebook…) ne pourront pas être enregistrés"
+fi
+chown -R "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR/bin"
+if [ -x "$YTDLP" ]; then ok "yt-dlp $(runuser -u "$SERVICE_USER" -- "$YTDLP" --version 2>/dev/null) (directs web, mis à jour chaque jour)"; fi
+# YouTube demande un moteur JavaScript à yt-dlp : Node.js (déjà là quand Strata Cut est compilé ici).
+if ! command -v node >/dev/null && ! command -v deno >/dev/null; then
+  if [ "$NO_APT" -eq 0 ]; then
+    echo "  installation de Node.js $NODE_MAJOR (NodeSource) pour yt-dlp"
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - >/dev/null
+    apt_install nodejs
+  else
+    warn "Node.js absent : les directs YouTube risquent de ne pas être lus"
+  fi
+fi
+
 rec_dir="${RECORDINGS_DIR:-$DATA_DIR}"
 free_gb="$(df -BG --output=avail "$rec_dir" | tail -1 | tr -dc 0-9)"
 if [ -n "$free_gb" ]; then ok "espace libre pour les boucles : ${free_gb} Go (≈ 108 Go par source à 10 Mb/s sur 24 h)"; fi

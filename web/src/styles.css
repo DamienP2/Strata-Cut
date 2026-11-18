@@ -669,3 +669,9 @@ a.btn { color: inherit; }
 .sc-slider { display: flex; align-items: center; gap: 12px; }
 .sc-slider input[type='range'] { flex: 1; min-width: 0; min-height: 0; padding: 0; border: none; background: none; }
 .sc-slider .num-field, .sc-slider > :last-child { width: 120px; flex: none; }
+
+/* Recorders › web lives: the cookies of a signed-in account */
+.sc-cookies { display: flex; flex-direction: column; gap: 8px; }
+.sc-cookies textarea { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; }
+.sc-cookies-set { display: inline-flex; align-items: center; min-height: var(--h-control); padding: 0 10px; border: 1px dashed var(--line-2); border-radius: 6px; color: var(--text-2); font-size: 13px; }
+.sc-cookies-btns { display: flex; gap: 8px; }
