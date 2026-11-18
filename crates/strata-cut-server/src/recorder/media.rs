@@ -27,6 +27,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders", get(list).post(create))
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
+        .route("/api/recorders/{id}/clear", post(clear))
         .route("/api/recorders/{id}/thumb.jpg", get(thumb))
         .route("/api/recorders/{id}/media", get(media))
         .route("/api/recorders/{id}/coverage", get(coverage))
@@ -84,6 +85,15 @@ async fn set_enabled(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlP
     let mut c = rec.config();
     c.enabled = b.enabled;
     s.recorders.update(&id, c).map(Json).map_err(bad)
+}
+
+/// Empties a recorder's loop (it goes on recording).
+async fn clear(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    let m = s.recorders.clone();
+    tokio::task::spawn_blocking(move || m.clear(&rec)).await.map_err(internal)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 fn file_response(data: Vec<u8>, mime: &'static str, cache: &'static str) -> Response {
@@ -352,7 +362,7 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
                 json!({
                     "id": r.id, "name": c.name, "enabled": c.enabled, "loopHours": c.loop_hours,
                     "expected": c.bitrate, "bitrate": st.bitrate, "bytes": st.bytes,
-                    "need": super::loop_need(&c, st.bitrate), "oldest": st.oldest, "newest": st.newest,
+                    "need": super::loop_need(&c, st.measured), "oldest": st.oldest, "newest": st.newest,
                     "spaceLimited": st.space_limited,
                 })
             })

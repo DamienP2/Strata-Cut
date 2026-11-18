@@ -62,7 +62,7 @@ export const business: Record<string, string> = {
   'Expected bitrate': 'Débit prévu',
   'Reserved for the loop: {need}': 'Réservé pour la boucle\u00a0: {need}',
   'available for the loops: {left}': 'disponible pour les boucles\u00a0: {left}',
-  'Not enough space: shorter loop, lower bitrate or more disk.': 'Pas assez de place\u00a0: boucle plus courte, débit plus bas ou plus de disque.',
+  'Not enough space: a shorter loop or more disk.': 'Pas assez de place\u00a0: boucle plus courte ou plus de disque.',
   'Loop shortened for lack of disk space': 'Boucle raccourcie faute de place',
   'Bitrate {m}, expected {e}': 'Débit {m}, prévu {e}',
   'The space reserved for the loop follows the measured bitrate.': 'L’espace réservé à la boucle suit le débit mesuré.',
@@ -119,6 +119,11 @@ export const business: Record<string, string> = {
   'Another disk needs the install script (it prepares the folder).': 'Un autre disque demande le script d’installation (il prépare le dossier).',
   'the service cannot write in this folder': 'Le service ne peut pas écrire dans ce dossier.',
 
+  'Empty the loop': 'Vider la boucle',
+  'Empty the loop of “{name}”?': 'Vider la boucle de «\u00a0{name}\u00a0»\u00a0?',
+  'Everything recorded so far is deleted; the recording goes on. The clips stay.': 'Tout ce qui est enregistré jusqu’ici est effacé\u00a0; l’enregistrement continue. Les extraits restent.',
+  'Loop emptied': 'Boucle vidée',
+  'Next: {name}': 'Ensuite\u00a0: {name}',
   // Web lives
   'Address of the live': 'Adresse du direct',
   'Cookies of a signed-in account': 'Cookies d’un compte connecté',

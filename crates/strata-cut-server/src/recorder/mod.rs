@@ -188,6 +188,11 @@ pub struct Status {
     pub bytes: u64,
     /// The loop is shorter than asked: the disk limits removed its oldest part.
     pub space_limited: bool,
+    /// The last bitrate measured while recording, bit/s (the loop's space follows it).
+    pub measured: u64,
+    /// The programme on air now and the next one, from the source's guide.
+    pub on_air: Option<epg::Event>,
+    pub next: Option<epg::Event>,
 }
 
 pub fn now_ms() -> i64 {
@@ -252,6 +257,16 @@ impl Rec {
         s.newest = newest;
         s.bytes = bytes;
         s.bitrate = if s.state == State::Recording { bitrate.unwrap_or(0) } else { 0 };
+        if s.bitrate > 0 {
+            s.measured = s.bitrate;
+        }
+        // The guide's programme now and the next one (without their long texts).
+        let now = now_ms() as f64;
+        let g = self.epg.lock().unwrap();
+        let short = |e: &epg::Event| epg::Event { text: String::new(), ..e.clone() };
+        s.on_air = g.events.iter().find(|e| e.start <= now && now < e.end).map(short);
+        s.next = g.events.iter().find(|e| e.start > now).map(short);
+        drop(g);
         let cut = self.space_trimmed.load(std::sync::atomic::Ordering::Relaxed);
         let short = matches!((oldest, newest), (Some(a), Some(b)) if ((b - a) as f64) < self.config().loop_hours as f64 * 3_600_000.0 * 0.98);
         s.space_limited = cut > 0 && now_ms() - cut < 15 * 60_000 && short;
@@ -297,11 +312,14 @@ pub fn system_reserve(path: &Path, total: u64) -> u64 {
 /// Mb/s the browser proxies add to a source.
 const PROXY_MBPS: f64 = 1.5;
 
-/// Bytes a full loop takes (proxies and 5 % included), at the expected
-/// bitrate or the measured one if higher; None when neither is known.
+/// Bitrate assumed for a source never measured yet, Mb/s.
+const DEFAULT_MBPS: f64 = 8.0;
+
+/// Bytes a full loop takes (proxies and 5 % included): at the bitrate measured,
+/// else the one given in the settings (former versions), else 8 Mb/s.
 pub fn loop_need(cfg: &RecorderConfig, measured_bps: u64) -> Option<u64> {
-    let mbps = cfg.bitrate.max(measured_bps as f64 / 1e6);
-    (mbps > 0.0).then(|| ((mbps + PROXY_MBPS) * 1e6 / 8.0 * 3600.0 * cfg.loop_hours as f64 * 1.05) as u64)
+    let mbps = if measured_bps > 0 { measured_bps as f64 / 1e6 } else if cfg.bitrate > 0.0 { cfg.bitrate } else { DEFAULT_MBPS };
+    Some(((mbps + PROXY_MBPS) * 1e6 / 8.0 * 3600.0 * cfg.loop_hours as f64 * 1.05) as u64)
 }
 
 /// The two paths are on the same disk.
@@ -597,7 +615,7 @@ impl Manager {
         let guide = epg::Guide::load(&epg::path(&self.data_dir, &c.id));
         let rec = Arc::new(Rec {
             id: c.id.clone(),
-            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false }),
+            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None }),
             cfg: watch::channel(c).0,
             runs: RwLock::new(runs),
             stop: watch::channel(false).0,
@@ -638,7 +656,7 @@ impl Manager {
     pub fn reserved(&self) -> u64 {
         self.recs().iter().filter_map(|r| {
             let c = r.config();
-            c.enabled.then(|| loop_need(&c, r.status.lock().unwrap().bitrate)).flatten()
+            c.enabled.then(|| loop_need(&c, r.status.lock().unwrap().measured)).flatten()
         }).sum()
     }
 
@@ -651,7 +669,7 @@ impl Manager {
         let (mut before, mut after, mut known) = (0u64, 0u64, false);
         for r in self.recs() {
             let o = r.config();
-            let measured = r.status.lock().unwrap().bitrate;
+            let measured = r.status.lock().unwrap().measured;
             let need = if o.enabled { loop_need(&o, measured).unwrap_or(0) } else { 0 };
             before += need;
             if o.id == c.id {
@@ -692,9 +710,6 @@ impl Manager {
         }
         if c.cookies == MASKED {
             c.cookies.clear();
-        }
-        if c.bitrate <= 0.0 {
-            return Err("give the expected bitrate".into());
         }
         self.check(&c)?;
         self.check_space(&c)?;
@@ -786,6 +801,18 @@ impl Manager {
     /// Removes what is older than the loop (except pinned segments).
     pub fn trim(&self, rec: &Rec) {
         let cutoff = (now_ms() - rec.config().loop_hours as i64 * 3_600_000) as f64;
+        self.trim_before(rec, cutoff);
+    }
+
+    /// Empties the loop: everything recorded so far goes (what a clip is being cut from stays).
+    pub fn clear(&self, rec: &Rec) {
+        self.trim_before(rec, f64::INFINITY);
+        tracing::warn!("{}: loop emptied", rec.config().name);
+        rec.refresh_status();
+    }
+
+    /// Removes the segments that end before `cutoff` (server time, ms).
+    fn trim_before(&self, rec: &Rec, cutoff: f64) {
         let pins: Vec<Pin> = self.pins.lock().unwrap().iter().filter(|p| p.recorder == rec.id).cloned().collect();
         let mut doomed: Vec<PathBuf> = Vec::new();
         let mut runs = rec.runs.write().unwrap();
@@ -878,10 +905,12 @@ mod tests {
         let mut c: RecorderConfig = serde_json::from_str(r#"{"name":"a","protocol":"udp","url":"udp://239.1.1.1:5000","loopHours":24,"bitrate":10}"#).unwrap();
         // (10 + 1.5) Mb/s × 24 h × 1.05 ≈ 130 GB
         assert_eq!(loop_need(&c, 0).map(|b| b / 1_000_000_000), Some(130));
-        // the measured bitrate wins when higher
+        // the measured bitrate wins
         assert!(loop_need(&c, 20_000_000).unwrap() > loop_need(&c, 0).unwrap());
+        assert!(loop_need(&c, 2_000_000).unwrap() < loop_need(&c, 0).unwrap());
+        // nothing known: 8 Mb/s
         c.bitrate = 0.0;
-        assert_eq!(loop_need(&c, 0), None);
+        assert_eq!(loop_need(&c, 0).map(|b| b / 1_000_000_000), Some(107));
     }
 
     #[test]

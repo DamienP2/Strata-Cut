@@ -344,7 +344,6 @@ export function Storage() {
                 </td>
                 <td className="num">
                   {r.bitrate ? bitrate(r.bitrate, locale()) : '—'}
-                  {r.expected > 0 && <span className="muted"> · {t('expected {e}', { e: bitrate(r.expected * 1e6, locale()) })}</span>}
                 </td>
                 <td className="num">{r.loopHours} h</td>
                 <td className="num">{r.enabled && r.need ? sz(r.need) : '—'}</td>

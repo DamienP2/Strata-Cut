@@ -62,6 +62,20 @@ export interface RecorderStatus {
   bytes: number;
   /** The loop is shorter than asked: the disk limits removed its oldest part. */
   spaceLimited: boolean;
+  /** The last bitrate measured while recording, bits/s (the loop's space follows it). */
+  measured: number;
+  /** The programme on air and the next one, from the source's guide (EPG). */
+  onAir: Programme | null;
+  next: Programme | null;
+}
+
+/** A programme of a source's guide (DVB EIT), server times in ms. */
+export interface Programme {
+  id: number;
+  start: number;
+  end: number;
+  name: string;
+  text?: string;
 }
 
 export interface Job {

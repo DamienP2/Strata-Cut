@@ -689,3 +689,17 @@ a.btn { color: inherit; }
 .sc-onair { font-weight: 400; opacity: 0.85; }
 .sc-prog-btn { justify-content: flex-start; max-width: 100%; }
 .sc-prog-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Recorders: the programme on air (EPG) and the loop length */
+.sc-epg-now { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--text-2); }
+.sc-epg-now.dim { color: var(--text-3); }
+.sc-epg-now > svg { flex: none; color: var(--accent-2); }
+.sc-epg-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
+.sc-epg-now.dim .sc-epg-name { color: var(--text-3); font-weight: 400; }
+.sc-epg-time { flex: none; font: 11px var(--mono); color: var(--text-3); }
+.sc-epg-bar { flex: none; width: 36px; height: 3px; border-radius: 2px; background: var(--panel-3); overflow: hidden; }
+.sc-epg-bar span { display: block; height: 100%; background: var(--accent); }
+.sc-looplen { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sc-looplen input[type='range'] { flex: 1; min-width: 160px; min-height: 0; padding: 0; border: none; background: none; }
+.sc-looplen-v { min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+.sc-looplen-presets { display: flex; gap: 6px; }

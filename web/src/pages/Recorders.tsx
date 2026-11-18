@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Copy, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, WifiOff, X } from 'lucide-react';
+import { Copy, Eraser, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
-import { bitrate, scanFormat } from '../tc';
+import { bitrate, clock, scanFormat } from '../tc';
 import { confirmDialog } from '../ui/dialogs';
 import { Dropdown } from '../ui/Dropdown';
 import { NumberField, Segmented } from '../ui/fields';
@@ -56,7 +56,13 @@ async function reloadRecorders() {
 }
 
 /** Bytes a full loop takes (as the server counts it: proxies and 5 % included). */
-export const loopNeed = (mbps: number, hours: number) => (mbps > 0 ? (mbps + 1.5) * 1e6 / 8 * 3600 * hours * 1.05 : 0);
+/** Bitrate assumed for a source not measured yet, Mb/s (as the server). */
+const DEFAULT_MBPS = 8;
+export const loopNeed = (mbps: number, hours: number) => ((mbps > 0 ? mbps : DEFAULT_MBPS) + 1.5) * 1e6 / 8 * 3600 * hours * 1.05;
+/** Loop lengths on the slider (hours), and the ones a button gives at once. */
+const LOOP_STEPS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 18, 20, 24, 30, 36, 48, 60, 72, 96, 120, 144, 168];
+const LOOP_PRESETS = [6, 12, 24];
+const stepOf = (h: number) => LOOP_STEPS.reduce((best, v, i) => (Math.abs(v - h) < Math.abs(LOOP_STEPS[best] - h) ? i : best), 0);
 
 /** "23 h 41" */
 function hours(ms: number): string {
@@ -170,7 +176,7 @@ const STATE_LABEL: Record<string, string> = { recording: 'Recording', nosignal: 
 const STATE_TONE: Record<string, string> = { recording: 'ok', nosignal: 'warn', starting: 'warn', off: '', error: 'bad' };
 
 function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; st?: RecorderStatus; admin: boolean; onEdit: () => void; onDuplicate: () => void }) {
-  const toast = useApp((s) => s.toast);
+  const { toast, timezone } = useApp(useShallow((s) => ({ toast: s.toast, timezone: s.timezone })));
   const tick = useTick(2000);
   const [img, setImg] = useState(true);
   const state = st?.state ?? 'off';
@@ -190,6 +196,15 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
       toast(t((e as Error).message), 'error');
     }
     void reloadRecorders();
+  };
+  const clearLoop = async () => {
+    if (!(await confirmDialog({ title: t('Empty the loop of “{name}”?', { name: rec.name }), message: t('Everything recorded so far is deleted; the recording goes on. The clips stay.'), confirm: t('Empty the loop'), danger: true }))) return;
+    try {
+      await api('POST', `/api/recorders/${rec.id}/clear`);
+      toast(t('Loop emptied'));
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
   };
   const remove = async () => {
     if (!(await confirmDialog({ title: t('Delete the recorder “{name}”?', { name: rec.name }), message: t('Its loop is deleted too. The clips stay.'), confirm: t('Delete'), danger: true }))) return;
@@ -245,10 +260,26 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
             <TriangleAlert size={12} /> {t('Loop shortened for lack of disk space')}
           </span>
         )}
-        {rec.bitrate > 0 && recording && st && st.bitrate > rec.bitrate * 1e6 * 1.1 && (
-          <span className="sc-warnline" title={t('The space reserved for the loop follows the measured bitrate.')}>
-            <TriangleAlert size={12} /> {t('Bitrate {m}, expected {e}', { m: bitrate(st.bitrate, locale()), e: bitrate(rec.bitrate * 1e6, locale()) })}
-          </span>
+        {st?.onAir && (
+          <div className="sc-epg-now" title={st.next ? t('Next: {name}', { name: `${clock(st.next.start, timezone).slice(0, 5)} ${st.next.name}` }) : undefined}>
+            <Tv size={12} />
+            <span className="sc-epg-name">{st.onAir.name}</span>
+            <span className="sc-epg-time">
+              {clock(st.onAir.start, timezone).slice(0, 5)}–{clock(st.onAir.end, timezone).slice(0, 5)}
+            </span>
+            <span className="sc-epg-bar">
+              <span style={{ width: `${Math.min(100, Math.max(0, ((now - st.onAir.start) / (st.onAir.end - st.onAir.start)) * 100))}%` }} />
+            </span>
+          </div>
+        )}
+        {!st?.onAir && st?.next && (
+          <div className="sc-epg-now dim">
+            <Tv size={12} />
+            <span className="sc-epg-name">
+              {t('Next: {name}', { name: st.next.name })}
+            </span>
+            <span className="sc-epg-time">{clock(st.next.start, timezone).slice(0, 5)}</span>
+          </div>
         )}
         {state === 'error' && st?.message && (
           <span className="sc-errline" title={st.message}>
@@ -282,6 +313,9 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
         <div className="spacer" />
         {admin && (
           <>
+            <button className="icon-btn ghost" title={t('Empty the loop')} disabled={!st?.oldest} onClick={() => void clearLoop()}>
+              <Eraser size={14} />
+            </button>
             <button className="icon-btn ghost" title={t('Duplicate')} onClick={onDuplicate}>
               <Copy size={14} />
             </button>
@@ -322,8 +356,8 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
     if (from) {
       const listens = (from.protocol === 'rtmp' || from.protocol === 'srt') && from.mode === 'listener';
       // The copy keeps every setting; a listening one gets a free port. The passphrase is copied by the server.
-      const measured = (status[from.id]?.bitrate ?? 0) / 1e6;
-      return { ...from, id: '', name: t('{name} (copy)', { name: from.name }), port: listens ? firstPort : from.port, bitrate: from.bitrate || Math.round(measured * 10) / 10 || 10 };
+      const measured = (status[from.id]?.measured ?? 0) / 1e6;
+      return { ...from, id: '', name: t('{name} (copy)', { name: from.name }), port: listens ? firstPort : from.port, bitrate: Math.round(measured * 10) / 10 || from.bitrate };
     }
     return { ...blank, port: firstPort };
   });
@@ -339,8 +373,9 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
   const pushUrl = c.protocol === 'rtmp' ? `rtmp://${location.hostname}:${c.port}/${c.path}` : `srt://${location.hostname}:${c.port}`;
 
   // The loop's space: reserved from the bitrate (the measured one if higher), against what the disk gives the loops.
-  const measured = rec ? (status[rec.id]?.bitrate ?? 0) / 1e6 : 0;
-  const need = c.enabled ? loopNeed(Math.max(c.bitrate, measured), c.loopHours) : 0;
+  // The bitrate measured (else the one of former settings, else 8 Mb/s, as the server).
+  const measured = rec ? (status[rec.id]?.measured ?? 0) / 1e6 : 0;
+  const need = c.enabled ? loopNeed(measured || c.bitrate, c.loopHours) : 0;
   const others = space ? space.recorders.filter((r) => r.enabled && r.id !== rec?.id).reduce((a, r) => a + (r.need ?? 0), 0) : 0;
   const left = space?.capacity != null ? Math.max(0, space.capacity - others) : null;
   const tooBig = left !== null && need > left;
@@ -374,7 +409,7 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label={t('Source')} group>
-            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label, detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '', bitrate: c.bitrate === blank.bitrate ? 6 : c.bitrate } : {}) })} />
+            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label, detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}) })} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
             <Field label={t('Mode')} group>
@@ -437,11 +472,6 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
               </div>
             </Field>
           )}
-          {(c.protocol === 'udp' || c.protocol === 'rtp') && (
-            <Field label={t('Network interface')}>
-              <input value={c.iface} placeholder={t('Optional')} spellCheck={false} onChange={(e) => set({ iface: e.target.value })} title={t('IP address of the card that receives the multicast')} />
-            </Field>
-          )}
           {c.protocol === 'srt' && (
             <>
               <Field label={t('Latency')}>
@@ -452,17 +482,24 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
               </Field>
             </>
           )}
-          <Field label={t('Loop length')}>
-            <NumberField value={c.loopHours} min={1} max={168} suffix="h" onChange={(v) => set({ loopHours: v })} />
+          <Field label={t('Loop length')} group className="span2">
+            <div className="sc-looplen">
+              <input type="range" min={0} max={LOOP_STEPS.length - 1} step={1} value={stepOf(c.loopHours)} aria-label={t('Loop length')} onChange={(e) => set({ loopHours: LOOP_STEPS[Number(e.target.value)] })} />
+              <b className="sc-looplen-v">{c.loopHours} h</b>
+              <div className="sc-looplen-presets">
+                {LOOP_PRESETS.map((h) => (
+                  <button key={h} type="button" className={`btn small ${c.loopHours === h ? 'on' : ''}`} onClick={() => set({ loopHours: h })}>
+                    {h} h
+                  </button>
+                ))}
+              </div>
+            </div>
           </Field>
-          <Field label={t('Expected bitrate')}>
-            <NumberField value={c.bitrate} min={0.1} max={2000} step={0.5} precision={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
-          </Field>
-          {c.enabled && c.bitrate > 0 && (
+          {c.enabled && (
             <div className={`sc-space span2 ${tooBig ? 'bad' : ''}`}>
               <span>{t('Reserved for the loop: {need}', { need: gb(need) })}</span>
               {left !== null && <span>{t('available for the loops: {left}', { left: gb(left) })}</span>}
-              {tooBig && <strong>{t('Not enough space: shorter loop, lower bitrate or more disk.')}</strong>}
+              {tooBig && <strong>{t('Not enough space: a shorter loop or more disk.')}</strong>}
             </div>
           )}
           <Field label={t('State')} group>
@@ -475,7 +512,7 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
           <button type="button" className="btn" onClick={onClose}>
             {t('Cancel')}
           </button>
-          <button type="submit" className="btn primary" disabled={busy || !c.name.trim() || tooBig || c.bitrate <= 0}>
+          <button type="submit" className="btn primary" disabled={busy || !c.name.trim() || tooBig}>
             {rec ? (
               t('Save')
             ) : (
