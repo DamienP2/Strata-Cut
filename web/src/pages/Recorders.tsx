@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, Copy, Eraser, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { CalendarClock, Copy, Eraser, MoreHorizontal, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
@@ -10,6 +10,7 @@ import { Dropdown } from '../ui/Dropdown';
 import { NumberField, Segmented } from '../ui/fields';
 import { Field } from '../settings/ui';
 import { InfoTip } from '../ui/InfoTip';
+import { openContextMenu } from '../ui/ContextMenu';
 import type { Protocol, Recorder, RecorderStatus } from '../types';
 
 const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
@@ -241,6 +242,11 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
         )}
         {state === 'starting' && <span className="sc-onpic mid">{(rec.protocol === 'rtmp' || rec.protocol === 'srt') && rec.mode === 'listener' ? t('Waiting for the source') : t('Connecting…')}</span>}
         {state === 'off' && <span className="sc-onpic mid">{t('Stopped')}</span>}
+        {state === 'error' && (
+          <span className="sc-onpic lostmsg">
+            <TriangleAlert size={14} /> {t('Error')}
+          </span>
+        )}
         {state === 'waiting' && (
           <span className="sc-onpic mid">
             <CalendarClock size={14} /> {st?.nextSlot ? t('Next slot: {when}', { when: `${day(st.nextSlot.start, timezone, locale())} ${clock(st.nextSlot.start, timezone).slice(0, 5)}` }) : t('No slot to come')}
@@ -351,17 +357,23 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
         <div className="spacer" />
         {admin && (
           <>
-            <button className="icon-btn ghost" title={t('Empty the loop')} disabled={!st?.oldest} onClick={() => void clearLoop()}>
-              <Eraser size={14} />
-            </button>
-            <button className="icon-btn ghost" title={t('Duplicate')} onClick={onDuplicate}>
-              <Copy size={14} />
-            </button>
             <button className="icon-btn ghost" title={t('Edit')} onClick={onEdit}>
               <Pencil size={14} />
             </button>
-            <button className="icon-btn ghost" title={t('Delete')} onClick={() => void remove()}>
-              <Trash2 size={14} />
+            {/* The other actions in a menu: the card stays narrow enough for four in a row. */}
+            <button
+              className="icon-btn ghost"
+              title={t('More')}
+              onClick={(e) =>
+                openContextMenu(e, [
+                  { label: t('Duplicate'), icon: <Copy size={14} />, onClick: onDuplicate },
+                  { label: t('Empty the loop'), icon: <Eraser size={14} />, onClick: () => void clearLoop(), disabled: !st?.oldest },
+                  'sep',
+                  { label: t('Delete'), icon: <Trash2 size={14} />, danger: true, onClick: () => void remove() },
+                ])
+              }
+            >
+              <MoreHorizontal size={14} />
             </button>
           </>
         )}

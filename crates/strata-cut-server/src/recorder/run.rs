@@ -80,6 +80,8 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                     // A setting that cannot work is an error; anything else means the source is not there.
                     let broken = ["Address already in use", "Cannot assign requested address", "Permission denied", "Protocol not found", "Invalid argument", "cannot start", "Error opening output", "No space left", "not installed", "javascript runtime"].iter().any(|k| message.contains(k));
                     if broken {
+                        // Two recorders on the same UDP address and port: only one can receive it.
+                        let message = if matches!(cfg.protocol, Protocol::Udp | Protocol::Rtp) && message.contains("Address already in use") { "udp: this address and port are already received by another recorder".to_string() } else { message };
                         rec.set_state(State::Error, message);
                     } else {
                         // SRT as caller: FFmpeg only says "Input/output error"; ask once in a while why.

@@ -190,6 +190,8 @@ export const business: Record<string, string> = {
   Week: 'Semaine',
   'Click: programme it': 'Clic\u00a0: le programmer',
 
+  More: 'Plus d’actions',
+  'udp: this address and port are already received by another recorder': 'UDP\u00a0: cette adresse et ce port sont déjà reçus par un autre enregistreur',
   // Web lives
   'Address of the live': 'Adresse du direct',
   'Cookies of a signed-in account': 'Cookies d’un compte connecté',
