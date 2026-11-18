@@ -41,7 +41,7 @@ pub fn interfaces() -> Vec<Value> {
 pub fn info(s: &Shared, with_config: bool) -> Value {
     let cfg = s.config.load();
     let mut v = json!({
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": crate::VERSION,
         "os": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "hostname": crate::perf::hostname(),
@@ -60,7 +60,7 @@ pub fn info(s: &Shared, with_config: bool) -> Value {
 
 /// Public, for supervision and the Updates page waiting for the restart: `{name, version, bind, needsSetup}`.
 async fn health(State(s): State<Shared>) -> Json<Value> {
-    Json(json!({"name": s.config.load().name, "version": env!("CARGO_PKG_VERSION"), "bind": s.bind.to_string(), "needsSetup": s.auth.needs_setup()}))
+    Json(json!({"name": s.config.load().name, "version": crate::VERSION, "bind": s.bind.to_string(), "needsSetup": s.auth.needs_setup()}))
 }
 
 async fn get_system(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {

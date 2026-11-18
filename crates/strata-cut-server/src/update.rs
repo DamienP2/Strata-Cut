@@ -25,7 +25,7 @@ use crate::{
 };
 
 pub const DEFAULT_REPO: &str = "DamienP2/Strata-Cut";
-pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
+pub const CURRENT: &str = crate::VERSION;
 const MAX_PACKAGE: u64 = 512 << 20;
 const BUSY: &str = "an update is in progress";
 
@@ -204,6 +204,9 @@ pub struct Release {
     pub asset_name: String,
     #[serde(skip)]
     pub digest: Option<String>,
+    /// Downloaded from github.com directly (no API: its hourly limit was reached).
+    #[serde(skip)]
+    pub direct: Option<String>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -277,6 +280,7 @@ pub fn parse_releases(list: &Value, platform: &str) -> Vec<Release> {
                 asset_id: asset["id"].as_u64()?,
                 asset_name: asset["name"].as_str().unwrap_or("").to_string(),
                 digest: asset["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).map(|d| d.to_lowercase()),
+                direct: None,
             })
         })
         .collect();
@@ -303,11 +307,43 @@ fn fetch_releases(data: &Path) -> Result<Vec<Release>, String> {
     }
     let mut res = req.call().map_err(|e| format!("cannot reach GitHub: {e}"))?;
     if !res.status().is_success() {
-        return Err(github_error(res.status().as_u16(), &st.repo, !st.token.is_empty()));
+        let code = res.status().as_u16();
+        // Without a token the API allows 60 requests an hour per public address (often
+        // shared by a whole office): the release pages of github.com tell the newest one too.
+        if st.token.is_empty() && (code == 403 || code == 429) {
+            if let Ok(r) = latest_from_web(&st.repo) {
+                tracing::info!("update: GitHub API limit reached, the newest release read from github.com");
+                return Ok(vec![r]);
+            }
+        }
+        return Err(github_error(code, &st.repo, !st.token.is_empty()));
     }
     let text = res.body_mut().with_config().limit(32 << 20).read_to_string().map_err(|e| format!("GitHub: {e}"))?;
     let list: Value = serde_json::from_str(&text).map_err(|e| format!("GitHub: {e}"))?;
     Ok(parse_releases(&list, platform()))
+}
+
+/// The newest release from github.com's page (its redirect names the tag); the package's
+/// address follows the release workflow's naming.
+fn latest_from_web(repo: &str) -> Result<Release, String> {
+    let url = format!("https://github.com/{repo}/releases/latest");
+    let res = http_agent(0, Duration::from_secs(30)).get(&url).call().map_err(|e| format!("cannot reach GitHub: {e}"))?;
+    let to = res.headers().get("location").and_then(|v| v.to_str().ok()).ok_or("no release")?;
+    let tag = to.rsplit("/tag/").next().filter(|t| !t.is_empty() && *t != to).ok_or("no release")?.to_string();
+    let version = tag.trim_start_matches(['v', 'V']).to_string();
+    let asset_name = format!("Strata-Cut-{version}-{}.tar.gz", platform());
+    Ok(Release {
+        name: tag.clone(),
+        direct: Some(format!("https://github.com/{repo}/releases/download/{tag}/{asset_name}")),
+        version,
+        tag,
+        date: String::new(),
+        notes: String::new(),
+        size: 0,
+        asset_id: 0,
+        asset_name,
+        digest: None,
+    })
 }
 
 /// Checks now: the newest release, or None.
@@ -344,8 +380,11 @@ fn check(data: &Path) -> Result<Option<Release>, String> {
 fn download(data: &Path, r: &Release) -> Result<Vec<u8>, String> {
     let st = settings(data);
     let url = format!("https://api.github.com/repos/{}/releases/assets/{}", st.repo, r.asset_id);
-    let mut req = http_agent(0, Duration::from_secs(600)).get(&url).header("Accept", "application/octet-stream");
-    if !st.token.is_empty() {
+    let mut req = match &r.direct {
+        Some(u) => http_agent(0, Duration::from_secs(600)).get(u).header("Accept", "application/octet-stream"),
+        None => http_agent(0, Duration::from_secs(600)).get(&url).header("Accept", "application/octet-stream"),
+    };
+    if !st.token.is_empty() && r.direct.is_none() {
         req = req.header("Authorization", &format!("Bearer {}", st.token));
     }
     let mut res = req.call().map_err(|e| format!("cannot reach GitHub: {e}"))?;

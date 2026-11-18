@@ -392,8 +392,14 @@ else
   echo "  construction de l'interface web…"
   as_builder "cd '$SRC_DIR/web' && npm ci --no-audit --no-fund --loglevel=error && npm run build >/dev/null"
   ok "interface web construite"
+  # Le numéro de version : celui de la dernière version publiée (étiquette vX.Y.Z), comme les paquets,
+  # pour que Système › Mises à jour compare juste (Cargo.toml garde un numéro de départ).
+  if [ -d "$SRC_DIR/.git" ] && [ "$NO_PULL" -eq 0 ]; then as_git -C "$SRC_DIR" fetch --quiet --tags origin 2>/dev/null || true; fi
+  BUILD_VERSION="$(as_builder "git -C '$SRC_DIR' describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null" || true)"
+  BUILD_VERSION="${BUILD_VERSION#v}"
+  case "$BUILD_VERSION" in *[!0-9.]* | "") BUILD_VERSION="" ;; esac
   echo "  compilation du serveur (quelques minutes la première fois)…"
-  as_builder "source \"\$HOME/.cargo/env\" 2>/dev/null; cd '$SRC_DIR' && cargo build --release --locked -p strata-cut-server --quiet"
+  as_builder "source \"\$HOME/.cargo/env\" 2>/dev/null; cd '$SRC_DIR' && STRATA_VERSION='$BUILD_VERSION' cargo build --release --locked -p strata-cut-server --quiet"
   NEW_BIN="$SRC_DIR/target/release/strata-cut"
   [ -x "$NEW_BIN" ] || die "la compilation n'a pas produit $NEW_BIN"
   ok "serveur compilé : $("$NEW_BIN" --version)"

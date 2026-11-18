@@ -32,9 +32,15 @@ use state::{AppState, Events, Shared};
 
 pub const DEFAULT_BIND: &str = "0.0.0.0:8080";
 pub const BIN: &str = "strata-cut";
+/// The version: the release's (set by the release workflow, or by the install script from
+/// the newest release tag when it builds from the source), else Cargo.toml's.
+pub const VERSION: &str = match option_env!("STRATA_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => env!("CARGO_PKG_VERSION"),
+};
 
 #[derive(Parser)]
-#[command(name = "strata-cut", version, args_conflicts_with_subcommands = true)]
+#[command(name = "strata-cut", version = VERSION, args_conflicts_with_subcommands = true)]
 struct Cli {
     #[command(subcommand)]
     cmd: Option<Cmd>,
@@ -232,7 +238,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
         let listener = bind_retry(wanted).await?;
         let bind = listener.local_addr()?;
         tracing::info!("listening on http://{bind}");
-        let _ = paths::write_json(&data_dir.join("runtime.json"), &serde_json::json!({"bind": bind, "version": env!("CARGO_PKG_VERSION"), "pid": std::process::id()}), false);
+        let _ = paths::write_json(&data_dir.join("runtime.json"), &serde_json::json!({"bind": bind, "version": VERSION, "pid": std::process::id()}), false);
         let shared: Shared = Arc::new(AppState {
             data_dir: data_dir.clone(),
             auth: auth.clone(),

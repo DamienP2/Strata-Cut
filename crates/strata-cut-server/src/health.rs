@@ -29,7 +29,7 @@ use crate::{
 
 const JOURNAL_DAYS: u64 = 30;
 const CRASH_DAYS: u64 = 90;
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+const VERSION: &str = crate::VERSION;
 
 struct Health {
     dir: PathBuf,
