@@ -223,10 +223,11 @@ Autre façon, depuis le serveur : `sudo ~/Strata-Cut/scripts/install-ubuntu.sh -
 **Système › Stockage** :
 
 - **Disque des boucles** / **Disque des extraits** : un disque monté, avec sa place libre. Changer de disque fait repartir l'enregistrement aussitôt sur le nouveau ; les boucles déjà enregistrées restent lisibles sur l'ancien jusqu'à ce qu'elles soient remplacées. Le script d'installation pose un petit relais root (`strata-cut-storage.path`) qui crée le dossier `<disque>/strata-cut/loops` (ou `clips`) et le donne au service.
-- **Boucles au plus**, **Extraits au plus** (Go, 0 = tout le disque), **Toujours libre** (%) : au-delà, les enregistrements les plus anciens sont effacés en premier.
+- Pour chaque disque : sa taille réelle (disque physique et volume), ce que prennent le système et les autres fichiers, la part **gardée pour le système** (5 % du disque système, 10 Go au moins ; 1 % sur un autre disque) et ce qui reste **disponible pour Strata Cut**.
+- **Espace par usage** : deux curseurs, **Boucles** et **Extraits**. Sur un même disque ils se partagent le disponible (en déplacer un donne le reste à l'autre). Le serveur refuse un réglage qui dépasse ce que le disque laisse vraiment, ou qui descend sous ce que les boucles réservent déjà. Au-delà de sa part, une boucle efface ses images les plus anciennes ; les extraits refusent d'en ajouter.
 - Chaque enregistreur réserve la place de sa boucle entière (débit prévu × durée) : une source qui ne tient pas est refusée.
 
-Un disque doit d'abord être monté pour apparaître (voir « Disque des boucles » au § 1). Si le volume système d'Ubuntu n'utilise pas tout le disque (`sudo vgs` montre de la place libre) : `sudo lvextend -r -l +100%FREE /dev/ubuntu-vg/ubuntu-lv`.
+Un disque doit d'abord être monté pour apparaître (voir « Disque des boucles » au § 1). Si le volume système d'Ubuntu n'utilise pas tout le disque (cas fréquent : 16 Go sur un disque de 300 Go), la page le signale et le bouton **Étendre le volume** lui donne toute la place libre du groupe LVM (`lvextend -r`, à chaud, sans perte). Il demande le relais posé par une installation récente : relancez le script une fois. À la main : `sudo lvextend -r -l +100%FREE /dev/ubuntu-vg/ubuntu-lv`.
 
 ### Serveurs de temps (NTP)
 

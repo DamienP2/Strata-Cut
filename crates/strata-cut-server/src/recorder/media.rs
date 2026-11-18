@@ -310,7 +310,6 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
     let clips_dir = s.clips.dir();
     let v = tokio::task::spawn_blocking(move || {
         let rec_dir = m.recordings_dir();
-        let lim = m.limits.lock().unwrap().clone();
         let recorders: Vec<Value> = m
             .recs()
             .iter()
@@ -332,8 +331,9 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
             "capacity": m.loops_capacity(),
             "reserved": m.reserved(),
             "disks": crate::storage::disks(),
+            "loopsDisk": crate::storage::usage(&rec_dir, m.loops_bytes_under(&rec_dir), if super::same_disk(&rec_dir, &clips_dir) { clips_bytes } else { 0 }),
+            "clipsDisk": crate::storage::usage(&clips_dir, if super::same_disk(&rec_dir, &clips_dir) { m.loops_bytes_under(&rec_dir) } else { 0 }, clips_bytes),
             "prepares": crate::storage::managed(),
-            "keepFree": disk_total(&rec_dir).map(|t| lim.min_free(t)),
             "recorders": recorders,
         })
     })
@@ -342,6 +342,3 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
     Ok(Json(v))
 }
 
-fn disk_total(p: &Path) -> Option<u64> {
-    super::disk_space(p).map(|(t, _)| t)
-}

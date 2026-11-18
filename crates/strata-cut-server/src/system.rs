@@ -81,6 +81,11 @@ async fn put_config(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(
             blocking(move || std::net::TcpListener::bind(addr).map(drop)).await?.map_err(|e| bad(format!("cannot listen on {addr}: {e}")))?;
         }
     }
+    // The space given to each use must really be there.
+    if cfg.loops_max_gb != old.loops_max_gb || cfg.clips_max_gb != old.clips_max_gb || cfg.recordings_dir != old.recordings_dir || cfg.clips_dir != old.clips_dir {
+        let (s2, c2) = (s.clone(), cfg.clone());
+        blocking(move || crate::storage::check_allocation(&s2, &c2)).await?.map_err(bad)?;
+    }
     // A new folder for the loops or the clips: the service must be able to write there.
     if cfg.recordings_dir != old.recordings_dir {
         crate::storage::ensure_writable(&s.data_dir, &cfg.recordings_dir(&s.data_dir)).await.map_err(bad)?;

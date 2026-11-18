@@ -12,6 +12,7 @@ use std::{
 
 pub const REQUEST: &str = "storage.request";
 const PATH_UNIT: &str = "/etc/systemd/system/strata-cut-storage.path";
+const HELPER: &str = "/usr/local/lib/strata-cut/prepare-folder";
 
 /// File systems that hold data (not /proc, tmpfs, squashfs, overlay…).
 const DATA_FS: &[&str] = &["ext4", "ext3", "ext2", "xfs", "btrfs", "zfs", "f2fs", "jfs", "nfs", "nfs4", "cifs", "smb3", "fuseblk", "exfat", "ntfs3", "vfat"];
@@ -21,6 +22,11 @@ const SKIP: &[&str] = &["/boot", "/snap", "/proc", "/sys", "/dev", "/run", "/var
 /// The root helper that prepares folders is installed.
 pub fn managed() -> bool {
     Path::new(PATH_UNIT).exists()
+}
+
+/// The root helper also extends LVM volumes (installed by a recent install script).
+fn extends() -> bool {
+    std::fs::read_to_string(HELPER).is_ok_and(|s| s.contains("lvextend"))
 }
 
 /// "/mnt/My\\040Disk" in /proc/mounts → "/mnt/My Disk".
@@ -68,6 +74,145 @@ pub fn disks() -> Vec<Value> {
         .collect();
     out.sort_by(|a, b| a["mount"].as_str().cmp(&b["mount"].as_str()));
     out
+}
+
+/// The mount point holding `dir` (the longest one that starts it).
+pub fn mount_of(dir: &Path) -> String {
+    let mut p = dir.to_path_buf();
+    while !p.exists() && p.pop() {}
+    let p = p.canonicalize().unwrap_or(p);
+    let Ok(text) = std::fs::read_to_string("/proc/self/mounts") else { return "/".into() };
+    text.lines()
+        .filter_map(|l| l.split_whitespace().nth(1).map(unescape))
+        .filter(|m| p.starts_with(m))
+        .max_by_key(|m| m.len())
+        .unwrap_or_else(|| "/".into())
+}
+
+fn num(v: &Value) -> u64 {
+    v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or(0)
+}
+
+/// What is under a mount point: the physical disk, its size, and the part
+/// not usable yet (free space of an LVM volume group, or unpartitioned).
+pub fn physical(mount: &str) -> Value {
+    let Ok(out) = std::process::Command::new("lsblk").args(["-b", "-J", "-o", "NAME,TYPE,SIZE,FSTYPE,MOUNTPOINTS"]).output() else { return Value::Null };
+    let Ok(v) = serde_json::from_slice::<Value>(&out.stdout) else { return Value::Null };
+    fn find<'a>(nodes: &'a [Value], mount: &str, chain: &mut Vec<&'a Value>) -> bool {
+        for n in nodes {
+            chain.push(n);
+            let here = n["mountpoints"].as_array().is_some_and(|m| m.iter().any(|x| x.as_str() == Some(mount))) || n["mountpoint"].as_str() == Some(mount);
+            if here || n["children"].as_array().is_some_and(|c| find(c, mount, chain)) {
+                return true;
+            }
+            chain.pop();
+        }
+        false
+    }
+    let mut chain = Vec::new();
+    if !find(v["blockdevices"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), mount, &mut chain) {
+        return Value::Null;
+    }
+    let disk = chain[0];
+    let node = chain[chain.len() - 1];
+    let size = num(&disk["size"]);
+    let kids = |n: &Value, t: &str| n["children"].as_array().map(|c| c.iter().filter(|x| x["type"] == t).map(|x| num(&x["size"])).sum::<u64>()).unwrap_or(0);
+    let lvm = node["type"] == "lvm" && chain.len() >= 2;
+    let lvm_free = if lvm { num(&chain[chain.len() - 2]["size"]).saturating_sub(kids(chain[chain.len() - 2], "lvm")) } else { 0 };
+    let parts = kids(disk, "part");
+    let unpartitioned = if parts > 0 { size.saturating_sub(parts) } else { 0 };
+    json!({
+        "disk": disk["name"], "size": size, "lvmFree": lvm_free, "unpartitioned": unpartitioned,
+        "lv": if lvm { Value::String(format!("/dev/mapper/{}", node["name"].as_str().unwrap_or(""))) } else { Value::Null },
+    })
+}
+
+/// The disk holding `dir`, for System › Storage: total, used by other files,
+/// the system's reserve, and what Strata Cut may use (loops + clips).
+pub fn usage(dir: &Path, loops_here: u64, clips_here: u64) -> Value {
+    let Some((total, free)) = crate::recorder::disk_space(dir) else { return Value::Null };
+    let mount = mount_of(dir);
+    let others = total.saturating_sub(free).saturating_sub(loops_here + clips_here);
+    let reserve = crate::recorder::system_reserve(dir, total);
+    json!({
+        "mount": mount, "total": total, "free": free, "others": others, "reserve": reserve,
+        "available": total.saturating_sub(others).saturating_sub(reserve),
+        "loops": loops_here, "clips": clips_here, "physical": physical(&mount),
+    })
+}
+
+/// The space given to the loops and to the clips must really be there:
+/// within what their disks leave available, and not below what the loops already reserve.
+pub fn check_allocation(s: &crate::state::Shared, cfg: &crate::config::ServerConfig) -> Result<(), String> {
+    let gb = 1e9;
+    let (loops_max, clips_max) = ((cfg.loops_max_gb * gb) as u64, (cfg.clips_max_gb * gb) as u64);
+    if loops_max == 0 && clips_max == 0 {
+        return Ok(());
+    }
+    let rec_dir = cfg.recordings_dir(&s.data_dir);
+    let clips_dir = cfg.clips_dir(&s.data_dir);
+    let same = crate::recorder::same_disk(&rec_dir, &clips_dir);
+    let loops_here = s.recorders.loops_bytes_under(&rec_dir);
+    let clips_here = crate::recorder::dir_size(&clips_dir);
+    let avail = |dir: &Path, loops: u64, clips: u64| usage(dir, loops, clips)["available"].as_u64().unwrap_or(0);
+    // 1 % of slack for what moved since the page was read.
+    let fits = |want: u64, have: u64| want as f64 <= have as f64 * 1.01;
+    if same {
+        let have = avail(&rec_dir, loops_here, clips_here);
+        if !fits(loops_max + clips_max, have) {
+            return Err("the space given is more than the disk has available".into());
+        }
+    } else {
+        if loops_max > 0 && !fits(loops_max, avail(&rec_dir, loops_here, 0)) {
+            return Err("the space given is more than the disk has available".into());
+        }
+        if clips_max > 0 && !fits(clips_max, avail(&clips_dir, 0, clips_here)) {
+            return Err("the space given is more than the disk has available".into());
+        }
+    }
+    if loops_max > 0 && s.recorders.reserved() > loops_max {
+        return Err("the recorders already reserve more than this for their loops".into());
+    }
+    Ok(())
+}
+
+pub fn routes() -> axum::Router<crate::state::Shared> {
+    axum::Router::new().route("/api/system/storage/extend", axum::routing::post(extend))
+}
+
+#[derive(serde::Deserialize)]
+struct Extend {
+    mount: String,
+}
+
+/// Gives the volume of a mount point all the free space of its LVM group (root helper: lvextend -r).
+async fn extend(
+    axum::extract::State(s): axum::extract::State<crate::state::Shared>,
+    crate::auth::CurrentUser(me): crate::auth::CurrentUser,
+    axum::Json(b): axum::Json<Extend>,
+) -> crate::api::ApiResult<axum::Json<Value>> {
+    crate::api::require(me.is_admin())?;
+    if !managed() || !extends() {
+        return Err(crate::api::bad("the install script must be run again (it installs the helper)"));
+    }
+    let mount = b.mount.clone();
+    let p = tokio::task::spawn_blocking(move || physical(&mount)).await.map_err(crate::api::internal)?;
+    let (Some(lv), Some(free)) = (p["lv"].as_str(), p["lvmFree"].as_u64()) else { return Err(crate::api::bad("this disk is not an lvm volume")) };
+    if free < 1 << 30 {
+        return Err(crate::api::bad("no free space left in the volume group"));
+    }
+    let before = crate::recorder::disk_space(Path::new(&b.mount)).map(|(t, _)| t).unwrap_or(0);
+    let text = format!("extend {lv}\n");
+    crate::paths::write_atomic(&s.data_dir.join(REQUEST), text.as_bytes(), false).map_err(crate::api::internal)?;
+    for _ in 0..150 {
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let now = crate::recorder::disk_space(Path::new(&b.mount)).map(|(t, _)| t).unwrap_or(0);
+        if now > before + (1 << 30) {
+            tracing::warn!("{} extended by {}: {} GB → {} GB", b.mount, me.username, before >> 30, now >> 30);
+            return Ok(axum::Json(json!({"total": now})));
+        }
+    }
+    Err(crate::api::bad("the volume could not be extended"))
 }
 
 /// The service can write in `dir` (creating it if its parent allows).

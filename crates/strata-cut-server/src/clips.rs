@@ -184,7 +184,7 @@ impl Clips {
                 return Err("the clips storage is full".into());
             }
             if let Some((total, free)) = crate::recorder::disk_space(&dir) {
-                if free < lim.min_free(total) / 2 {
+                if free < lim.min_free(&dir, total) / 2 {
                     return Err("the disk of the clips is full".into());
                 }
             }

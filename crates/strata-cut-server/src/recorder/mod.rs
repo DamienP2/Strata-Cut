@@ -254,11 +254,16 @@ pub struct Pin {
 pub struct Limits {
     /// Bytes, 0 = only the disk.
     pub loops_max: u64,
-    /// Space always left free on the disk, %.
-    pub keep_free_pct: u32,
     /// The clips: their folder and their limit (bytes, 0 = none).
     pub clips_dir: PathBuf,
     pub clips_max: u64,
+}
+
+/// What stays free for the system on a disk of `total` bytes: on the system
+/// disk 5 % (10 GB at least), on another disk 1 % (1 GB at least); never more than a quarter.
+pub fn system_reserve(path: &Path, total: u64) -> u64 {
+    let gb = 1u64 << 30;
+    if same_disk(path, Path::new("/")) { (total / 20).max(10 * gb).min(total / 4) } else { (total / 100).max(gb).min(total / 4) }
 }
 
 /// Mb/s the browser proxies add to a source.
@@ -290,11 +295,11 @@ pub fn same_disk(a: &Path, b: &Path) -> bool {
 
 impl Limits {
     pub fn from(cfg: &ServerConfig, data_dir: &Path) -> Self {
-        Limits { loops_max: (cfg.loops_max_gb * 1e9) as u64, keep_free_pct: cfg.keep_free_percent, clips_dir: cfg.clips_dir(data_dir), clips_max: (cfg.clips_max_gb * 1e9) as u64 }
+        Limits { loops_max: (cfg.loops_max_gb * 1e9) as u64, clips_dir: cfg.clips_dir(data_dir), clips_max: (cfg.clips_max_gb * 1e9) as u64 }
     }
-    /// The free space to keep on a disk of `total` bytes (at least 1 GB, at most a quarter).
-    pub fn min_free(&self, total: u64) -> u64 {
-        (total / 100 * self.keep_free_pct as u64).max(1 << 30).min(total / 4)
+    /// The free space always kept on the disk holding `path` (see `system_reserve`).
+    pub fn min_free(&self, path: &Path, total: u64) -> u64 {
+        system_reserve(path, total)
     }
 }
 
@@ -446,6 +451,11 @@ impl Manager {
         }
     }
 
+    /// Bytes of the loops stored on the disk holding `dir`.
+    pub fn loops_bytes_under(&self, dir: &Path) -> u64 {
+        self.recs().iter().map(|r| r.runs.read().unwrap().iter().filter(|x| same_disk(&x.dir, dir)).map(Run::bytes).sum::<u64>()).sum()
+    }
+
     /// Bytes taken by all the loops.
     pub fn loops_bytes(&self) -> u64 {
         self.recs().iter().map(|r| r.runs.read().unwrap().iter().map(Run::bytes).sum::<u64>()).sum()
@@ -458,7 +468,7 @@ impl Manager {
         let current = self.recordings_dir();
         let used = self.loops_bytes();
         let quota_need = if lim.loops_max > 0 { used.saturating_sub(lim.loops_max) } else { 0 };
-        let disk_need = disk_space(&current).map(|(total, free)| lim.min_free(total).saturating_sub(free)).unwrap_or(0);
+        let disk_need = disk_space(&current).map(|(total, free)| lim.min_free(&current, total).saturating_sub(free)).unwrap_or(0);
         let need = quota_need.max(disk_need);
         if need == 0 {
             return;
@@ -578,7 +588,7 @@ impl Manager {
         let (total, free) = disk_space(&dir)?;
         // Loops already on that disk count as space they may reuse.
         let here: u64 = self.recs().iter().map(|r| r.runs.read().unwrap().iter().filter(|x| x.dir.starts_with(&dir)).map(Run::bytes).sum::<u64>()).sum();
-        let mut cap = (free + here).saturating_sub(lim.min_free(total));
+        let mut cap = (free + here).saturating_sub(lim.min_free(&dir, total));
         if lim.clips_max > 0 && same_disk(&dir, &lim.clips_dir) {
             cap = cap.saturating_sub(lim.clips_max.saturating_sub(dir_size(&lim.clips_dir)));
         }
@@ -831,10 +841,10 @@ mod tests {
     }
 
     #[test]
-    fn min_free_bounds() {
-        let l = Limits { keep_free_pct: 5, ..Default::default() };
-        assert_eq!(l.min_free(1_000_000_000_000), 50_000_000_000);
-        assert_eq!(l.min_free(2_000_000_000), 500_000_000); // a quarter at most on a tiny disk
-        assert_eq!(l.min_free(10_000_000_000), 1 << 30); // 1 GB at least
+    fn system_reserves() {
+        // The system disk: 5 %, 10 GB at least, a quarter at most.
+        assert_eq!(system_reserve(Path::new("/"), 1_000_000_000_000), 50_000_000_000);
+        assert_eq!(system_reserve(Path::new("/"), 100_000_000_000), 10 << 30);
+        assert_eq!(system_reserve(Path::new("/"), 16_000_000_000), 4_000_000_000);
     }
 }

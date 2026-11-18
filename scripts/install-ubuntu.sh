@@ -549,9 +549,20 @@ EOF
   # le crée et le donne au compte du service, seulement s'il finit par strata-cut/loops ou /clips.
   cat >"$STORAGE_HELPER" <<'EOF'
 #!/bin/sh
-# Strata Cut : prépare le dossier demandé dans l'interface ($1 = <données>/storage.request, $2 = compte du service).
+# Strata Cut : prépare le dossier demandé dans l'interface ($1 = <données>/storage.request, $2 = compte du service),
+# ou donne à un volume LVM tout l'espace libre de son groupe (« extend /dev/mapper/<volume> »).
 set -eu
 d="$(head -n 1 "$1" | head -c 1024)"
+case "$d" in
+  "extend "*)
+    lv="${d#extend }"
+    case "$lv" in /dev/mapper/*) ;; *) echo "volume refusé : $lv" >&2; exit 1 ;; esac
+    case "$lv" in *[!A-Za-z0-9._/+-]*) echo "volume refusé : $lv" >&2; exit 1 ;; esac
+    lvs "$lv" >/dev/null 2>&1 || { echo "pas un volume LVM : $lv" >&2; exit 1; }
+    findmnt -n -S "$lv" >/dev/null 2>&1 || { echo "volume non monté : $lv" >&2; exit 1; }
+    lvextend -r -l +100%FREE "$lv"
+    exit 0 ;;
+esac
 case "$d" in
   *..* | *//* ) echo "dossier refusé : $d" >&2; exit 1 ;;
   /etc/* | /usr/* | /bin/* | /sbin/* | /lib/* | /lib64/* | /boot/* | /proc/* | /sys/* | /dev/* | /run/* | /root/* ) echo "dossier refusé : $d" >&2; exit 1 ;;
