@@ -337,7 +337,7 @@ impl Manager {
             for r in self.recs() {
                 let o = r.config();
                 if o.id != c.id && o.listens() && o.port == c.port {
-                    return Err(format!("port {} is used by {}", c.port, o.name));
+                    return Err("this port is used by another recorder".into());
                 }
             }
         }

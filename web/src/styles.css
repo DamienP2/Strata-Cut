@@ -498,3 +498,24 @@ a.btn { text-decoration: none; }
 .set-field .dd-btn, .insp-body .dd-btn { height: var(--h-control); font-size: 13px; }
 :is(.sc-edit) :is(input:not([type='checkbox']):not([type='range'])) { min-height: var(--h-control); }
 .sc-edit .panel { overflow: auto; }
+
+/* Extraction: the player and the strip */
+.sc-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.sc-viewer .sc-onpic { z-index: 1; }
+.sc-strip { display: block; }
+.sc-tile { position: absolute; top: 0; bottom: 0; overflow: hidden; border-right: 1px solid rgba(0, 0, 0, 0.6); }
+.sc-tile img { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.sc-tracks { cursor: col-resize; touch-action: none; }
+.sc-overview { touch-action: none; }
+.sc-job-err { font-size: 11.5px; color: var(--live); }
+.sc-job a.icon-btn { text-decoration: none; }
+.sc-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.sc-onpic.mid { left: 50%; top: 50%; transform: translate(-50%, -50%); height: 26px; padding: 0 12px; gap: 7px; }
+.sc-errline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--live); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-url { display: flex; gap: 6px; }
+.sc-url code { flex: 1; min-width: 0; display: flex; align-items: center; padding: 0 10px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-2); }
+.sc-clip-name { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.sc-clip-name strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-mini { background: var(--panel-3); }
+.sc-mini img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sc-rec-table td.bar { width: 30%; }

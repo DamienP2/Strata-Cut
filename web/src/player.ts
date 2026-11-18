@@ -225,8 +225,9 @@ export class LoopPlayer {
       const b = new Buffer(sb, (f) => `/api/recorders/${this.recorder}/runs/${r.id}/${name}/${f}`);
       for (const s of tr.segs) b.segs.set(s[0], s);
       this.bufs.push(b);
-      await b.append('init', alive);
     }
+    // Every buffer exists before the first append (MediaSource accepts no new one after).
+    await Promise.all(this.bufs.map((b) => b.append('init', alive)));
     this.onRun(r);
   }
 
