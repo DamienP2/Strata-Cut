@@ -75,16 +75,6 @@ pub struct RecorderConfig {
     pub bitrate: f64,
     #[serde(default = "yes")]
     pub enabled: bool,
-    /// Records only during its programmed slots (else: a rolling loop).
-    #[serde(default)]
-    pub scheduled: bool,
-    /// Programmed: days the recordings are kept.
-    #[serde(default = "default_keep")]
-    pub keep_days: u32,
-}
-
-fn default_keep() -> u32 {
-    7
 }
 
 fn listener() -> Mode {
@@ -120,9 +110,6 @@ impl RecorderConfig {
         }
         if !(1..=168).contains(&self.loop_hours) {
             return Err("the loop lasts 1 to 168 hours".into());
-        }
-        if !(1..=365).contains(&self.keep_days) {
-            return Err("the recordings are kept 1 to 365 days".into());
         }
         let listens = self.listens();
         if listens && self.port == 0 {
@@ -298,7 +285,7 @@ impl Rec {
         drop(g);
         let cut = self.space_trimmed.load(std::sync::atomic::Ordering::Relaxed);
         let cfg = self.config();
-        let short = !cfg.scheduled && matches!((oldest, newest), (Some(a), Some(b)) if ((b - a) as f64) < cfg.loop_hours as f64 * 3_600_000.0 * 0.98);
+        let short = matches!((oldest, newest), (Some(a), Some(b)) if ((b - a) as f64) < cfg.loop_hours as f64 * 3_600_000.0 * 0.98);
         s.space_limited = cut > 0 && now_ms() - cut < 15 * 60_000 && short;
         if media.is_some() {
             s.media = media;
@@ -341,6 +328,9 @@ pub fn system_reserve(path: &Path, total: u64) -> u64 {
 
 /// Mb/s the browser proxies add to a source.
 const PROXY_MBPS: f64 = 1.5;
+
+/// A programmed recording starts this long before its slot (the connection takes time).
+pub const PREROLL_MS: i64 = 60_000;
 
 /// Bitrate assumed for a source never measured yet, Mb/s.
 const DEFAULT_MBPS: f64 = 8.0;
@@ -482,9 +472,8 @@ impl Manager {
                 let now_t = now_ms();
                 for r in m.recs() {
                     r.refresh_status();
-                    let c = r.config();
                     let info = |o: Option<(schedule::Slot, i64, i64)>| o.map(|(s, a, b)| SlotInfo { name: s.name, start: a, end: b });
-                    let (slot, next) = if c.scheduled { (info(m.schedules.active(&r.id, &tz, now_t)), info(m.schedules.next(&r.id, &tz, now_t))) } else { (None, None) };
+                    let (slot, next) = (info(m.schedules.active(&r.id, &tz, now_t)), info(m.schedules.next(&r.id, &tz, now_t)));
                     let mut st = r.status.lock().unwrap();
                     st.slot = slot;
                     st.next_slot = next;
@@ -718,7 +707,7 @@ impl Manager {
     pub fn reserved(&self) -> u64 {
         self.recs().iter().filter_map(|r| {
             let c = r.config();
-            c.enabled.then(|| self.need_of(&c, r.status.lock().unwrap().measured)).flatten()
+            self.counts(&c).then(|| self.need_of(&c, r.status.lock().unwrap().measured)).flatten()
         }).sum()
     }
 
@@ -726,16 +715,20 @@ impl Manager {
         self.tz.lock().unwrap().clone()
     }
 
-    /// Bytes a recorder keeps when full: its loop, or programmed, the hours of its
-    /// slots in the days its recordings are kept.
+    /// Bytes a recorder keeps when full: its loop (what its slots record lives in it too).
     pub fn need_of(&self, c: &RecorderConfig, measured: u64) -> Option<u64> {
-        if !c.scheduled {
-            return loop_need(c, measured);
-        }
-        let hours = self.schedules.hours_ahead(&c.id, &self.tz(), now_ms(), c.keep_days);
-        let mut h = c.clone();
-        h.loop_hours = 1;
-        loop_need(&h, measured).map(|per_hour| (per_hour as f64 * hours) as u64)
+        loop_need(c, measured)
+    }
+
+    /// The recorder takes space: it records, or it has slots programmed.
+    pub fn counts(&self, c: &RecorderConfig) -> bool {
+        c.enabled || !self.schedules.of(&c.id).iter().all(|s| !s.enabled)
+    }
+
+    /// A stopped recorder records during its slots, from a little before (the connection takes time).
+    pub fn wants(&self, id: &str, now: i64) -> bool {
+        let tz = self.tz();
+        self.schedules.active(id, &tz, now).is_some() || self.schedules.active(id, &tz, now + PREROLL_MS).is_some()
     }
 
     /// Refuses a recorder whose full loop does not fit (only when the change asks for more space).
@@ -748,7 +741,7 @@ impl Manager {
         for r in self.recs() {
             let o = r.config();
             let measured = r.status.lock().unwrap().measured;
-            let need = if o.enabled { self.need_of(&o, measured).unwrap_or(0) } else { 0 };
+            let need = if self.counts(&o) { self.need_of(&o, measured).unwrap_or(0) } else { 0 };
             before += need;
             if o.id == c.id {
                 known = true;
@@ -879,10 +872,7 @@ impl Manager {
 
     /// Removes what is older than the loop (except pinned segments).
     pub fn trim(&self, rec: &Rec) {
-        // A loop keeps its length; programmed recordings are kept some days.
-        let c = rec.config();
-        let hours = if c.scheduled { c.keep_days as i64 * 24 } else { c.loop_hours as i64 };
-        let cutoff = (now_ms() - hours * 3_600_000) as f64;
+        let cutoff = (now_ms() - rec.config().loop_hours as i64 * 3_600_000) as f64;
         self.trim_before(rec, cutoff);
     }
 

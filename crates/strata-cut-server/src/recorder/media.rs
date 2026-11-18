@@ -132,10 +132,7 @@ async fn put_slot_id(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlP
 
 fn save_slot(s: &Shared, slot: super::schedule::Slot) -> ApiResult<Json<Value>> {
     let m = s.recorders.clone();
-    let rec = m.get(&slot.recorder).ok_or_else(|| not_found("recorder"))?;
-    if !rec.config().scheduled {
-        return Err(bad("this recorder records in a loop: switch it to programmed"));
-    }
+    m.get(&slot.recorder).ok_or_else(|| not_found("recorder"))?;
     let before = m.reserved();
     let saved = m
         .schedules

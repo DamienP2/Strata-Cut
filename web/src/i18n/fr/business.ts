@@ -192,6 +192,16 @@ export const business: Record<string, string> = {
 
   More: 'Plus d’actions',
   'udp: this address and port are already received by another recorder': 'UDP\u00a0: cette adresse et ce port sont déjà reçus par un autre enregistreur',
+  'Time zone set: {tz}': 'Fuseau réglé\u00a0: {tz}',
+  'The slots follow the server’s clock: {server} ({sh}), while this computer is in {mine} ({mh}).': 'Les créneaux suivent l’heure du serveur\u00a0: {server} ({sh}), alors que cet ordinateur est en {mine} ({mh}).',
+  'Set the server to {tz}': 'Régler le serveur sur {tz}',
+  'This recorder records in a loop: its slots are not used. Switch it to “Programmed” in Recorders.': 'Cet enregistreur enregistre en boucle\u00a0: ses créneaux ne servent pas. Passez-le en «\u00a0Programmé\u00a0» dans Enregistreurs.',
+  'in a loop': 'en boucle',
+  'No recorder yet.': 'Aucun enregistreur pour l’instant.',
+  'This recorder already records all the time: its slots change nothing while it runs.': 'Cet enregistreur enregistre déjà en continu\u00a0: ses créneaux ne changent rien tant qu’il tourne.',
+  'already recording': 'enregistre déjà',
+  'It already records all the time: the slot counts when it is stopped.': 'Il enregistre déjà en continu\u00a0: le créneau compte quand il est arrêté.',
+  'Stopped: it starts a minute before and stops at the end.': 'Arrêté\u00a0: il démarre une minute avant et s’arrête à la fin.',
   // Web lives
   'Address of the live': 'Adresse du direct',
   'Cookies of a signed-in account': 'Cookies d’un compte connecté',

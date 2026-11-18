@@ -63,10 +63,7 @@ export const loopNeed = (mbps: number, hours: number) => ((mbps > 0 ? mbps : DEF
 /** Loop lengths on the slider (hours), and the ones a button gives at once. */
 const LOOP_STEPS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 18, 20, 24, 30, 36, 48, 60, 72, 96, 120, 144, 168];
 const LOOP_PRESETS = [6, 12, 24];
-/** Days programmed recordings are kept, on the slider, and the buttons. */
-const KEEP_STEPS = [1, 2, 3, 5, 7, 10, 14, 21, 30, 45, 60, 90, 180, 365];
-const KEEP_PRESETS = [1, 7, 30];
-const keepStepOf = (d: number) => KEEP_STEPS.reduce((best, v, i) => (Math.abs(v - d) < Math.abs(KEEP_STEPS[best] - d) ? i : best), 0);
+
 const stepOf = (h: number) => LOOP_STEPS.reduce((best, v, i) => (Math.abs(v - h) < Math.abs(LOOP_STEPS[best] - h) ? i : best), 0);
 
 /** "23 h 41" */
@@ -301,44 +298,31 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
             <TriangleAlert size={12} /> {t(st.message)}
           </span>
         )}
-        {rec.scheduled ? (
-          <div className="sc-loop">
-            {st?.slot ? (
-              <div className="sc-slot-now">
-                <CalendarClock size={12} />
-                <span className="sc-epg-name">{st.slot.name || t('Programmed slot')}</span>
-                <span className="sc-epg-time">{t('until {h}', { h: clock(st.slot.end, timezone).slice(0, 5) })}</span>
-              </div>
-            ) : st?.nextSlot ? (
-              <div className="sc-slot-now dim">
-                <CalendarClock size={12} />
-                <span className="sc-epg-name">{st.nextSlot.name || t('Programmed slot')}</span>
-                <span className="sc-epg-time">
-                  {day(st.nextSlot.start, timezone, locale())} {clock(st.nextSlot.start, timezone).slice(0, 5)}–{clock(st.nextSlot.end, timezone).slice(0, 5)}
-                </span>
-              </div>
-            ) : (
-              <button type="button" className="sc-slot-now dim link" onClick={() => void navigate('/schedule')}>
-                <CalendarClock size={12} /> {t('No slot to come: programme one')}
-              </button>
-            )}
-            <div className="sc-loop-head">
-              <span>
-                {t('Recorded')} <b>{hours(st?.oldest && st.newest ? st.newest - st.oldest : 0)}</b> · {t('kept {n} days', { n: rec.keepDays ?? 7 })}
-              </span>
-            </div>
+        {/* Programmed slots: a stopped recorder records during them (a running one goes on anyway). */}
+        {!rec.enabled && st?.slot ? (
+          <div className="sc-slot-now">
+            <CalendarClock size={12} />
+            <span className="sc-epg-name">{st.slot.name || t('Programmed slot')}</span>
+            <span className="sc-epg-time">{t('until {h}', { h: clock(st.slot.end, timezone).slice(0, 5) })}</span>
           </div>
-        ) : (
-          <div className="sc-loop">
-            <div className="sc-loop-head">
-              <span>{t('Loop')} <b>{hours(have)}</b> {t('of {h} h', { h: rec.loopHours })}</span>
-              <span>{fill >= 99.5 ? t('full') : `${Math.round(fill)} %`}</span>
-            </div>
-            <span className="perf-bar tone-accent">
-              <span className="perf-bar-fill" style={{ transform: `translateX(${fill - 100}%)` }} />
+        ) : !rec.enabled && st?.nextSlot ? (
+          <div className="sc-slot-now dim">
+            <CalendarClock size={12} />
+            <span className="sc-epg-name">{st.nextSlot.name || t('Programmed slot')}</span>
+            <span className="sc-epg-time">
+              {day(st.nextSlot.start, timezone, locale())} {clock(st.nextSlot.start, timezone).slice(0, 5)}–{clock(st.nextSlot.end, timezone).slice(0, 5)}
             </span>
           </div>
-        )}
+        ) : null}
+        <div className="sc-loop">
+          <div className="sc-loop-head">
+            <span>{t('Loop')} <b>{hours(have)}</b> {t('of {h} h', { h: rec.loopHours })}</span>
+            <span>{fill >= 99.5 ? t('full') : `${Math.round(fill)} %`}</span>
+          </div>
+          <span className="perf-bar tone-accent">
+            <span className="perf-bar-fill" style={{ transform: `translateX(${fill - 100}%)` }} />
+          </span>
+        </div>
       </div>
       <div className="sc-card-foot">
         <button className="btn small" onClick={() => void navigate(`/extract/${rec.id}`)} disabled={!st?.oldest}>
@@ -532,31 +516,6 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
               </Field>
             </>
           )}
-          <Field label={t('Recording')} group className="span2">
-            <Segmented
-              value={c.scheduled ? 'schedule' : 'loop'}
-              options={[
-                { value: 'loop', label: t('Loop'), title: t('Records all the time; the oldest part is replaced') },
-                { value: 'schedule', label: t('Programmed'), title: t('Records only during its slots (Schedule) and keeps its recordings') },
-              ]}
-              onChange={(v) => set({ scheduled: v === 'schedule', keepDays: c.keepDays ?? 7 })}
-            />
-          </Field>
-          {c.scheduled ? (
-          <Field label={t('Keep the recordings')} group className="span2" hint={t('The slots are set in Schedule; the space they need is reserved from them.')}>
-            <div className="sc-looplen">
-              <input type="range" min={0} max={KEEP_STEPS.length - 1} step={1} value={keepStepOf(c.keepDays ?? 7)} aria-label={t('Keep the recordings')} onChange={(e) => set({ keepDays: KEEP_STEPS[Number(e.target.value)] })} />
-              <b className="sc-looplen-v">{tn(c.keepDays ?? 7, '{n} day', '{n} days')}</b>
-              <div className="sc-looplen-presets">
-                {KEEP_PRESETS.map((d) => (
-                  <button key={d} type="button" className={`btn small ${(c.keepDays ?? 7) === d ? 'on' : ''}`} onClick={() => set({ keepDays: d })}>
-                    {tn(d, '{n} day', '{n} days')}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </Field>
-          ) : (
           <Field label={t('Loop length')} group className="span2">
             <div className="sc-looplen">
               <input type="range" min={0} max={LOOP_STEPS.length - 1} step={1} value={stepOf(c.loopHours)} aria-label={t('Loop length')} onChange={(e) => set({ loopHours: LOOP_STEPS[Number(e.target.value)] })} />
@@ -570,8 +529,7 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
               </div>
             </div>
           </Field>
-          )}
-          {c.enabled && !c.scheduled && (
+          {c.enabled && (
             <div className={`sc-space span2 ${tooBig ? 'bad' : ''}`}>
               <span>{t('Reserved for the loop: {need}', { need: gb(need) })}</span>
               {left !== null && <span>{t('available for the loops: {left}', { left: gb(left) })}</span>}

@@ -765,3 +765,9 @@ a.btn { color: inherit; }
 .sc-card-foot { flex-wrap: nowrap; min-width: 0; }
 .sc-card-foot .btn { flex: none; }
 .sc-onpic.mid { white-space: nowrap; max-width: calc(100% - 24px); overflow: hidden; }
+
+.sc-tz-alert { margin-bottom: 14px; }
+
+.sc-cal-name { gap: 8px; }
+.sc-cal-name .nav-dot { flex: none; }
+.sc-cal-name-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

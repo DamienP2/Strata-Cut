@@ -187,23 +187,6 @@ impl Schedules {
         self.of(recorder).into_iter().flat_map(|s| s.occurrences(tz, now, now + 8 * 86_400_000).into_iter().filter(|&(a, _)| a > now).map(move |(a, b)| (s.clone(), a, b))).min_by_key(|o| o.1)
     }
 
-    /// Hours to record in the coming `days` (the space the recordings kept will take).
-    pub fn hours_ahead(&self, recorder: &str, tz: &TimeZone, now: i64, days: u32) -> f64 {
-        let to = now + days as i64 * 86_400_000;
-        let mut spans: Vec<(i64, i64)> = self.of(recorder).iter().flat_map(|s| s.occurrences(tz, now, to)).map(|(a, b)| (a.max(now), b.min(to))).collect();
-        spans.sort_unstable();
-        // Overlapping slots record once.
-        let (mut total, mut end) = (0i64, i64::MIN);
-        for (a, b) in spans {
-            let a = a.max(end);
-            if b > a {
-                total += b - a;
-            }
-            end = end.max(b);
-        }
-        total as f64 / 3_600_000.0
-    }
-
     /// The slots for the interface, each with its next (or current) occurrence.
     pub fn json(&self, tz: &TimeZone, now: i64) -> Value {
         let slots: Vec<Value> = self
@@ -245,17 +228,16 @@ mod tests {
     }
 
     #[test]
-    fn hours() {
+    fn next_and_active() {
         let tz = TimeZone::get("Europe/Paris").unwrap();
         let dir = std::env::temp_dir().join(format!("sc-sched-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let sch = Schedules::load(dir.join("s.json"));
         let s = Slot { id: String::new(), recorder: "r".into(), name: String::new(), date: String::new(), days: vec![1, 2, 3, 4, 5, 6, 7], start: "20:00".into(), end: "21:00".into(), enabled: true };
         sch.put(s.clone(), |_| Ok(())).unwrap();
-        // The same hour twice records once.
+        // A second slot for the same recorder.
         sch.put(Slot { start: "20:30".into(), end: "21:00".into(), ..s }, |_| Ok(())).unwrap();
         let now = ms("2026-11-16T12:00", &tz);
-        assert_eq!(sch.hours_ahead("r", &tz, now, 7), 7.0);
         assert_eq!(sch.next("r", &tz, now).map(|n| n.1), Some(ms("2026-11-16T20:00", &tz)));
         assert!(sch.active("r", &tz, ms("2026-11-16T20:40", &tz)).is_some());
         assert!(sch.active("r", &tz, ms("2026-11-16T21:00", &tz)).is_none());

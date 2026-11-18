@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, ChevronLeft, ChevronRight, Pencil, Plus, Search, Trash2, Tv, X } from 'lucide-react';
+import { CalendarClock, ChevronLeft, ChevronRight, Pencil, Plus, Search, Trash2, TriangleAlert, Tv, X } from 'lucide-react';
 import { api, can, serverEvents, serverNow, useApp } from '../store';
 import { locale, t, tn } from '../i18n';
 import { navigate } from '../router';
@@ -55,7 +55,8 @@ export function Schedule() {
     };
   }, [load]);
 
-  const programmed = recorders.filter((r) => r.scheduled);
+  // Every recorder can be programmed: a stopped one records during its slots.
+  const programmed = recorders;
   const nameOf = (id: string) => recorders.find((r) => r.id === id)?.name ?? '—';
   const names = useMemo(dayNames, []);
   if (!slots) return <div className="loading">{t('Loading…')}</div>;
@@ -104,8 +105,7 @@ export function Schedule() {
         {programmed.length === 0 ? (
           <div className="empty big">
             <CalendarClock size={22} />
-            <p>{t('No recorder is programmed.')}</p>
-            <p className="muted">{t('In Recorders, edit a recorder and choose “Programmed”: it then records only during its slots and keeps its recordings.')}</p>
+            <p>{t('No recorder yet.')}</p>
             <button className="btn" onClick={() => void navigate('/')}>
               {t('Recorders')}
             </button>
@@ -128,6 +128,7 @@ export function Schedule() {
                 ))}
               </div>
             </div>
+            <TzWarning timezone={timezone} admin={admin} />
             <Calendar
               recorders={programmed.filter((r) => !only || r.id === only)}
               slots={slots}
@@ -159,7 +160,14 @@ export function Schedule() {
                       <td>
                         <strong>{s.name || '—'}</strong>
                       </td>
-                      <td>{nameOf(s.recorder)}</td>
+                      <td>
+                        {nameOf(s.recorder)}
+                        {recorders.find((r) => r.id === s.recorder)?.enabled && (
+                          <span className="muted" title={t('This recorder already records all the time: its slots change nothing while it runs.')}>
+                            {' '}· {t('already recording')}
+                          </span>
+                        )}
+                      </td>
                       <td>{when(s)}</td>
                       <td className="num">
                         {s.start} → {s.end}
@@ -287,7 +295,7 @@ function SlotModal({ slot, initial, recorders, preset, names, timezone, admin, o
           </button>
         </header>
         <div className="set-grid two">
-          <Field label={t('Recorder')} group>
+          <Field label={t('Recorder')} group hint={recorders.find((r) => r.id === s.recorder)?.enabled ? t('It already records all the time: the slot counts when it is stopped.') : t('Stopped: it starts a minute before and stops at the end.')}>
             <Dropdown value={s.recorder} options={recorders.map((r) => ({ value: r.id, label: r.name }))} onChange={(v) => set({ recorder: v })} />
           </Field>
           <Field label={t('Name')}>
@@ -508,8 +516,9 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
           const guide = guides[r.id] ?? [];
           return (
             <div key={r.id} className="sc-cal-row">
-              <div className="sc-cal-name" title={r.name}>
-                {r.name}
+              <div className="sc-cal-name" title={r.enabled ? `${r.name}\n${t('This recorder already records all the time: its slots change nothing while it runs.')}` : r.name}>
+                <span className={`nav-dot ${r.enabled ? 'ok' : ''}`} />
+                <span className="sc-cal-name-t">{r.name}</span>
               </div>
               <div
                 className={`sc-cal-lane ${admin ? 'edit' : ''}`}
@@ -590,6 +599,50 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The slots follow the server's clock: when the browser's differs (a server left in UTC),
+ * say so, and offer to set the server to the browser's time zone.
+ */
+function TzWarning({ timezone, admin }: { timezone: string; admin: boolean }) {
+  const toast = useApp((s) => s.toast);
+  const mine = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const now = serverNow();
+  const [busy, setBusy] = useState(false);
+  if (!mine || tzOffset(now, mine) === tzOffset(now, timezone)) return null;
+  const use = async () => {
+    setBusy(true);
+    try {
+      const sys = await api<{ config?: Record<string, unknown> }>('GET', '/api/system');
+      if (!sys.config) return;
+      await api('PUT', '/api/system/config', { ...sys.config, timezone: mine });
+      toast(t('Time zone set: {tz}', { tz: mine }));
+      // The server restarts its web part; the page reads the new clock.
+      setTimeout(() => location.reload(), 2500);
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="sc-alert sc-tz-alert">
+      <TriangleAlert size={14} />
+      <span>
+        {t('The slots follow the server’s clock: {server} ({sh}), while this computer is in {mine} ({mh}).', {
+          server: timezone,
+          sh: hhmm(now, timezone),
+          mine,
+          mh: hhmm(now, mine),
+        })}
+      </span>
+      {admin && (
+        <button className="btn primary small" disabled={busy} onClick={() => void use()}>
+          {t('Set the server to {tz}', { tz: mine })}
+        </button>
+      )}
     </div>
   );
 }

@@ -38,28 +38,30 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
             break;
         }
         let cfg = cfg_rx.borrow_and_update().clone();
+        // Stopped: it records only during its programmed slots, from a minute before
+        // (a recorder already recording just goes on: its slots change nothing).
         if !cfg.enabled {
-            rec.set_state(State::Off, "");
-            rec.refresh_status();
-            tokio::select! { _ = cfg_rx.changed() => {}, _ = stop_rx.changed() => {} }
-            rec.no_audio.store(false, Ordering::Relaxed);
-            continue;
-        }
-        // Programmed: outside its slots, wait for the next one (the programme may change meanwhile).
-        if cfg.scheduled {
             let now = now_ms();
             let tz = m.tz();
-            if m.schedules.active(&rec.id, &tz, now).is_none() {
-                rec.set_state(State::Waiting, "");
+            if !m.wants(&rec.id, now) {
+                let next = m.schedules.next(&rec.id, &tz, now);
+                rec.set_state(if next.is_some() { State::Waiting } else { State::Off }, "");
                 rec.refresh_status();
-                let wait = m.schedules.next(&rec.id, &tz, now).map(|(_, a, _)| (a - now).clamp(0, 30_000)).unwrap_or(30_000);
+                let wait = next.map(|(_, a, _)| (a - super::PREROLL_MS - now).clamp(0, 30_000)).unwrap_or(30_000);
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_millis(wait as u64)) => {}
-                    _ = cfg_rx.changed() => {}
+                    r = cfg_rx.changed() => { if r.is_ok() { rec.no_audio.store(false, Ordering::Relaxed); } }
                     _ = stop_rx.changed() => {}
                     _ = m.schedules.changed.notified() => {}
                 }
                 continue;
+            }
+            if matches!(rec.status.lock().unwrap().state, State::Off | State::Waiting) {
+                let slot = m.schedules.active(&rec.id, &tz, now).or_else(|| m.schedules.active(&rec.id, &tz, now + super::PREROLL_MS));
+                if let Some((slot, a, b)) = slot {
+                    let hm = |ms: i64| jiff::Timestamp::from_millisecond(ms).map(|t| t.to_zoned(tz.clone()).strftime("%H:%M").to_string()).unwrap_or_default();
+                    tracing::info!("{}: programmed slot \"{}\" {}–{}: recording starts", cfg.name, slot.name, hm(a), hm(b));
+                }
             }
         }
         if matches!(rec.status.lock().unwrap().state, State::Off | State::Waiting) {
@@ -445,7 +447,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, false));
                 measure(m, rec, &run_id, std::mem::take(&mut scan.waves));
                 // Programmed: the slot is over (or was removed).
-                if cfg.scheduled && m.schedules.active(&rec.id, &m.tz(), now_ms()).is_none() {
+                if !cfg.enabled && !m.wants(&rec.id, now_ms()) {
                     tracing::info!("{}: end of the programmed slot", cfg.name);
                     stop_child(&mut child).await;
                     tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
@@ -756,7 +758,7 @@ mod tests {
     use super::*;
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
-        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, scheduled: false, keep_days: 7 }
+        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true }
     }
 
     #[test]

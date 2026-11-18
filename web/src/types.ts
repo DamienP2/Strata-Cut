@@ -26,10 +26,6 @@ export interface Recorder {
   cookies?: string;
   /** web: the platform found from the address (sent by the server). */
   platform?: string;
-  /** Records only during its programmed slots (else a rolling loop). */
-  scheduled?: boolean;
-  /** Programmed: days its recordings are kept. */
-  keepDays?: number;
   /** Loop length, hours. */
   loopHours: number;
   /** Expected bitrate, Mb/s: the loop's space is reserved from it (0 = unknown). */
