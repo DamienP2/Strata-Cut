@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
 import { Clapperboard, Download, Play, Search, Trash2 } from 'lucide-react';
 import { api, can, useApp, useChanged } from '../store';
@@ -21,8 +22,8 @@ function ago(ms: number, now: number, tz: string): string {
 export function Clips() {
   const { user, timezone, toast } = useApp(useShallow((s) => ({ user: s.auth?.user, timezone: s.timezone, toast: s.toast })));
   const [clips, setClips] = useState<Clip[] | null>(null);
-  const [q, setQ] = useState('');
-  const [source, setSource] = useState<string | null>(null);
+  const [q, setQ] = useDisplayPref('clips.q', '');
+  const [source, setSource] = useDisplayPref<string | null>('clips.source', null);
   const [open, setOpen] = useState<Clip | null>(null);
   const load = useCallback(async () => {
     try {

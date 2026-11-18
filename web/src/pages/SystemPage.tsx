@@ -1,4 +1,5 @@
 /* /system/<section>: the list of sections on the left, the open one on the right. */
+import { useDisplayPref } from '../displayPrefs';
 import { lazy, Suspense, useEffect, type ComponentType, type LazyExoticComponent } from 'react';
 import { CloudDownload, Gauge, HardDrive, HeartPulse, Lock, RotateCcw, SlidersHorizontal, Users as UsersIcon } from 'lucide-react';
 import { t } from '../i18n';
@@ -64,11 +65,13 @@ export function SystemPage({ section }: { section?: string }) {
   const open = all.find((s) => s.id === section);
   const admin = can.admin(user);
 
-  // No section (or one this user may not open): the first visible one.
+  // No section (or one this user may not open): the last one opened, else the first visible one.
+  const [last, setLast] = useDisplayPref<string | null>('system.section', null);
   useEffect(() => {
-    if (!open && all.length) void navigate(`/system/${all[0].id}`, true);
+    if (!open && all.length) void navigate(`/system/${all.some((s) => s.id === last) ? last : all[0].id}`, true);
     else if (!all.length) void navigate('/', true);
-  }, [open, all]);
+    else if (open && open.id !== last) setLast(open.id);
+  }, [open, all]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (admin) void loadUsers();

@@ -371,7 +371,15 @@ async fn frame(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id)
             .find(|r| matches!((r.first_wall(), r.last_wall()), (Some(a), Some(b)) if a <= q.at && q.at < b))
             .ok_or_else(|| not_found("image"))?;
         let t = run.t_of(q.at).ok_or_else(|| not_found("image"))?;
-        let p = run.video.segs.iter().find(|p| p.t0 <= t && t < p.t1).ok_or_else(|| not_found("image"))?;
+        // The fragment holding t, else the nearest (a small hole between two fragments).
+        let p = run
+            .video
+            .segs
+            .iter()
+            .find(|p| p.t0 <= t && t < p.t1)
+            .or_else(|| run.video.segs.iter().min_by(|a, b| (a.t0 - t).abs().min((a.t1 - t).abs()).total_cmp(&(b.t0 - t).abs().min((b.t1 - t).abs()))).filter(|p| (p.t0 - t).abs().min((p.t1 - t).abs()) < 2.0))
+            .ok_or_else(|| not_found("image"))?;
+        let t = t.clamp(p.t0, p.t1);
         // One still per 1/10 s is enough for a strip (per second for a wide view).
         let key = if q.fast > 0 { format!("{id}/{}/{}/k{}/{h}", run.meta.id, p.n, t.round() as i64) } else { format!("{id}/{}/{}/{}/{h}", run.meta.id, p.n, (t * 10.0).round() as i64) };
         (run.track_dir(true).join("init.mp4"), run.proxy_path(true, p.n), t, key)
@@ -380,7 +388,16 @@ async fn frame(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id)
         return Ok(file_response(img.to_vec(), "image/jpeg", "private, max-age=86400"));
     }
     let _permit = s.recorders.grabs.acquire().await.map_err(internal)?;
-    let img = grab(&s.recorders.ffmpeg, &init, &seg, t, h, q.fast > 0).await.ok_or_else(|| not_found("image"))?;
+    // Key frame only, else the frame itself, else the fragment's first frame (t past its last one).
+    let ff = &s.recorders.ffmpeg;
+    let mut img = grab(ff, &init, &seg, t, h, q.fast > 0).await;
+    if img.is_none() && q.fast > 0 {
+        img = grab(ff, &init, &seg, t, h, false).await;
+    }
+    if img.is_none() {
+        img = grab(ff, &init, &seg, 0.0, h, false).await;
+    }
+    let img = img.ok_or_else(|| not_found("image"))?;
     let mut cache = frame_cache().lock().unwrap();
     if cache.len() > 4000 {
         cache.clear();

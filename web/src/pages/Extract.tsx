@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
+import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
 import { ArrowLeftToLine, ArrowRightToLine, Check, ChevronsLeft, ChevronsRight, Crosshair, Download, Pause, Play, RadioTower, RotateCcw, Scissors, StepBack, StepForward, Tv, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
@@ -57,12 +58,19 @@ const TILE_STEPS = [200, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 
 /** One still of the strip, loaded through the queue (a few at a time, the newest first). */
 function Still({ url }: { url: string }) {
   const [src, setSrc] = useState<string | null | undefined>(() => cachedStill(url));
+  // A still not there yet (near the live, the fragment is being written): asked again, a few times.
+  const [tries, setTries] = useState(0);
   useEffect(() => {
     const known = cachedStill(url);
     setSrc(known);
-    if (known !== undefined) return;
+    if (known) return;
     return loadStill(url, setSrc);
-  }, [url]);
+  }, [url, tries]);
+  useEffect(() => {
+    if (src !== null || tries >= 5) return;
+    const i = setTimeout(() => setTries((n) => n + 1), 2500);
+    return () => clearTimeout(i);
+  }, [src, tries]);
   return src ? <img src={src} alt="" draggable={false} /> : null;
 }
 
@@ -77,10 +85,14 @@ function useSettled<T>(value: T, ms: number): T {
 
 export function Extract({ recorder }: { recorder?: string }) {
   const recorders = useApp((s) => s.recorders);
-  const id = recorder && recorders.some((r) => r.id === recorder) ? recorder : recorders[0]?.id;
+  // The recorder asked, else the last one opened, else the first.
+  const [last, setLast] = useDisplayPref<string | null>('extract.recorder', null);
+  const known = (x?: string | null) => !!x && recorders.some((r) => r.id === x);
+  const id = known(recorder) ? recorder : known(last) ? last! : recorders[0]?.id;
   useEffect(() => {
-    if (id && id !== recorder) void navigate(`/extract/${id}`, true);
-  }, [id, recorder]);
+    if (id && id !== recorder) void navigate(`/extract/${id}${location.search}`, true);
+    if (id && id !== last) setLast(id);
+  }, [id, recorder]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <section className="sc-edit">
       <Sources current={id} />
@@ -123,7 +135,7 @@ function Editor({ rec }: { rec: Recorder }) {
   const [mIn, setIn] = useState<Mark | null>(null);
   const [mOut, setOut] = useState<Mark | null>(null);
   const [name, setName] = useState('');
-  const [span, setSpan] = useState(ZOOM_RESET);
+  const [span, setSpan] = useDisplayPref('extract.zoom', ZOOM_RESET);
   const [spans, setSpans] = useState<Span[]>([]);
   const [clips, setClips] = useState<Clip[]>([]);
   const [guide, setGuide] = useState<Programme[]>([]);
@@ -244,27 +256,58 @@ function Editor({ rec }: { rec: Recorder }) {
   }, []);
 
   /** In and out on a whole programme (within what is recorded); its name for the clip. */
-  const markProgramme = async (g: Programme) => {
+  const markProgramme = async (g: Programme): Promise<{ a: Mark; b: Mark } | null> => {
     // A clip stays in one continuous recording: the one holding most of the programme.
     const best = spans
       .map((x) => ({ from: Math.max(g.start, x.from), to: Math.min(g.end, x.to) }))
       .filter((x) => x.to > x.from)
       .sort((a, b) => b.to - b.from - (a.to - a.from))[0];
-    if (!best) return toast(t('This programme is not recorded'), 'error');
+    const none = () => {
+      toast(t('This programme is not recorded'), 'error');
+      return null;
+    };
+    if (!best) return none();
     const from = best.from;
     const to = best.to - 1000 / fps;
-    if (to <= from) return toast(t('This programme is not recorded'), 'error');
+    if (to <= from) return none();
     setLive(false);
     const pl = p();
-    if (!pl) return;
+    if (!pl) return null;
     pl.halt();
     await pl.seekWall(to);
     const out = { run: pl.run?.id ?? '', t: pl.t, wall: pl.wallOf(pl.t) };
     await pl.seekWall(from);
-    setIn({ run: pl.run?.id ?? '', t: pl.t, wall: pl.wallOf(pl.t) });
+    const inn = { run: pl.run?.id ?? '', t: pl.t, wall: pl.wallOf(pl.t) };
+    setIn(inn);
     setOut(out);
     setName(g.name);
+    return { a: inn, b: out };
   };
+  /** A recorded programme extracted at once (in and out on it, the clip asked). */
+  const extractProgramme = async (g: Programme) => {
+    const m = await markProgramme(g);
+    if (!m) return;
+    if (m.a.run !== m.b.run) return toast(t('The in and out points must be in the same recording'), 'error');
+    try {
+      await api('POST', '/api/clips', { recorder: rec.id, run: m.a.run, t: m.a.t, frames: Math.round((m.b.t - m.a.t) * fps) + 1, name: g.name });
+      toast(t('Extraction of “{name}” started', { name: g.name }));
+      setName('');
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
+  // The guide's programmes already over and (mostly) recorded: for a quick extraction.
+  const recorded = useMemo(() => {
+    const now = serverNow();
+    // Its share in one continuous recording (a clip stays in one).
+    const share = (g: Programme) => Math.max(0, ...spans.map((x) => Math.min(g.end, x.to) - Math.max(g.start, x.from))) / (g.end - g.start);
+    return guide
+      .filter((g) => g.end <= now)
+      .map((g) => ({ ...g, share: share(g) }))
+      .filter((g) => g.share >= 0.5)
+      .sort((a, b) => b.start - a.start)
+      .slice(0, 30);
+  }, [guide, spans]);
   const markIn = () => pos && setIn(pos);
   const markOut = () => pos && setOut(pos);
   const step = (n: number) => {
@@ -414,9 +457,17 @@ function Editor({ rec }: { rec: Recorder }) {
           </button>
           <div className="spacer" />
           <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
-          <button className={`btn small sc-live-btn ${live ? 'on' : ''}`} title={t('Back to live')} onClick={goLive}>
-            <span className="sc-rec" /> {t('Live')}
-          </button>
+          {/* On the live: a red badge; behind it: how far, and the way back. */}
+          {live && ago < 30_000 ? (
+            <span className="sc-live-on" title={t('The newest frames, as they are recorded')}>
+              <span className="sc-rec" /> {t('LIVE')}
+            </span>
+          ) : (
+            <button className="btn small sc-live-go" title={t('Back to live')} onClick={goLive}>
+              <ChevronsRight size={14} /> {t('Live')}
+              {pos && <span className="sc-live-behind">{behind(ago)}</span>}
+            </button>
+          )}
         </div>
       </div>
       {/* The timeline takes the whole width, under the panels. */}
@@ -432,8 +483,13 @@ function Editor({ rec }: { rec: Recorder }) {
               <span className="set-label">{t('Name')}</span>
               <input value={name} placeholder={mIn ? `${rec.name} ${timecode(mIn.wall, fps, timezone)}` : rec.name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
             </label>
-            <TcField label={t('In')} mark={mIn} fps={fps} timezone={timezone} onTake={markIn} takeTitle={t('Take the current frame  (I)')} icon={<ArrowRightToLine size={14} />} onType={(s) => typed(s, setIn)} />
-            <TcField label={t('Out')} mark={mOut} fps={fps} timezone={timezone} onTake={markOut} takeTitle={t('Take the current frame  (O)')} icon={<ArrowLeftToLine size={14} />} onType={(s) => typed(s, setOut)} />
+            <TcField label={t('In')} mark={mIn} fps={fps} timezone={timezone} onTake={markIn} takeTitle={t('Take the current frame  (I)')} icon={<ArrowRightToLine size={14} />} onType={(s) => typed(s, setIn)} onClear={() => setIn(null)} />
+            <TcField label={t('Out')} mark={mOut} fps={fps} timezone={timezone} onTake={markOut} takeTitle={t('Take the current frame  (O)')} icon={<ArrowLeftToLine size={14} />} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} />
+            {(mIn || mOut) && (
+              <button type="button" className="btn small ghost sc-clear-marks" onClick={() => { setIn(null); setOut(null); setName(''); }}>
+                <X size={13} /> {t('Clear the in and out points')}
+              </button>
+            )}
             {onAir && (
               <button type="button" className="btn small sc-prog-btn" title={t('In and out on the whole programme under the playhead')} onClick={() => void markProgramme(onAir)}>
                 <Tv size={13} /> <span>{t('Whole programme: {name}', { name: onAir.name })}</span>
@@ -451,12 +507,39 @@ function Editor({ rec }: { rec: Recorder }) {
           </div>
         </section>
         {myJobs.length > 0 && <Jobs jobs={myJobs} />}
+        {recorded.length > 0 && (
+          <section className="insp-section">
+            <header>
+              <span>{t('Recorded programmes')}</span>
+            </header>
+            <div className="sc-progs">
+              {recorded.map((g) => (
+                <div key={`${g.id}-${g.start}`} className="sc-prog" title={g.text}>
+                  <button type="button" className="sc-prog-pick" onClick={() => void markProgramme(g)} title={t('In and out on it')}>
+                    <span className="sc-prog-time">
+                      {clock(g.start, timezone).slice(0, 5)}–{clock(g.end, timezone).slice(0, 5)}
+                    </span>
+                    <span className="sc-prog-name">
+                      {g.name}
+                      {g.share < 0.98 && <em className="sc-prog-part" title={t('Part of it was not recorded')}> · {Math.round(g.share * 100)} %</em>}
+                    </span>
+                  </button>
+                  {can.extract(user) && (
+                    <button type="button" className="icon-btn ghost" title={t('Extract it now')} onClick={() => void extractProgramme(g)}>
+                      <Scissors size={13} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
       </aside>
     </>
   );
 }
 
-function TcField({ label, mark, fps, timezone, onTake, takeTitle, icon, onType }: { label: string; mark: Mark | null; fps: number; timezone: string; onTake: () => void; takeTitle: string; icon: React.ReactNode; onType: (s: string) => void }) {
+function TcField({ label, mark, fps, timezone, onTake, takeTitle, icon, onType, onClear }: { label: string; mark: Mark | null; fps: number; timezone: string; onTake: () => void; takeTitle: string; icon: React.ReactNode; onType: (s: string) => void; onClear: () => void }) {
   const shown = mark ? timecode(mark.wall, fps, timezone) : '';
   const [text, setText] = useState(shown);
   useEffect(() => setText(shown), [shown]);
@@ -476,6 +559,11 @@ function TcField({ label, mark, fps, timezone, onTake, takeTitle, icon, onType }
           }}
           onBlur={() => text !== shown && text.trim() && onType(text)}
         />
+        {mark && (
+          <button type="button" className="icon-btn ghost" title={t('Clear')} onClick={(e) => { e.preventDefault(); onClear(); }}>
+            <X size={13} />
+          </button>
+        )}
         <button type="button" className="icon-btn" title={takeTitle} onClick={onTake}>
           {icon}
         </button>
@@ -874,7 +962,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         <div className="sc-strip">
           {strip.out.map((w) => (
             <div key={w} className="sc-tile" style={{ left: `${x(w - strip.d / 2)}%`, width: `${(strip.d / span) * 100}%` }}>
-              {recorded(w) && w < now - 6000 && <Still url={`/api/recorders/${rec.id}/frame.jpg?at=${Math.round(w)}&h=54${strip.d >= 2000 ? '&fast=1' : ''}`} />}
+              {recorded(w) && w < now - 2000 && <Still url={`/api/recorders/${rec.id}/frame.jpg?at=${Math.round(w)}&h=54${strip.d >= 2000 ? '&fast=1' : ''}`} />}
             </div>
           ))}
         </div>

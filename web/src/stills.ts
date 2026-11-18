@@ -46,8 +46,8 @@ function pump() {
     fetch(job.url, { credentials: 'same-origin', signal: job.ctrl.signal })
       .then(async (r) => {
         const src = r.ok ? URL.createObjectURL(await r.blob()) : null;
-        // A missing still is remembered too (not asked again); a server error is not.
-        if (r.ok || r.status === 404) remember(job.url, src);
+        // Only stills found are remembered: a missing one (not written yet near the live) is asked again later.
+        if (r.ok) remember(job.url, src);
         if (!job.dead) job.done(src);
         else if (src && !r.ok) URL.revokeObjectURL(src);
       })

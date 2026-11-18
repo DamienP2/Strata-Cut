@@ -4,6 +4,7 @@
  * instead of a rolling loop. A slot can be taken from the source's programme guide.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
 import { CalendarClock, ChevronLeft, ChevronRight, Pencil, Plus, Search, Trash2, TriangleAlert, Tv, X } from 'lucide-react';
 import { api, can, serverEvents, serverNow, useApp } from '../store';
@@ -33,8 +34,8 @@ export function Schedule() {
   const { recorders, user, timezone, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, timezone: s.timezone, toast: s.toast })));
   const admin = can.admin(user);
   const [slots, setSlots] = useState<Slot[] | null>(null);
-  const [q, setQ] = useState('');
-  const [only, setOnly] = useState<string | null>(null);
+  const [q, setQ] = useDisplayPref('schedule.q', '');
+  const [only, setOnly] = useDisplayPref<string | null>('schedule.recorder', null);
   const [edit, setEdit] = useState<{ slot: Slot | null; initial?: Partial<Slot> } | null>(null);
   const load = useCallback(async () => {
     try {
@@ -438,8 +439,8 @@ function startOfDay(ms: number, tz: string): number {
  */
 function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
   // 6 h by default (from an hour ago), 12 h, a day, a week.
-  const [view, setView] = useState<View>('6h');
-  const [anchor, setAnchor] = useState(() => anchorFor('6h', serverNow(), timezone));
+  const [view, setView] = useDisplayPref<View>('schedule.view', '6h');
+  const [anchor, setAnchor] = useState(() => anchorFor(view, serverNow(), timezone));
   const span = SPANS[view];
   const hourly = view !== 'week';
   const from = anchor;

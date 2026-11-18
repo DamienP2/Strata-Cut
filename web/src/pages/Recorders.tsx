@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
 import { CalendarClock, Copy, Eraser, MoreHorizontal, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
@@ -92,8 +93,9 @@ function useTick(ms: number) {
 export function Recorders() {
   const { recorders, status, user } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status, user: s.auth?.user })));
   const admin = can.admin(user);
-  const [q, setQ] = useState('');
-  const [chip, setChip] = useState<'all' | 'recording' | 'nosignal'>('all');
+  // The search and the filter stay as the user left them.
+  const [q, setQ] = useDisplayPref('recorders.q', '');
+  const [chip, setChip] = useDisplayPref<'all' | 'recording' | 'nosignal'>('recorders.filter', 'all');
   /** The modal: a new recorder (from = the one duplicated), or one to edit. */
   const [edit, setEdit] = useState<{ rec: Recorder | null; from?: Recorder } | null>(null);
   const counts = {

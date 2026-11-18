@@ -814,3 +814,18 @@ a.btn { color: inherit; }
 .sc-cal-past { position: absolute; left: 0; top: 0; bottom: 0; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-3) 9%, transparent) 0 4px, transparent 4px 9px); pointer-events: none; }
 .sc-pill.link { border: none; cursor: pointer; }
 .sc-pill.link:hover { background: color-mix(in srgb, var(--live) 26%, transparent); }
+
+/* Extraction: the live — a badge when on it, a clear way back when behind */
+.sc-live-on { display: inline-flex; align-items: center; gap: 7px; height: var(--h-control-dense); padding: 0 12px; border-radius: 6px; background: var(--live); color: #fff; font: 700 12px Inter, system-ui, sans-serif; letter-spacing: 0.08em; }
+.sc-live-on .sc-rec { background: #fff; }
+.sc-live-go { gap: 6px; border-color: color-mix(in srgb, var(--live) 50%, var(--line)); }
+.sc-live-go:hover:not(:disabled) { background: color-mix(in srgb, var(--live) 14%, transparent); }
+.sc-live-behind { font: 11px var(--mono); color: var(--text-3); margin-left: 2px; }
+.sc-clear-marks { align-self: flex-start; }
+.sc-progs { display: flex; flex-direction: column; padding: 4px 8px 10px; gap: 1px; max-height: 320px; overflow: auto; }
+.sc-prog { display: flex; align-items: center; gap: 4px; border-radius: 6px; }
+.sc-prog:hover { background: var(--panel-2); }
+.sc-prog-pick { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 8px; border: none; background: none; text-align: left; cursor: pointer; color: var(--text); }
+.sc-prog-time { font: 11px var(--mono); color: var(--text-3); }
+.sc-prog-name { max-width: 100%; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-prog-part { font-style: normal; color: var(--warn); font-size: 11px; }
