@@ -11,7 +11,8 @@ on:
         required: true
 
 env:
-  TAG: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', inputs.version) || github.ref_name }}
+  # "0.2.1", "v0.2.1" or the pushed tag; each job writes the clean tag (v0.2.1) to $TAG.
+  TAG_IN: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
 
 permissions:
   contents: write
@@ -20,6 +21,8 @@ jobs:
   web:
     runs-on: ubuntu-22.04
     steps:
+      - name: Tag
+        run: echo "TAG=v$(echo "$TAG_IN" | tr -d ' ' | sed 's/^[vV]*//')" >>"$GITHUB_ENV"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -52,6 +55,8 @@ jobs:
             runner: ubuntu-22.04-arm
     runs-on: ${{ matrix.runner }}
     steps:
+      - name: Tag
+        run: echo "TAG=v$(echo "$TAG_IN" | tr -d ' ' | sed 's/^[vV]*//')" >>"$GITHUB_ENV"
       - uses: actions/checkout@v4
       - name: Version from the tag
         id: version
@@ -84,6 +89,8 @@ jobs:
     needs: build
     runs-on: ubuntu-22.04
     steps:
+      - name: Tag
+        run: echo "TAG=v$(echo "$TAG_IN" | tr -d ' ' | sed 's/^[vV]*//')" >>"$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           pattern: package-*
