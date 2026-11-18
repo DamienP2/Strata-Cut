@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { cachedStill, loadStill } from '../stills';
 import { useShallow } from 'zustand/react/shallow';
 import { ArrowLeftToLine, ArrowRightToLine, Check, ChevronsLeft, ChevronsRight, Crosshair, Download, Pause, Play, RadioTower, RotateCcw, Scissors, StepBack, StepForward, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
@@ -44,6 +45,18 @@ function spanLabel(ms: number): string {
 const TILE_STEPS = [200, 500, 1000, 2000, 5000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 10_800_000];
 
 /** `value`, once it has not changed for `ms`. */
+/** One still of the strip, loaded through the queue (a few at a time, the newest first). */
+function Still({ url }: { url: string }) {
+  const [src, setSrc] = useState<string | null | undefined>(() => cachedStill(url));
+  useEffect(() => {
+    const known = cachedStill(url);
+    setSrc(known);
+    if (known !== undefined) return;
+    return loadStill(url, setSrc);
+  }, [url]);
+  return src ? <img src={src} alt="" draggable={false} /> : null;
+}
+
 function useSettled<T>(value: T, ms: number): T {
   const [v, setV] = useState(value);
   useEffect(() => {
@@ -759,7 +772,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         <div className="sc-strip">
           {strip.out.map((w) => (
             <div key={w} className="sc-tile" style={{ left: `${x(w - strip.d / 2)}%`, width: `${(strip.d / span) * 100}%` }}>
-              {recorded(w) && w < now - 6000 && <img src={`/api/recorders/${rec.id}/frame.jpg?at=${Math.round(w)}&h=54`} alt="" draggable={false} onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />}
+              {recorded(w) && w < now - 6000 && <Still url={`/api/recorders/${rec.id}/frame.jpg?at=${Math.round(w)}&h=54${strip.d >= 2000 ? '&fast=1' : ''}`} />}
             </div>
           ))}
         </div>

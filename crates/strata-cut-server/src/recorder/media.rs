@@ -208,40 +208,50 @@ struct WaveQuery {
 async fn wave(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<WaveQuery>) -> ApiResult<Json<Value>> {
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let n = q.n.clamp(1, 4000);
-    if q.to <= q.from {
+    if q.to <= q.from || q.to.is_nan() || q.from.is_nan() {
         return Err(bad("empty window"));
     }
-    let per = (q.to - q.from) / n as f64;
+    // A whole loop holds millions of levels: off the async threads, a column at a time.
+    let out = tokio::task::spawn_blocking(move || wave_columns(&rec, q.from, q.to, n)).await.map_err(internal)?;
+    Ok(Json(json!({"from": q.from, "to": q.to, "levels": out})))
+}
+
+/// The peak of each of `n` columns between `from` and `to` (-1 where nothing was recorded).
+fn wave_columns(rec: &super::Rec, from: f64, to: f64, n: usize) -> Vec<i16> {
+    let per = (to - from) / n as f64;
     let mut out = vec![-1i16; n];
     let step = 1000.0 / super::index::wave::PER_SECOND;
     let runs = rec.runs.read().unwrap();
     for run in runs.iter() {
         let (Some(first), Some(last)) = (run.first_wall(), run.last_wall()) else { continue };
-        if last < q.from || first > q.to {
+        if last < from || first > to {
             continue;
         }
         for seg in &run.audio.segs {
             let Some(w) = run.audio.waves.get(&seg.n) else { continue };
             let Some(w0) = run.wall_of(seg.t0) else { continue };
             let w1 = w0 + w.len() as f64 * step;
-            if w1 < q.from || w0 > q.to {
+            if w1 < from || w0 > to {
                 continue;
             }
-            // Skip the values before the window at once.
-            let skip = if w0 < q.from { ((q.from - w0) / step) as usize } else { 0 };
-            for (j, v) in w.iter().enumerate().skip(skip) {
-                let at = w0 + j as f64 * step;
-                if at >= q.to {
+            // The levels inside the window, then one slice per column (its peak at once).
+            let mut j = if w0 < from { ((from - w0) / step).ceil() as usize } else { 0 };
+            let j_end = (((to - w0) / step).ceil().max(0.0) as usize).min(w.len());
+            while j < j_end {
+                let i = (((w0 + j as f64 * step) - from) / per) as usize;
+                if i >= n {
                     break;
                 }
-                let i = ((at - q.from) / per) as usize;
-                if let Some(o) = out.get_mut(i) {
-                    *o = (*o).max(*v as i16);
+                let col_end = from + (i + 1) as f64 * per;
+                let next = ((((col_end - w0) / step).ceil().max(0.0)) as usize).clamp(j + 1, j_end);
+                if let Some(peak) = w[j..next].iter().max() {
+                    out[i] = out[i].max(*peak as i16);
                 }
+                j = next;
             }
         }
     }
-    Ok(Json(json!({"from": q.from, "to": q.to, "levels": out})))
+    out
 }
 
 #[derive(Deserialize)]
@@ -249,6 +259,9 @@ struct At {
     at: f64,
     #[serde(default = "default_h")]
     h: u32,
+    /// A still for a wide view: the nearest key frame is enough (much faster to decode).
+    #[serde(default)]
+    fast: u8,
 }
 fn default_h() -> u32 {
     72
@@ -272,15 +285,15 @@ async fn frame(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id)
             .ok_or_else(|| not_found("image"))?;
         let t = run.t_of(q.at).ok_or_else(|| not_found("image"))?;
         let p = run.video.segs.iter().find(|p| p.t0 <= t && t < p.t1).ok_or_else(|| not_found("image"))?;
-        // One still per 1/10 s is enough for a strip.
-        let key = format!("{id}/{}/{}/{}/{h}", run.meta.id, p.n, (t * 10.0).round() as i64);
+        // One still per 1/10 s is enough for a strip (per second for a wide view).
+        let key = if q.fast > 0 { format!("{id}/{}/{}/k{}/{h}", run.meta.id, p.n, t.round() as i64) } else { format!("{id}/{}/{}/{}/{h}", run.meta.id, p.n, (t * 10.0).round() as i64) };
         (run.track_dir(true).join("init.mp4"), run.proxy_path(true, p.n), t, key)
     };
     if let Some(img) = frame_cache().lock().unwrap().get(&key).cloned() {
         return Ok(file_response(img.to_vec(), "image/jpeg", "private, max-age=86400"));
     }
     let _permit = s.recorders.grabs.acquire().await.map_err(internal)?;
-    let img = grab(&s.recorders.ffmpeg, &init, &seg, t, h).await.ok_or_else(|| not_found("image"))?;
+    let img = grab(&s.recorders.ffmpeg, &init, &seg, t, h, q.fast > 0).await.ok_or_else(|| not_found("image"))?;
     let mut cache = frame_cache().lock().unwrap();
     if cache.len() > 4000 {
         cache.clear();
@@ -289,13 +302,22 @@ async fn frame(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id)
     Ok(file_response(img, "image/jpeg", "private, max-age=86400"))
 }
 
-async fn grab(ffmpeg: &str, init: &Path, seg: &Path, t: f64, h: u32) -> Option<Vec<u8>> {
+async fn grab(ffmpeg: &str, init: &Path, seg: &Path, t: f64, h: u32, fast: bool) -> Option<Vec<u8>> {
     let input = format!("concat:{}|{}", init.display(), seg.display());
-    let out = tokio::process::Command::new(ffmpeg)
-        .args(["-v", "error", "-copyts", "-i", &input, "-vf"])
-        .arg(format!("select='gte(t,{:.4})',scale=-2:{h}", t - 0.02))
+    let mut cmd = tokio::process::Command::new(ffmpeg);
+    cmd.args(["-v", "error", "-threads", "1"]);
+    // Key frames only (one per second in the proxy): no decoding of the frames between.
+    if fast {
+        cmd.args(["-skip_frame", "nokey"]);
+    }
+    let from = if fast { t - 0.6 } else { t - 0.02 };
+    let out = cmd
+        .args(["-copyts", "-i", &input, "-vf"])
+        .arg(format!("select='gte(t,{from:.4})',scale=-2:{h}"))
         .args(["-frames:v", "1", "-q:v", "6", "-f", "image2pipe", "-c:v", "mjpeg", "pipe:1"])
         .stdin(std::process::Stdio::null())
+        // A still nobody waits for any more (the view moved) is not finished.
+        .kill_on_drop(true)
         .output()
         .await
         .ok()?;
