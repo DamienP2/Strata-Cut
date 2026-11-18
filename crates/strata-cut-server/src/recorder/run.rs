@@ -74,7 +74,12 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                                 }
                             }
                         }
-                        rec.set_state(State::Nosignal, if cfg.protocol == Protocol::Srt && cfg.mode == Mode::Caller { diagnosis.clone() } else { String::new() });
+                        let reason = match cfg.protocol {
+                            Protocol::Srt if cfg.mode == Mode::Caller => diagnosis.clone(),
+                            Protocol::Udp | Protocol::Rtp => udp_reason(&message),
+                            _ => String::new(),
+                        };
+                        rec.set_state(State::Nosignal, reason);
                     }
                 }
                 rec.refresh_status();
@@ -89,6 +94,26 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
     }
     rec.set_state(State::Off, "");
     rec.refresh_status();
+}
+
+/// The most telling line of FFmpeg's last words (not the generic "Error opening input files").
+fn best_line(lines: &[String]) -> String {
+    let generic = |l: &str| {
+        let l = clean_message(l);
+        l.is_empty() || l.starts_with("Error opening input") || l.starts_with("Exiting") || l.starts_with("Conversion failed")
+    };
+    lines.iter().rev().find(|l| !generic(l)).or_else(|| lines.iter().rev().find(|l| !l.trim().is_empty())).cloned().unwrap_or_default()
+}
+
+/// What a failing UDP / RTP input means.
+pub fn udp_reason(message: &str) -> String {
+    if message.contains("IP_ADD_MEMBERSHIP") || message.contains("No such device") {
+        "udp: cannot join the multicast on this network card".into()
+    } else if message.contains("Input/output error") || message.contains("timed out") || message.is_empty() {
+        "udp: nothing received (address, network card, multicast)".into()
+    } else {
+        String::new()
+    }
 }
 
 /// Why an SRT call fails: FFmpeg hides it, SRT tells it in debug logs.
@@ -258,7 +283,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     tracing::info!("{}: no audio in the source", cfg.name);
                     break Outcome::Exited { had_data: scan.had_data, message: String::new() };
                 }
-                let message = lines.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
+                let message = best_line(&lines);
                 match status {
                     Ok(s) if s.success() => tracing::info!("{}: the source stopped", cfg.name),
                     Ok(s) => tracing::warn!("{}: ffmpeg ended ({s}): {message}", cfg.name),
@@ -553,6 +578,14 @@ mod tests {
         let mut c = cfg(Protocol::Srt, Mode::Listener);
         c.passphrase = "secret pass&1".into();
         assert_eq!(input_args(&c).last().unwrap(), "srt://0.0.0.0:9000?mode=listener&latency=120000&passphrase=secret%20pass%261");
+    }
+
+    #[test]
+    fn udp_reasons() {
+        let lines: Vec<String> = ["[udp @ 0x1] setsockopt(IP_ADD_MEMBERSHIP): No such device", "Error opening input file udp://x.", "Error opening input files: No such device"].map(String::from).to_vec();
+        assert!(best_line(&lines).contains("IP_ADD_MEMBERSHIP"));
+        assert_eq!(udp_reason(&best_line(&lines)), "udp: cannot join the multicast on this network card");
+        assert_eq!(udp_reason("Error opening input files: Input/output error"), "udp: nothing received (address, network card, multicast)");
     }
 
     #[test]

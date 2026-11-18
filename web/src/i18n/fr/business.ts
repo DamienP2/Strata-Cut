@@ -153,6 +153,8 @@ export const business: Record<string, string> = {
   'the clip crosses a gap in the recording': 'L’extrait traverse un trou de l’enregistrement.',
   'the recorder was deleted': 'L’enregistreur a été supprimé.',
   cancelled: 'Annulé',
+  'udp: cannot join the multicast on this network card': 'UDP\u00a0: impossible de rejoindre le multicast sur cette carte réseau',
+  'udp: nothing received (address, network card, multicast)': 'UDP\u00a0: rien n’est reçu (adresse, carte réseau, multicast)',
   'srt: wrong passphrase': 'SRT\u00a0: mauvaise phrase secrète',
   'srt: passphrase missing on one side': 'SRT\u00a0: phrase secrète absente d’un côté',
   'srt: the source accepts no more connections': 'SRT\u00a0: la source n’accepte plus de connexion',
