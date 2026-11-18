@@ -256,7 +256,7 @@ pub mod wave {
     pub fn levels(pcm: &[u8]) -> Vec<u8> {
         pcm.chunks(160)
             .map(|c| {
-                let peak = c.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs()).max().unwrap_or(0);
+                let peak = c.as_chunks::<2>().0.iter().map(|b| i16::from_le_bytes(*b).unsigned_abs()).max().unwrap_or(0);
                 level(peak as f64 / 32768.0)
             })
             .collect()
