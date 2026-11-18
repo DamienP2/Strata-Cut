@@ -109,6 +109,8 @@ export class LoopPlayer {
   constructor(
     readonly video: HTMLVideoElement,
     readonly recorder: string,
+    /** The server's clock (the browser's may be off: the live edge is the server's). */
+    readonly now: () => number = Date.now,
   ) {
     const tick = () => {
       if (this.alive.dead) return;
@@ -144,8 +146,9 @@ export class LoopPlayer {
     void this.fill();
   };
 
-  /** Stalled at the end of a run: go on with the next one. */
+  /** Stalled: load what is missing here (no timeupdate comes while waiting); at the end of a run, go on with the next one. */
   private onWaiting = () => {
+    void this.fill();
     const r = this.run;
     if (!r || r.live) return;
     const last = r.video?.segs.at(-1);
@@ -255,9 +258,11 @@ export class LoopPlayer {
     if (!r || this.alive.dead) return;
     // Live: when the source came back, the recording goes on in a new run.
     if (this.live) {
-      const now = Date.now();
-      const latest = (await this.fetchInfo(now - 30_000, now + 5_000)).at(-1);
-      if (latest && latest.id !== r.id && latest.to - latest.from > 4000) {
+      const now = this.now();
+      // The newest recording (the one that ends last), only if it is newer than this one.
+      const runs = await this.fetchInfo(now - 120_000, now + 10_000);
+      const latest = runs.reduce<RunInfo | null>((a, x) => (!a || x.to > a.to ? x : a), null);
+      if (latest && latest.id !== r.id && latest.to > r.to && latest.to - latest.from > 4000) {
         await this.open(latest);
         if (this.live) await this.seekWall(latest.to - 4000, true);
         return;
@@ -269,9 +274,16 @@ export class LoopPlayer {
     if (same) this.merge(same);
     if (this.live && this.bufs[0]) {
       const lastEnd = Math.max(...[...this.bufs[0].segs.values()].map((s) => s[2]));
-      await this.fill(lastEnd - 6, 8);
-      // Stay close to the edge.
-      if (!this.video.paused && lastEnd - (this.video.currentTime + this.base) > 10) this.video.currentTime = lastEnd - 4 - this.base;
+      const cur = this.video.currentTime + this.base;
+      // Everything from where it plays to the edge (a stall gets no timeupdate to load it).
+      await this.fill(cur, Math.max(8, lastEnd - cur + 2));
+      // Stay close to the edge: too far behind, or stalled while the edge is further.
+      const behind = lastEnd - (this.video.currentTime + this.base);
+      const stalled = this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
+      if (!this.video.paused && (behind > 10 || (stalled && behind > 5))) {
+        this.video.currentTime = lastEnd - 4 - this.base;
+        void this.video.play().catch(() => {});
+      }
     }
   }
 
@@ -372,6 +384,14 @@ export class LoopPlayer {
   async goLive(now: number) {
     this.stopReverse();
     this.live = true;
-    await this.seekWall(now - 8000, true);
+    // The newest recording, asked afresh (the one in hand may have ended since: a cut, a restart).
+    const runs = await this.fetchInfo(now - 120_000, now + 10_000);
+    const latest = runs.reduce<RunInfo | null>((a, x) => (!a || x.to > a.to ? x : a), null);
+    if (!latest) return void (await this.seekWall(now - 8000, true));
+    if (latest.id !== this.run?.id) await this.open(latest);
+    else this.merge(latest);
+    if (!this.live) return;
+    // A few seconds behind its last frame (never past what is recorded).
+    await this.seekWall(Math.max(latest.from, Math.min(now - 8000, latest.to - 4000)), true);
   }
 }

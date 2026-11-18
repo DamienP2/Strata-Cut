@@ -153,7 +153,7 @@ function Editor({ rec }: { rec: Recorder }) {
   // The player lives as long as this recorder is open.
   useEffect(() => {
     const v = videoRef.current!;
-    const p = new LoopPlayer(v, rec.id);
+    const p = new LoopPlayer(v, rec.id, serverNow);
     playerRef.current = p;
     let frame = 0;
     let last: Mark | null = null;

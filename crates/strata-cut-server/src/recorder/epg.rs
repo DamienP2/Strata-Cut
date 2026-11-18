@@ -215,7 +215,7 @@ pub fn dvb_text(b: &[u8]) -> String {
     };
     let raw = match enc {
         Enc::Utf8 => String::from_utf8_lossy(body).into_owned(),
-        Enc::Ucs2 => body.chunks_exact(2).filter_map(|c| char::from_u32(u16::from_be_bytes([c[0], c[1]]) as u32)).collect(),
+        Enc::Ucs2 => body.as_chunks::<2>().0.iter().filter_map(|c| char::from_u32(u16::from_be_bytes(*c) as u32)).collect(),
         Enc::Latin => body.iter().map(|&c| c as char).collect(),
         Enc::Iso6937 => iso6937(body),
     };
