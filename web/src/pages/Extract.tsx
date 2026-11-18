@@ -407,8 +407,9 @@ function Editor({ rec }: { rec: Recorder }) {
             <span className="sc-rec" /> {t('Live')}
           </button>
         </div>
-        <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
       </div>
+      {/* The timeline takes the whole width, under the panels. */}
+      <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
 
       <aside className="panel right">
         <section className="insp-section">
@@ -878,7 +879,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         {/* The in and out points, each shown as soon as it is set. */}
         {mIn && <div className="sc-mark in" style={{ left: `${x(mIn.wall)}%` }}><b>{t('In').charAt(0)}</b></div>}
         {mOut && <div className="sc-mark out" style={{ left: `${x(mOut.wall + 1000 / fps)}%` }}><b>{t('Out').charAt(0)}</b></div>}
-        {pos && <div className="sc-head" style={{ left: `${x(pos.wall)}%` }} />}
+        {pos && x(pos.wall) >= 0 && x(pos.wall) <= 100 && <div className="sc-head" style={{ left: `${x(pos.wall)}%` }} />}
       </div>
     </div>
   );

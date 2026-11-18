@@ -771,3 +771,12 @@ a.btn { color: inherit; }
 .sc-cal-name { gap: 8px; }
 .sc-cal-name .nav-dot { flex: none; }
 .sc-cal-name-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Extraction: the panels above, the timeline across the whole width below */
+.sc-edit { grid-template-rows: minmax(0, 1fr) auto; grid-template-areas: 'nav center side' 'tl tl tl'; }
+.sc-edit > .lib-nav { grid-area: nav; min-height: 0; }
+.sc-edit > .sc-center { grid-area: center; }
+.sc-edit > .panel.right { grid-area: side; min-height: 0; overflow: auto; }
+.sc-edit > .sc-timeline { grid-area: tl; min-width: 0; }
+/* Nothing of the timeline goes past its sides (playhead, in and out points out of view). */
+.sc-tracks { overflow-x: clip; }
