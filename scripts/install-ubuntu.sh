@@ -495,7 +495,7 @@ if [ -n "$ADMIN" ]; then
   step "Compte administrateur « $ADMIN »"
   if [ -z "$TTY" ]; then
     warn "pas de terminal pour saisir le mot de passe : sudo strata-cut user add $ADMIN --data-dir $DATA_DIR"
-  elif "$BIN" user list --data-dir "$DATA_DIR" 2>/dev/null | grep -qw "$ADMIN"; then
+  elif "$BIN" user list --data-dir "$DATA_DIR" 2>/dev/null | awk -v n="$ADMIN" 'NR > 1 && $1 == n { f = 1 } END { exit !f }'; then
     ok "le compte « $ADMIN » existe déjà"
   else
     "$BIN" user add "$ADMIN" --role admin --data-dir "$DATA_DIR" <"$TTY"

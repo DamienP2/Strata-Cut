@@ -2,7 +2,7 @@
 
 Ce guide installe Strata Cut sur un serveur Ubuntu Server 22.04 ou 24.04 (24.04 conseillé), comme service qui démarre tout seul et redémarre en cas de problème. Comptez 15 à 20 minutes, dont l'essentiel en compilation.
 
-Le script `scripts/install-ubuntu.sh` fait tout le travail ; les étapes ci-dessous expliquent quoi préparer, quoi lancer et quoi vérifier.
+L'installation tient en une commande (§ 2) ; les autres étapes expliquent quoi préparer avant et quoi vérifier après.
 
 ---
 
@@ -65,92 +65,66 @@ df -h /srv/strata-cut
 
 ---
 
-## 2. Mettre le script sur le serveur
+## 2. Installer en une commande
 
-Le script télécharge lui-même le code par SSH depuis GitHub (`git@github.com:DamienP2/Strata-Cut.git`). Il suffit de copier ce seul fichier sur le serveur, au choix :
+Connectez-vous au serveur en SSH avec votre compte habituel (pas root), puis collez :
 
-- **depuis un poste qui a le dépôt** :
-  ```bash
-  scp scripts/install-ubuntu.sh utilisateur@serveur:
-  ```
-- **depuis GitHub dans le navigateur** : ouvrez `scripts/install-ubuntu.sh`, cliquez **Raw**, copiez tout, puis sur le serveur :
-  ```bash
-  nano install-ubuntu.sh   # collez, puis Ctrl-O, Entrée, Ctrl-X
-  ```
-
-Le serveur doit pouvoir sortir en SSH vers `github.com` (port 22). Vérification :
 ```bash
-ssh -T git@github.com
+curl -fsSL https://raw.githubusercontent.com/DamienP2/Strata-Cut/HEAD/scripts/install-ubuntu.sh | sudo bash -s -- --admin admin
 ```
-Une réponse « Permission denied (publickey) » est normale à ce stade : elle prouve que GitHub répond. Un délai dépassé signifie que le pare-feu de sortie bloque le port 22.
 
-### L'accès au dépôt privé : la clé de déploiement
+C'est tout. Comptez 5 à 15 minutes selon la machine (la compilation prend l'essentiel). À la fin, le script demande deux fois le mot de passe du compte `admin` (8 caractères au moins), puis affiche les adresses de l'interface web.
 
-À la première installation, si le compte n'a pas déjà une clé SSH acceptée par GitHub, le script :
-
-1. vérifie la clé d'hôte de `github.com` (empreinte publiée par GitHub), pour ne pas se connecter à un faux serveur ;
-2. crée une clé dédiée `~/.ssh/strata-cut_deploy` et l'affiche ;
-3. vous demande de l'ajouter au dépôt :
-   - GitHub › dépôt **Strata-Cut** › **Settings** › **Deploy keys** › **Add deploy key** (le script affiche le lien direct) ;
-   - **Title** : `Strata Cut <nom du serveur>` ;
-   - **Key** : la ligne `ssh-ed25519 …` affichée ;
-   - ne cochez **pas** « Allow write access » : le serveur n'a besoin que de lire ;
-4. attend que vous appuyiez sur Entrée, vérifie l'accès, puis clone le dépôt dans `~/Strata-Cut`.
-
-La clé ne sert qu'à ce dépôt et en lecture seule ; elle se retire à tout moment dans les **Deploy keys**. Le dépôt cloné la réutilise pour les mises à jour.
-
-Vous avez déjà votre propre clé SSH sur le serveur ? Le script s'en sert et ne crée rien. Pour utiliser l'agent SSH de votre poste (connexion `ssh -A`), lancez le script avec `sudo --preserve-env=SSH_AUTH_SOCK bash install-ubuntu.sh`.
-
-Lancez le script depuis votre compte habituel (pas root) : il télécharge et compile avec ce compte, et n'utilise `sudo` que pour installer.
-
-## 3. Lancer l'installation
-
-Le cas le plus courant (boucles sur le disque dédié, compte admin créé à la fin, ports SRT et RTMP ouverts) :
+Le cas conseillé, avec les boucles sur le disque dédié (§ 1) et les ports des sources ouverts dans le pare-feu :
 
 ```bash
-sudo bash install-ubuntu.sh \
+curl -fsSL https://raw.githubusercontent.com/DamienP2/Strata-Cut/HEAD/scripts/install-ubuntu.sh | sudo bash -s -- \
+  --admin admin \
   --recordings-dir /srv/strata-cut/loops \
   --clips-dir /srv/strata-cut/clips \
-  --admin admin \
   --open-ports "9000-9010/udp,1935/tcp"
 ```
 
-Le script :
+Tout ce qui suit `bash -s --` sont les options du script (tableau ci-dessous). Sans `curl`, `wget -qO- <même adresse> | sudo bash -s -- …` fait la même chose.
+
+> Prudence habituelle : cette commande exécute en administrateur un script téléchargé. Vous pouvez d'abord le lire : `curl -fsSL https://raw.githubusercontent.com/DamienP2/Strata-Cut/HEAD/scripts/install-ubuntu.sh | less`.
+
+### Ce que fait le script
 
 1. vérifie le système (Ubuntu, 64 bits, systemd) ;
 2. installe les paquets nécessaires : FFmpeg, git, Node.js 22, Rust, outils de compilation ;
-3. télécharge le code par SSH dans `~/Strata-Cut` (ou le met à jour s'il est déjà là) ;
-4. construit l'interface web et compile le serveur ;
+3. télécharge le code dans `~/Strata-Cut` (ou le met à jour s'il est déjà là) ;
+4. construit l'interface web et compile le serveur, avec votre compte (pas root) ;
 5. agrandit les tampons réseau (indispensable pour les flux UDP et SRT) et active la synchronisation de l'heure ;
 6. installe le programme dans `/opt/strata-cut` (commande `strata-cut`) ;
 7. crée le compte de service `strata-cut` et les dossiers des données ;
 8. installe et démarre le service systemd `strata-cut`, puis ouvre les ports dans le pare-feu `ufw` s'il est actif ;
-9. crée le compte administrateur (il demande le mot de passe deux fois, 8 caractères au moins).
-
-À la fin, il affiche les adresses de l'interface web.
+9. crée le compte administrateur.
 
 ### Toutes les options
 
 | Option | Rôle | Défaut |
 | --- | --- | --- |
-| `--repo URL` | dépôt git en SSH | `git@github.com:DamienP2/Strata-Cut.git` |
-| `--branch NOM` | branche à installer | branche par défaut du dépôt |
-| `--src DIR` | dossier du code source | `~/Strata-Cut` |
-| `--no-pull` | n'actualise pas le code | — |
-| `--port N` | port de l'interface web | `8080` |
-| `--data-dir DIR` | réglages, comptes, journaux | `/var/lib/strata-cut` |
+| `--admin NOM` | crée ce compte administrateur (demande le mot de passe) | — |
 | `--recordings-dir DIR` | boucles | `<données>/loops` |
 | `--clips-dir DIR` | extraits | `<données>/clips` |
-| `--admin NOM` | crée ce compte administrateur | — |
 | `--open-ports LISTE` | ports des sources à ouvrir dans `ufw` | — |
+| `--port N` | port de l'interface web | `8080` |
+| `--data-dir DIR` | réglages, comptes, journaux | `/var/lib/strata-cut` |
+| `--branch NOM` | branche à installer | branche par défaut du dépôt |
+| `--src DIR` | dossier du code source | `~/Strata-Cut` |
+| `--repo URL` | dépôt git (HTTPS, ou SSH `git@…` avec clé de déploiement créée au besoin) | `https://github.com/DamienP2/Strata-Cut.git` |
+| `--no-pull` | réinstalle sans télécharger | — |
 | `--package FICHIER` | installe un paquet déjà construit au lieu de compiler | — |
 | `--no-apt` | n'installe aucun paquet | — |
 | `--no-service` | n'installe pas le service (essai) | — |
 | `--uninstall` / `--purge` | désinstalle (avec `--purge` : efface aussi les données) | — |
 
----
+### Sans accès à GitHub depuis le serveur
 
-## 4. Premier accès
+Si le serveur ne sort pas sur Internet, préparez le code ailleurs puis copiez-le (`scp -r Strata-Cut serveur:`), et lancez depuis ce dossier : `sudo ./Strata-Cut/scripts/install-ubuntu.sh --no-pull`. Les paquets Ubuntu (FFmpeg, Node.js, Rust) doivent alors venir d'un miroir local.
+
+## 3. Premier accès
 
 1. Si vous n'avez pas mis `--admin`, créez le compte administrateur :
    ```bash
@@ -167,7 +141,7 @@ Le script :
 
 ---
 
-## 5. Ajouter les sources
+## 4. Ajouter les sources
 
 **Enregistreurs › + Nouvel enregistreur.** Réglez la durée de la boucle (24 h par défaut), puis selon le protocole :
 
@@ -208,7 +182,7 @@ Dès qu'une source envoie, sa carte passe en **REC** et la boucle se remplit. Si
 
 ---
 
-## 6. Extraire
+## 5. Extraire
 
 1. **Extraction** (ou **Extraire** sur la carte d'une source).
 2. Placez-vous dans la boucle : clic sur la vue d'ensemble des 24 h, zoom de **24 h** à **10 s**, puis glisser sur la timeline.
@@ -221,7 +195,7 @@ Touche `?` : liste des raccourcis.
 
 ---
 
-## 7. Exploiter au quotidien
+## 6. Exploiter au quotidien
 
 | Pour | Commande |
 | --- | --- |
@@ -246,13 +220,15 @@ Les boucles se renouvellent d'elles-mêmes : inutile de les sauvegarder. Sauvega
 
 ---
 
-## 8. Mettre à jour
+## 7. Mettre à jour
+
+Relancez la commande d'installation, ou plus court :
 
 ```bash
 sudo ~/Strata-Cut/scripts/install-ubuntu.sh
 ```
 
-Le script récupère la dernière version par SSH (`git pull`), recompile, remplace le programme et redémarre le service. Les réglages, les comptes, les boucles et les extraits restent. Le programme précédent est gardé dans `/opt/strata-cut/strata-cut.previous`.
+Le script récupère la dernière version (`git pull`), recompile, remplace le programme et redémarre le service. Les réglages, les comptes, les boucles et les extraits restent. Le programme précédent est gardé dans `/opt/strata-cut/strata-cut.previous`.
 
 - Autre branche : `--branch NOM`.
 - Réinstaller sans télécharger : `--no-pull`.
@@ -267,7 +243,7 @@ sudo ./scripts/install-ubuntu.sh --package Strata-Cut-0.2.0-linux-x86_64.tar.gz
 
 ---
 
-## 9. En cas de problème
+## 8. En cas de problème
 
 | Symptôme | À vérifier |
 | --- | --- |
@@ -278,19 +254,18 @@ sudo ./scripts/install-ubuntu.sh --package Strata-Cut-0.2.0-linux-x86_64.tar.gz
 | Images saccadées, sources qui décrochent | Processeur saturé (**Système › Performances**) : moins de sources par serveur ou machine plus puissante. |
 | La boucle n'atteint pas 24 h | Disque plein : **Système › Stockage**, `df -h`. |
 | Timecode décalé | `timedatectl` : heure synchronisée et bon fuseau. |
-| « accès au dépôt refusé » | La clé affichée est-elle dans **Deploy keys** du bon dépôt ? `ssh -T git@github.com` répond-il ? |
-| « impossible de joindre github.com en SSH » | Le pare-feu de sortie bloque le port 22 : ouvrez-le, ou copiez le dépôt sur le serveur et lancez `sudo ./scripts/install-ubuntu.sh` depuis ce dossier. |
+| « impossible de lire le dépôt » | Le serveur sort-il sur Internet ? `curl -I https://github.com` ; derrière un proxy, exportez `https_proxy` et lancez `sudo -E bash`. |
 | Mot de passe admin perdu | `sudo strata-cut user passwd admin --data-dir /var/lib/strata-cut` |
 
 Les journaux détaillés : `journalctl -u strata-cut -n 200` et `/var/lib/strata-cut/logs/strata-cut.log`.
 
 ---
 
-## 10. Désinstaller
+## 9. Désinstaller
 
 ```bash
 sudo ./scripts/install-ubuntu.sh --uninstall           # garde les données
 sudo ./scripts/install-ubuntu.sh --uninstall --purge   # efface aussi /var/lib/strata-cut
 ```
 
-Les dossiers placés ailleurs (`/srv/strata-cut/...`) et le code source (`~/Strata-Cut`) ne sont jamais effacés par le script : supprimez-les à la main si besoin, et retirez la clé de déploiement sur GitHub.
+Les dossiers placés ailleurs (`/srv/strata-cut/...`) et le code source (`~/Strata-Cut`) ne sont jamais effacés par le script : supprimez-les à la main si besoin.
