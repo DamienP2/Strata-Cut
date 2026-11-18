@@ -1,7 +1,117 @@
-//! STUB — to be completed.
-use axum::Router;
-use crate::state::Shared;
+//! The System page: server facts, settings, hot restart, machine metrics (spec § 2.3, 5.10).
+use axum::{extract::State, http::StatusCode, routing::{get, post, put}, Json, Router};
+use serde_json::{json, Value};
+
+use crate::{
+    api::{bad, blocking, internal, require, ApiResult},
+    auth::CurrentUser,
+    config::ServerConfig,
+    sso::MASK,
+    state::Shared,
+};
 
 pub fn routes() -> Router<Shared> {
     Router::new()
+        .route("/api/health", get(health))
+        .route("/api/system", get(get_system))
+        .route("/api/system/config", put(put_config))
+        .route("/api/system/restart", post(restart))
+        .route("/api/system/metrics", get(metrics))
+}
+
+/// The settings as a client sees them: the SSO secret masked.
+pub fn masked(cfg: &ServerConfig) -> ServerConfig {
+    let mut c = cfg.clone();
+    if !c.security.sso.client_secret.is_empty() {
+        c.security.sso.client_secret = MASK.into();
+    }
+    c
+}
+
+/// Every network interface but the loopback: `[{name, ip}]`.
+pub fn interfaces() -> Vec<Value> {
+    let mut list: Vec<(String, String)> = if_addrs::get_if_addrs()
+        .map(|l| l.into_iter().filter(|i| !i.is_loopback()).map(|i| (i.name.clone(), i.ip().to_string())).collect())
+        .unwrap_or_default();
+    list.sort();
+    list.into_iter().map(|(name, ip)| json!({"name": name, "ip": ip})).collect()
+}
+
+/// `{version, os, arch, hostname, cpus, dataDir, bind, uptimeSecs, timezone, config?, interfaces}`.
+pub fn info(s: &Shared, with_config: bool) -> Value {
+    let cfg = s.config.load();
+    let mut v = json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "hostname": crate::perf::hostname(),
+        "cpus": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
+        "dataDir": s.data_dir.display().to_string(),
+        "bind": s.bind.to_string(),
+        "uptimeSecs": s.started_at.elapsed().as_secs(),
+        "timezone": cfg.timezone,
+        "interfaces": interfaces(),
+    });
+    if with_config {
+        v["config"] = serde_json::to_value(masked(&cfg)).unwrap_or(Value::Null);
+    }
+    v
+}
+
+/// Public, for supervision and the Updates page waiting for the restart: `{name, version, bind, needsSetup}`.
+async fn health(State(s): State<Shared>) -> Json<Value> {
+    Json(json!({"name": s.config.load().name, "version": env!("CARGO_PKG_VERSION"), "bind": s.bind.to_string(), "needsSetup": s.auth.needs_setup()}))
+}
+
+async fn get_system(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    let s2 = s.clone();
+    Ok(Json(blocking(move || info(&s2, me.is_admin())).await?))
+}
+
+async fn put_config(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut cfg): Json<ServerConfig>) -> ApiResult<StatusCode> {
+    require(me.is_admin())?;
+    cfg.normalize();
+    cfg.validate().map_err(bad)?;
+    let old = s.config.load_full();
+    if cfg.security.sso.client_secret == MASK {
+        cfg.security.sso.client_secret = old.security.sso.client_secret.clone();
+    }
+    if cfg.bind != old.bind {
+        if let Some(addr) = cfg.bind.filter(|a| *a != s.bind) {
+            blocking(move || std::net::TcpListener::bind(addr).map(drop)).await?.map_err(|e| bad(format!("cannot listen on {addr}: {e}")))?;
+        }
+    }
+    let data = s.data_dir.clone();
+    let c = cfg.clone();
+    blocking(move || c.save(&data)).await?.map_err(internal)?;
+    tracing::info!("settings changed by {}", me.username);
+    s.config.store(std::sync::Arc::new(cfg));
+    s.changed("config");
+    s.restart.notify_one();
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn restart(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<StatusCode> {
+    require(me.is_admin())?;
+    tracing::info!("restart asked by {}", me.username);
+    s.restart.notify_one();
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn metrics(CurrentUser(_me): CurrentUser) -> ApiResult<Json<Value>> {
+    let m = blocking(crate::perf::machine).await?;
+    Ok(Json(json!({ "machine": m })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_masked() {
+        let mut c = ServerConfig::default();
+        assert_eq!(masked(&c).security.sso.client_secret, "");
+        c.security.sso.client_secret = "s3cret".into();
+        assert_eq!(masked(&c).security.sso.client_secret, MASK);
+    }
 }

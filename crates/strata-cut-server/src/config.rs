@@ -95,10 +95,12 @@ impl ServerConfig {
         Ok(())
     }
 
+    #[allow(dead_code)] // used by the recording engine
     pub fn recordings_dir(&self, data_dir: &Path) -> PathBuf {
         if self.recordings_dir.is_empty() { data_dir.join("loops") } else { PathBuf::from(&self.recordings_dir) }
     }
 
+    #[allow(dead_code)] // used by the recording engine
     pub fn clips_dir(&self, data_dir: &Path) -> PathBuf {
         if self.clips_dir.is_empty() { data_dir.join("clips") } else { PathBuf::from(&self.clips_dir) }
     }
