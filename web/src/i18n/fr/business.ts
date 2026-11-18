@@ -86,6 +86,13 @@ export const business: Record<string, string> = {
   Reserved: 'Réservé',
   'expected {e}': 'prévu {e}',
 
+  'System disk': 'Disque système',
+  '{free} free of {total}': '{free} libres sur {total}',
+  'Disk of the loops': 'Disque des boucles',
+  'Disk of the clips': 'Disque des extraits',
+  'Another disk needs the install script (it prepares the folder).': 'Un autre disque demande le script d’installation (il prépare le dossier).',
+  'the service cannot write in this folder': 'Le service ne peut pas écrire dans ce dossier.',
+
   // Extraction
   LIVE: 'DIRECT',
   Live: 'Direct',

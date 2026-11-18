@@ -218,6 +218,16 @@ sudo ufw allow 9090/tcp
 
 Autre façon, depuis le serveur : `sudo ~/Strata-Cut/scripts/install-ubuntu.sh --no-pull --port 9090` (ouvre aussi le port dans `ufw`). Le réglage fait dans l'interface l'emporte sur celui du service.
 
+### Disques et espace des boucles et des extraits
+
+**Système › Stockage** :
+
+- **Disque des boucles** / **Disque des extraits** : un disque monté, avec sa place libre. Changer de disque fait repartir l'enregistrement aussitôt sur le nouveau ; les boucles déjà enregistrées restent lisibles sur l'ancien jusqu'à ce qu'elles soient remplacées. Le script d'installation pose un petit relais root (`strata-cut-storage.path`) qui crée le dossier `<disque>/strata-cut/loops` (ou `clips`) et le donne au service.
+- **Boucles au plus**, **Extraits au plus** (Go, 0 = tout le disque), **Toujours libre** (%) : au-delà, les enregistrements les plus anciens sont effacés en premier.
+- Chaque enregistreur réserve la place de sa boucle entière (débit prévu × durée) : une source qui ne tient pas est refusée.
+
+Un disque doit d'abord être monté pour apparaître (voir « Disque des boucles » au § 1). Si le volume système d'Ubuntu n'utilise pas tout le disque (`sudo vgs` montre de la place libre) : `sudo lvextend -r -l +100%FREE /dev/ubuntu-vg/ubuntu-lv`.
+
 ### Serveurs de temps (NTP)
 
 Le timecode est l'heure du serveur : **Système › Général › Heure** montre si elle est synchronisée, la source et le décalage. Indiquez-y vos serveurs NTP (séparés par des espaces, 8 au plus), puis **Enregistrer et appliquer** ; vide = ceux d'Ubuntu. Le service n'ayant pas les droits root, le script d'installation pose un petit relais (`strata-cut-ntp.path`) qui vérifie la liste et l'applique à systemd-timesyncd (ou à chrony s'il est utilisé).

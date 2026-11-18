@@ -21,6 +21,7 @@ mod recorder;
 mod service;
 mod sso;
 mod state;
+mod storage;
 mod system;
 mod update;
 mod users;

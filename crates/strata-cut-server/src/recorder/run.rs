@@ -311,6 +311,15 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
                 break Outcome::Stopped;
             }
+            _ = rec.new_run.notified() => {
+                // Only when this run is not already in the loops' current folder.
+                if run_dir.starts_with(m.recordings_dir()) {
+                    continue;
+                }
+                stop_child(&mut child).await;
+                tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                break Outcome::Restart;
+            }
             _ = tick.tick() => {
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, false));
                 measure(m, rec, &run_id, std::mem::take(&mut scan.waves));

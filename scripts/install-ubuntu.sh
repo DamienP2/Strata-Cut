@@ -36,6 +36,8 @@ UNIT="strata-cut"
 SYSCTL_FILE="/etc/sysctl.d/90-strata-cut.conf"
 NTP_HELPER="/usr/local/lib/strata-cut/apply-ntp"
 NTP_UNIT="strata-cut-ntp"
+STORAGE_HELPER="/usr/local/lib/strata-cut/prepare-folder"
+STORAGE_UNIT="strata-cut-storage"
 NODE_MAJOR=22
 RUST_MIN="1.87.0"
 NODE_MIN="20.19.0"
@@ -135,8 +137,8 @@ if [ "$UNINSTALL" -eq 1 ]; then
     ok "service retiré"
   fi
   if has_systemd; then
-    systemctl disable --now "$NTP_UNIT.path" 2>/dev/null || true
-    rm -f "/etc/systemd/system/$NTP_UNIT.path" "/etc/systemd/system/$NTP_UNIT.service"
+    systemctl disable --now "$NTP_UNIT.path" "$STORAGE_UNIT.path" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$NTP_UNIT.path" "/etc/systemd/system/$NTP_UNIT.service" "/etc/systemd/system/$STORAGE_UNIT.path" "/etc/systemd/system/$STORAGE_UNIT.service"
     systemctl daemon-reload
   fi
   rm -rf "$INSTALL_DIR" "$LINK" "$SYSCTL_FILE" "$(dirname "$NTP_HELPER")"
@@ -541,6 +543,51 @@ EOF
   systemctl daemon-reload
   systemctl enable --now "$NTP_UNIT.path" >/dev/null 2>&1
   ok "serveurs NTP réglables dans Système › Général"
+
+  # Disques des boucles et des extraits choisis dans l'interface (Système › Stockage) :
+  # le service écrit le dossier voulu dans <données>/storage.request ; cette unité root
+  # le crée et le donne au compte du service, seulement s'il finit par strata-cut/loops ou /clips.
+  cat >"$STORAGE_HELPER" <<'EOF'
+#!/bin/sh
+# Strata Cut : prépare le dossier demandé dans l'interface ($1 = <données>/storage.request, $2 = compte du service).
+set -eu
+d="$(head -n 1 "$1" | head -c 1024)"
+case "$d" in
+  *..* | *//* ) echo "dossier refusé : $d" >&2; exit 1 ;;
+  /etc/* | /usr/* | /bin/* | /sbin/* | /lib/* | /lib64/* | /boot/* | /proc/* | /sys/* | /dev/* | /run/* | /root/* ) echo "dossier refusé : $d" >&2; exit 1 ;;
+  /*/strata-cut/loops | /*/strata-cut/clips | /*/loops | /*/clips ) ;;
+  * ) echo "dossier refusé : $d" >&2; exit 1 ;;
+esac
+case "$d" in *[!A-Za-z0-9._/-]*) echo "dossier refusé : $d" >&2; exit 1 ;; esac
+mkdir -p "$d"
+parent="$(dirname "$d")"
+[ "$(basename "$parent")" = strata-cut ] && chown "$2:$2" "$parent"
+chown "$2:$2" "$d"
+chmod 0750 "$d"
+EOF
+  chmod 0755 "$STORAGE_HELPER"
+  chown root:root "$STORAGE_HELPER"
+  cat >"/etc/systemd/system/$STORAGE_UNIT.service" <<EOF
+[Unit]
+Description=$BRAND: prepares the folder chosen in the interface for the loops or the clips
+
+[Service]
+Type=oneshot
+ExecStart=$STORAGE_HELPER $DATA_DIR/storage.request $SERVICE_USER
+EOF
+  cat >"/etc/systemd/system/$STORAGE_UNIT.path" <<EOF
+[Unit]
+Description=$BRAND: watches the folder chosen in the interface for the loops or the clips
+
+[Path]
+PathChanged=$DATA_DIR/storage.request
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now "$STORAGE_UNIT.path" >/dev/null 2>&1
+  ok "disques des boucles et des extraits réglables dans Système › Stockage"
 fi
 
 # ---------------------------------------------------------------- 9. pare-feu

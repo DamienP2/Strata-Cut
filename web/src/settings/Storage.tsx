@@ -5,6 +5,7 @@ import { lang, locale, t } from '../i18n';
 import { api, useChanged } from '../store';
 import { PageHead } from '../pages/SidePage';
 import { NumberField } from '../ui/fields';
+import { Dropdown, type DropOption } from '../ui/Dropdown';
 import { InfoTip } from '../ui/InfoTip';
 import { bitrate, size } from '../tc';
 import { Card, Field, SaveBar } from './ui';
@@ -20,6 +21,8 @@ interface StorageInfo {
   capacity: number | null;
   reserved: number;
   keepFree: number | null;
+  disks: { mount: string; device: string; fs: string; total: number; free: number }[];
+  prepares: boolean;
   recorders: { id: string; name: string; enabled: boolean; loopHours: number; expected: number; bitrate: number; bytes: number; need: number | null; spaceLimited: boolean }[];
 }
 
@@ -50,6 +53,17 @@ export function Storage() {
   const other = disk ? Math.max(0, disk.total - disk.free - loops - (same ? clips : 0)) : 0;
   const str = (k: string) => (typeof cfg?.[k] === 'string' ? (cfg[k] as string) : '');
   const num = (k: string, d: number) => (typeof cfg?.[k] === 'number' ? (cfg[k] as number) : d);
+  // The disks: a folder is on the disk with the longest mount point that starts it.
+  const diskOf = (folder: string) => (info?.disks ?? []).filter((d) => folder === d.mount || folder.startsWith(d.mount === '/' ? '/' : `${d.mount}/`)).sort((a, b) => b.mount.length - a.mount.length)[0]?.mount ?? '/';
+  const diskOptions: DropOption[] = (info?.disks ?? []).map((d) => ({
+    value: d.mount,
+    label: d.mount === '/' ? t('System disk') : d.mount,
+    detail: t('{free} free of {total}', { free: sz(d.free), total: sz(d.total) }),
+  }));
+  /** The folder Strata Cut uses on a disk: its default one on the system disk, else <disk>/strata-cut/<kind>. */
+  const folderOn = (mount: string, kind: 'loops' | 'clips') => (mount === '/' ? '' : `${mount}/strata-cut/${kind}`);
+  const loopsFolder = str('recordingsDir') || info?.recordings.dir || '';
+  const clipsFolder = str('clipsDir') || info?.clips.dir || '';
   const capacity = info?.capacity ?? null;
   const reserved = info?.reserved ?? 0;
   const ratio = capacity ? reserved / capacity : 0;
@@ -64,11 +78,20 @@ export function Storage() {
       <Card icon={<HardDrive size={16} />} title={t('Storage')}>
         {cfg && (
           <div className="set-grid two">
-            <Field label={t('Recordings folder')}>
-              <input value={str('recordingsDir')} placeholder={info?.recordings.dir} spellCheck={false} onChange={(e) => setCfg((c) => ({ ...c, recordingsDir: e.target.value }))} />
+            <Field
+              label={
+                <>
+                  {t('Disk of the loops')}
+                  {info && !info.prepares && <InfoTip text={t('Another disk needs the install script (it prepares the folder).')} />}
+                </>
+              }
+              group
+              hint={<code>{loopsFolder}</code>}
+            >
+              <Dropdown value={diskOf(loopsFolder)} options={diskOptions} onChange={(m) => setCfg((c) => ({ ...c, recordingsDir: folderOn(m, 'loops') }))} />
             </Field>
-            <Field label={t('Clips folder')}>
-              <input value={str('clipsDir')} placeholder={info?.clips.dir} spellCheck={false} onChange={(e) => setCfg((c) => ({ ...c, clipsDir: e.target.value }))} />
+            <Field label={t('Disk of the clips')} group hint={<code>{clipsFolder}</code>}>
+              <Dropdown value={diskOf(clipsFolder)} options={diskOptions} onChange={(m) => setCfg((c) => ({ ...c, clipsDir: folderOn(m, 'clips') }))} />
             </Field>
           </div>
         )}

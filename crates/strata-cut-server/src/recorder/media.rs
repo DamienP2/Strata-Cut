@@ -331,6 +331,8 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
             "clips": {"dir": clips_dir, "disk": disk(&clips_dir), "bytes": clips_bytes, "sameDisk": super::same_disk(&rec_dir, &clips_dir)},
             "capacity": m.loops_capacity(),
             "reserved": m.reserved(),
+            "disks": crate::storage::disks(),
+            "prepares": crate::storage::managed(),
             "keepFree": disk_total(&rec_dir).map(|t| lim.min_free(t)),
             "recorders": recorders,
         })

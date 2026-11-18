@@ -184,6 +184,8 @@ pub struct Rec {
     pub no_audio: std::sync::atomic::AtomicBool,
     /// When the disk limits last removed some of its loop, ms.
     pub space_trimmed: std::sync::atomic::AtomicI64,
+    /// Starts a new run now (the loops' folder changed).
+    pub new_run: tokio::sync::Notify,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -327,6 +329,8 @@ pub fn dir_size(p: &Path) -> u64 {
 pub struct Manager {
     data_dir: PathBuf,
     recordings_dir: Mutex<PathBuf>,
+    /// Every folder that may still hold loops (the current one and former ones).
+    dirs: Mutex<Vec<PathBuf>>,
     pub limits: Mutex<Limits>,
     pub events: Events,
     recs: Mutex<Vec<Arc<Rec>>>,
@@ -341,6 +345,13 @@ impl Manager {
         let m = Arc::new(Manager {
             data_dir: data_dir.to_path_buf(),
             recordings_dir: Mutex::new(cfg.recordings_dir(data_dir)),
+            dirs: Mutex::new({
+                let mut d: Vec<PathBuf> = crate::paths::read_json(&data_dir.join("loop-dirs.json")).unwrap_or_default();
+                if !d.contains(&cfg.recordings_dir(data_dir)) {
+                    d.push(cfg.recordings_dir(data_dir));
+                }
+                d
+            }),
             limits: Mutex::new(Limits::from(cfg, data_dir)),
             events,
             recs: Mutex::new(Vec::new()),
@@ -367,7 +378,11 @@ impl Manager {
                 }
                 if tick.is_multiple_of(5) {
                     let m2 = m.clone();
-                    let _ = tokio::task::spawn_blocking(move || m2.enforce_space()).await;
+                    let _ = tokio::task::spawn_blocking(move || {
+                        m2.enforce_space();
+                        m2.forget_old_dirs();
+                    })
+                    .await;
                 }
                 for r in m.recs() {
                     r.refresh_status();
@@ -392,8 +407,43 @@ impl Manager {
     }
 
     pub fn set_config(&self, cfg: &ServerConfig) {
-        *self.recordings_dir.lock().unwrap() = cfg.recordings_dir(&self.data_dir);
+        let dir = cfg.recordings_dir(&self.data_dir);
+        *self.recordings_dir.lock().unwrap() = dir.clone();
         *self.limits.lock().unwrap() = Limits::from(cfg, &self.data_dir);
+        let mut dirs = self.dirs.lock().unwrap();
+        if !dirs.contains(&dir) {
+            tracing::info!("the loops now go to {}; the former ones stay readable until they roll out", dir.display());
+            dirs.push(dir.clone());
+            let _ = crate::paths::write_json(&self.data_dir.join("loop-dirs.json"), &*dirs, false);
+        }
+        drop(dirs);
+        // Recording goes on in the new folder at once.
+        for r in self.recs() {
+            if !r.dir.lock().unwrap().starts_with(&dir) && r.config().enabled {
+                r.new_run.notify_one();
+            }
+        }
+    }
+
+    /// Former loop folders that no recording uses any more are forgotten (their empty folders removed).
+    fn forget_old_dirs(&self) {
+        let current = self.recordings_dir();
+        let used: Vec<PathBuf> = self.recs().iter().flat_map(|r| r.runs.read().unwrap().iter().map(|x| x.dir.clone()).collect::<Vec<_>>()).collect();
+        let mut dirs = self.dirs.lock().unwrap();
+        let before = dirs.len();
+        dirs.retain(|d| {
+            if *d == current || used.iter().any(|u| u.starts_with(d)) {
+                return true;
+            }
+            for r in self.recs() {
+                let _ = std::fs::remove_file(d.join(&r.id).join("thumb.jpg"));
+                let _ = std::fs::remove_dir(d.join(&r.id)); // only if empty
+            }
+            false
+        });
+        if dirs.len() != before {
+            let _ = crate::paths::write_json(&self.data_dir.join("loop-dirs.json"), &*dirs, false);
+        }
     }
 
     /// Bytes taken by all the loops.
@@ -405,14 +455,16 @@ impl Manager {
     /// the oldest recordings go first, whatever the source.
     pub fn enforce_space(&self) {
         let lim = self.limits.lock().unwrap().clone();
+        let current = self.recordings_dir();
         let used = self.loops_bytes();
-        let mut need = if lim.loops_max > 0 { used.saturating_sub(lim.loops_max) } else { 0 };
-        if let Some((total, free)) = disk_space(&self.recordings_dir()) {
-            need = need.max(lim.min_free(total).saturating_sub(free));
-        }
+        let quota_need = if lim.loops_max > 0 { used.saturating_sub(lim.loops_max) } else { 0 };
+        let disk_need = disk_space(&current).map(|(total, free)| lim.min_free(total).saturating_sub(free)).unwrap_or(0);
+        let need = quota_need.max(disk_need);
         if need == 0 {
             return;
         }
+        // A full disk is freed on that disk only (former folders may be elsewhere).
+        let disk_only = quota_need < disk_need;
         let recs = self.recs();
         let pins = self.pins.lock().unwrap().clone();
         let mut freed = 0u64;
@@ -426,6 +478,9 @@ impl Manager {
                 for (ui, run) in runs.iter().enumerate() {
                     let Some(s) = run.master.front() else { continue };
                     if run.live && run.master.len() <= 2 {
+                        continue;
+                    }
+                    if disk_only && !run.dir.starts_with(&current) {
                         continue;
                     }
                     if pins.iter().any(|p| p.recorder == recs[ri].id && p.run == run.meta.id && s.t1 > p.from) {
@@ -494,7 +549,8 @@ impl Manager {
 
     fn add(self: &Arc<Self>, c: RecorderConfig) -> Arc<Rec> {
         let dir = self.recordings_dir().join(&c.id);
-        let runs = load_runs(&dir);
+        let mut runs: Vec<Run> = self.dirs.lock().unwrap().iter().flat_map(|d| load_runs(&d.join(&c.id))).collect();
+        runs.sort_by_key(|r| r.meta.started);
         let rec = Arc::new(Rec {
             id: c.id.clone(),
             status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false }),
@@ -504,6 +560,7 @@ impl Manager {
             dir: Mutex::new(dir),
             no_audio: false.into(),
             space_trimmed: 0.into(),
+            new_run: tokio::sync::Notify::new(),
             task: Mutex::new(None),
         });
         rec.refresh_status();
@@ -519,7 +576,9 @@ impl Manager {
         let lim = self.limits.lock().unwrap().clone();
         let dir = self.recordings_dir();
         let (total, free) = disk_space(&dir)?;
-        let mut cap = (free + self.loops_bytes()).saturating_sub(lim.min_free(total));
+        // Loops already on that disk count as space they may reuse.
+        let here: u64 = self.recs().iter().map(|r| r.runs.read().unwrap().iter().filter(|x| x.dir.starts_with(&dir)).map(Run::bytes).sum::<u64>()).sum();
+        let mut cap = (free + here).saturating_sub(lim.min_free(total));
         if lim.clips_max > 0 && same_disk(&dir, &lim.clips_dir) {
             cap = cap.saturating_sub(lim.clips_max.saturating_sub(dir_size(&lim.clips_dir)));
         }
@@ -629,8 +688,18 @@ impl Manager {
         if let Some(t) = task {
             let _ = t.await;
         }
-        let dir = rec.dir.lock().unwrap().clone();
-        let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dir)).await;
+        let dirs: Vec<PathBuf> = self.dirs.lock().unwrap().iter().map(|d| d.join(id)).collect();
+        let name = rec.config().name;
+        let _ = tokio::task::spawn_blocking(move || {
+            for dir in dirs {
+                match std::fs::remove_dir_all(&dir) {
+                    Ok(()) => tracing::info!("{name}: its loop was deleted ({})", dir.display()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => tracing::error!("{name}: its loop could not be deleted ({}): {e}", dir.display()),
+                }
+            }
+        })
+        .await;
         saved.map_err(|e| e.to_string())
     }
 
