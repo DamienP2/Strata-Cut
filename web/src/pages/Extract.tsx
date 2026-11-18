@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, Check, ChevronsLeft, ChevronsRight, Crosshair, Download, Pause, Play, RadioTower, RotateCcw, Scissors, StepBack, StepForward, Tv, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, Crosshair, Download, Eraser, FastForward, Pause, Play, Radio, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, Tv, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { t, tn, locale } from '../i18n';
 import { navigate } from '../router';
@@ -112,11 +112,12 @@ function Sources({ current }: { current?: string }) {
       {recorders.map((r) => {
         const st = status[r.id]?.state;
         return (
-          <div key={r.id} className={`lib-nav-item ${r.id === current ? 'on' : ''}`} onClick={() => void navigate(`/extract/${r.id}`)}>
-            <RadioTower size={15} />
-            <span className="grow">{r.name}</span>
-            <span className="count">{r.protocol.toUpperCase()}</span>
-            <span className={`nav-dot ${st === 'recording' ? 'ok' : st === 'off' ? '' : st === 'error' ? 'bad' : 'warn'}`} />
+          <div key={r.id} className={`lib-nav-item sc-src ${r.id === current ? 'on' : ''}`} onClick={() => void navigate(`/extract/${r.id}`)}>
+            <span className={`nav-dot ${st === 'recording' ? 'ok' : st === 'off' || st === 'waiting' ? '' : st === 'error' ? 'bad' : 'warn'}`} />
+            <span className="sc-src-t">
+              <span className="sc-src-name">{r.name}</span>
+              <span className="sc-src-prog">{status[r.id]?.onAir?.name ?? (st === 'recording' ? t('Recording') : st === 'off' ? t('Stopped') : st === 'waiting' ? t('Programmed') : st === 'error' ? t('Error') : t('No signal'))}</span>
+            </span>
           </div>
         );
       })}
@@ -296,18 +297,32 @@ function Editor({ rec }: { rec: Recorder }) {
       toast(t((e as Error).message), 'error');
     }
   };
-  // The guide's programmes already over and (mostly) recorded: for a quick extraction.
-  const recorded = useMemo(() => {
+  // The guide for the right panel: on air first, then what was recorded (newest first), then what comes.
+  const programmes = useMemo(() => {
     const now = serverNow();
     // Its share in one continuous recording (a clip stays in one).
     const share = (g: Programme) => Math.max(0, ...spans.map((x) => Math.min(g.end, x.to) - Math.max(g.start, x.from))) / (g.end - g.start);
-    return guide
-      .filter((g) => g.end <= now)
-      .map((g) => ({ ...g, share: share(g) }))
-      .filter((g) => g.share >= 0.5)
-      .sort((a, b) => b.start - a.start)
-      .slice(0, 30);
+    const all = guide.map((g) => ({ ...g, share: share(g) }));
+    const onNow = all.filter((g) => g.start <= now && now < g.end);
+    const past = all.filter((g) => g.end <= now).sort((a, b) => b.start - a.start);
+    const soon = all.filter((g) => g.start > now).sort((a, b) => a.start - b.start).slice(0, 6);
+    return [...onNow, ...past, ...soon];
   }, [guide, spans]);
+  const clearMarks = () => {
+    setIn(null);
+    setOut(null);
+    setName('');
+  };
+  /** A programme to come: its recording programmed (the recorder starts for it if it is stopped). */
+  const programmeIt = async (g: Programme) => {
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(g.start);
+    try {
+      await api('POST', '/api/schedules', { recorder: rec.id, name: g.name, date: day, days: [], start: clock(g.start, timezone).slice(0, 5), end: clock(g.end, timezone).slice(0, 5) });
+      toast(t('Recording of “{name}” programmed', { name: g.name }));
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
   const markIn = () => pos && setIn(pos);
   const markOut = () => pos && setOut(pos);
   const step = (n: number) => {
@@ -341,6 +356,9 @@ function Editor({ rec }: { rec: Recorder }) {
       else if (k === 'i' && e.shiftKey) mIn && seekWall(mIn.wall);
       else if (k === 'o' && e.shiftKey) mOut && seekWall(mOut.wall);
       else if (k === 'm') audio.setMuted(!audio.muted);
+      else if (k === 'l' && e.shiftKey) goLive();
+      else if (k === 'backspace') clearMarks();
+      else if (k === 'enter') canCut && void cut();
       else if (k === 'i') markIn();
       else if (k === 'o') markOut();
       else if (k === ' ' || k === 'k') {
@@ -366,6 +384,7 @@ function Editor({ rec }: { rec: Recorder }) {
     return () => removeEventListener('keydown', onKey);
   });
 
+  const admin = can.admin(user);
   const frames = mIn && mOut && mIn.run === mOut.run && mOut.t >= mIn.t ? Math.round((mOut.t - mIn.t) * fps) + 1 : 0;
   const canCut = can.extract(user) && frames > 0;
   const cut = async () => {
@@ -426,46 +445,60 @@ function Editor({ rec }: { rec: Recorder }) {
         <div className="sc-transport">
           <div className="sc-tc-big">{pos ? timecode(pos.wall, fps, timezone) : '--:--:--:--'}</div>
           <div className="sc-ctrls">
-            <button className="icon-btn ghost" title={t('Go to in  (Shift+I)')} disabled={!mIn} onClick={() => mIn && seekWall(mIn.wall)}>
-              <ArrowRightToLine size={16} />
+            <button className="ctl" data-tip={t('Go to the in point')} data-keys="⇧ I" disabled={!mIn} onClick={() => mIn && seekWall(mIn.wall)}>
+              <ArrowLeftToLine size={18} />
             </button>
-            <button className="icon-btn ghost" title={t('Previous frame  (←)')} onClick={() => step(-1)}>
-              <StepBack size={16} />
+            <button className="ctl" data-tip={t('Previous frame')} data-keys="←" onClick={() => step(-1)}>
+              <StepBack size={18} />
             </button>
-            <button className="icon-btn ghost" title={t('Play backwards  (J)')} onClick={() => { setLive(false); p()?.playReverse(); setPlaying(true); }}>
-              <ChevronsLeft size={16} />
+            <button className="ctl" data-tip={t('Play backwards')} data-keys="J" onClick={() => { setLive(false); p()?.playReverse(); setPlaying(true); }}>
+              <Rewind size={18} />
             </button>
-            <button className="icon-btn play" title={t('Play / pause  (K, Space)')} onClick={togglePlay}>
-              {playing ? <Pause size={16} /> : <Play size={16} />}
+            <button className="ctl play" data-tip={playing ? t('Pause') : t('Play')} data-keys="K" onClick={togglePlay}>
+              {playing ? <Pause size={18} /> : <Play size={18} />}
             </button>
-            <button className="icon-btn ghost" title={t('Play faster  (L)')} onClick={() => { setLive(false); p()?.play(2); }}>
-              <ChevronsRight size={16} />
+            <button className="ctl" data-tip={t('Play faster')} data-keys="L" onClick={() => { setLive(false); p()?.play(2); }}>
+              <FastForward size={18} />
             </button>
-            <button className="icon-btn ghost" title={t('Next frame  (→)')} onClick={() => step(1)}>
-              <StepForward size={16} />
+            <button className="ctl" data-tip={t('Next frame')} data-keys="→" onClick={() => step(1)}>
+              <StepForward size={18} />
             </button>
-            <button className="icon-btn ghost" title={t('Go to out  (Shift+O)')} disabled={!mOut} onClick={() => mOut && seekWall(mOut.wall)}>
-              <ArrowLeftToLine size={16} />
+            <button className="ctl" data-tip={t('Go to the out point')} data-keys="⇧ O" disabled={!mOut} onClick={() => mOut && seekWall(mOut.wall)}>
+              <ArrowRightToLine size={18} />
             </button>
           </div>
           <div className="sc-sep" />
-          <button className="btn small" title="I" onClick={markIn} disabled={!pos}>
-            <ArrowRightToLine size={13} /> {t('In')}
+          <button className="ctl wide" data-tip={t('Set the in point here')} data-keys="I" onClick={markIn} disabled={!pos}>
+            <MarkInIcon />
           </button>
-          <button className="btn small" title="O" onClick={markOut} disabled={!pos}>
-            <ArrowLeftToLine size={13} /> {t('Out')}
+          <button className="ctl wide" data-tip={t('Set the out point here')} data-keys="O" onClick={markOut} disabled={!pos}>
+            <MarkOutIcon />
           </button>
           <div className="spacer" />
           <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
-          {/* On the live: a red badge; behind it: how far, and the way back. */}
-          {live && ago < 30_000 ? (
-            <span className="sc-live-on" title={t('The newest frames, as they are recorded')}>
-              <span className="sc-rec" /> {t('LIVE')}
-            </span>
-          ) : (
-            <button className="btn small sc-live-go" title={t('Back to live')} onClick={goLive}>
-              <ChevronsRight size={14} /> {t('Live')}
-              {pos && <span className="sc-live-behind">{behind(ago)}</span>}
+          <div className="sc-sep" />
+          <button className={`ctl wide sc-live-ctl ${live && ago < 30_000 ? 'is-live' : ''}`} data-tip={live && ago < 30_000 ? t('On the live') : `${t('Back to live')} (${behind(ago)})`} data-keys="⇧ L" onClick={goLive}>
+            <Radio size={18} />
+          </button>
+        </div>
+        {/* The clip: its in and out (the timeline's E and S), its length, its name. */}
+        <div className="sc-clipbar">
+          <span className="sc-clipbar-l">{t('Clip')}</span>
+          <MarkTag kind="in" mark={mIn} fps={fps} timezone={timezone} onType={(s) => typed(s, setIn)} onClear={() => setIn(null)} />
+          <MarkTag kind="out" mark={mOut} fps={fps} timezone={timezone} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} />
+          <span className="sc-clipdur">{duration(frames, fps)}</span>
+          <input className="sc-clipname" value={name} placeholder={mIn ? `${rec.name} ${timecode(mIn.wall, fps, timezone)}` : t('Name of the clip')} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+          {onAir && (
+            <button className="ctl" data-tip={t('Whole programme: {name}', { name: onAir.name })} onClick={() => void markProgramme(onAir)}>
+              <Tv size={18} />
+            </button>
+          )}
+          <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>
+            <Eraser size={18} />
+          </button>
+          {can.extract(user) && (
+            <button className="ctl primary" data-tip={t('Extract')} data-keys="⏎" disabled={!canCut} onClick={() => void cut()}>
+              <Scissors size={18} />
             </button>
           )}
         </div>
@@ -473,102 +506,97 @@ function Editor({ rec }: { rec: Recorder }) {
       {/* The timeline takes the whole width, under the panels. */}
       <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
 
-      <aside className="panel right">
-        <section className="insp-section">
-          <header>
-            <span>{t('Clip')}</span>
-          </header>
-          <div className="insp-body">
-            <label className="set-field">
-              <span className="set-label">{t('Name')}</span>
-              <input value={name} placeholder={mIn ? `${rec.name} ${timecode(mIn.wall, fps, timezone)}` : rec.name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
-            </label>
-            <TcField label={t('In')} mark={mIn} fps={fps} timezone={timezone} onTake={markIn} takeTitle={t('Take the current frame  (I)')} icon={<ArrowRightToLine size={14} />} onType={(s) => typed(s, setIn)} onClear={() => setIn(null)} />
-            <TcField label={t('Out')} mark={mOut} fps={fps} timezone={timezone} onTake={markOut} takeTitle={t('Take the current frame  (O)')} icon={<ArrowLeftToLine size={14} />} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} />
-            {(mIn || mOut) && (
-              <button type="button" className="btn small ghost sc-clear-marks" onClick={() => { setIn(null); setOut(null); setName(''); }}>
-                <X size={13} /> {t('Clear the in and out points')}
-              </button>
-            )}
-            {onAir && (
-              <button type="button" className="btn small sc-prog-btn" title={t('In and out on the whole programme under the playhead')} onClick={() => void markProgramme(onAir)}>
-                <Tv size={13} /> <span>{t('Whole programme: {name}', { name: onAir.name })}</span>
-              </button>
-            )}
-            <div className="sc-dur">
-              <span className="muted">{t('Duration')}</span>
-              <b>{duration(frames, fps)}</b>
-            </div>
-            {can.extract(user) && (
-              <button className="btn primary block" disabled={!canCut} onClick={() => void cut()}>
-                <Scissors size={14} /> {t('Extract')}
-              </button>
-            )}
-          </div>
-        </section>
+      <aside className="panel right sc-guide-panel">
         {myJobs.length > 0 && <Jobs jobs={myJobs} />}
-        {recorded.length > 0 && (
-          <section className="insp-section">
-            <header>
-              <span>{t('Recorded programmes')}</span>
-            </header>
-            <div className="sc-progs">
-              {recorded.map((g) => (
-                <div key={`${g.id}-${g.start}`} className="sc-prog" title={g.text}>
-                  <button type="button" className="sc-prog-pick" onClick={() => void markProgramme(g)} title={t('In and out on it')}>
-                    <span className="sc-prog-time">
-                      {clock(g.start, timezone).slice(0, 5)}–{clock(g.end, timezone).slice(0, 5)}
-                    </span>
-                    <span className="sc-prog-name">
-                      {g.name}
-                      {g.share < 0.98 && <em className="sc-prog-part" title={t('Part of it was not recorded')}> · {Math.round(g.share * 100)} %</em>}
-                    </span>
-                  </button>
-                  {can.extract(user) && (
-                    <button type="button" className="icon-btn ghost" title={t('Extract it now')} onClick={() => void extractProgramme(g)}>
-                      <Scissors size={13} />
+        <section className="insp-section sc-guide-sec">
+          <header>
+            <span>{t('Programme guide')}</span>
+          </header>
+          {programmes.length === 0 ? (
+            <p className="muted sc-guide-none">{t('This source sends no programme guide.')}</p>
+          ) : (
+            <div className="sc-guide">
+              {programmes.map((g) => {
+                const state = g.end > now && g.start <= now ? 'live' : g.start > now ? 'soon' : g.share >= 0.98 ? 'ok' : g.share >= 0.5 ? 'part' : 'none';
+                const usable = state === 'ok' || state === 'part';
+                const pick = () => (usable ? void markProgramme(g) : state === 'live' ? seekWall(g.start) : undefined);
+                return (
+                  <div key={`${g.id}-${g.start}`} className={`sc-gitem ${state}`} data-tip={g.text || undefined}>
+                    <button type="button" className="sc-gitem-pick" onClick={pick} disabled={state === 'soon' || state === 'none'}>
+                      <span className="sc-gthumb">{(usable || state === 'live') && <Still url={`/api/recorders/${rec.id}/frame.jpg?at=${Math.round(g.start + Math.min(60_000, (Math.min(g.end, now) - g.start) / 2))}&h=72&fast=1`} />}</span>
+                      <span className="sc-gtext">
+                        <span className="sc-gtime">
+                          {clock(g.start, timezone).slice(0, 5)}–{clock(g.end, timezone).slice(0, 5)}
+                        </span>
+                        <span className="sc-gname">{g.name}</span>
+                        <span className={`sc-gpill ${state}`}>{state === 'live' ? t('On air') : state === 'soon' ? t('To come') : state === 'ok' ? t('Recorded') : state === 'part' ? t('Partly recorded {p} %', { p: Math.round(g.share * 100) }) : t('Not recorded')}</span>
+                      </span>
                     </button>
-                  )}
-                </div>
-              ))}
+                    {usable && can.extract(user) && (
+                      <button className="ctl" data-tip={t('Extract it now')} onClick={() => void extractProgramme(g)}>
+                        <Scissors size={16} />
+                      </button>
+                    )}
+                    {state === 'soon' && admin && (
+                      <button className="ctl" data-tip={t('Programme its recording')} onClick={() => void programmeIt(g)}>
+                        <CalendarPlus size={16} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          </section>
-        )}
+          )}
+        </section>
       </aside>
     </>
   );
 }
 
-function TcField({ label, mark, fps, timezone, onTake, takeTitle, icon, onType, onClear }: { label: string; mark: Mark | null; fps: number; timezone: string; onTake: () => void; takeTitle: string; icon: React.ReactNode; onType: (s: string) => void; onClear: () => void }) {
+/** The mark-in icon: an opening bracket and its point; the mark-out one, the closing bracket. */
+function MarkInIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10 4H6v16h4" />
+      <circle cx="15" cy="12" r="2.6" fill="currentColor" />
+    </svg>
+  );
+}
+function MarkOutIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 4h4v16h-4" />
+      <circle cx="9" cy="12" r="2.6" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** An in or out point as on the timeline (E / S), its timecode typed in, a × to clear it. */
+function MarkTag({ kind, mark, fps, timezone, onType, onClear }: { kind: 'in' | 'out'; mark: Mark | null; fps: number; timezone: string; onType: (s: string) => void; onClear: () => void }) {
   const shown = mark ? timecode(mark.wall, fps, timezone) : '';
   const [text, setText] = useState(shown);
   useEffect(() => setText(shown), [shown]);
   return (
-    <label className="set-field">
-      <span className="set-label">{label}</span>
-      <div className="sc-tc-input">
-        <input
-          value={text}
-          placeholder="--:--:--:--"
-          onChange={(e) => setText(e.target.value)}
-          onFocus={(e) => e.currentTarget.select()}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === 'Enter') e.currentTarget.blur();
-            if (e.key === 'Escape') setText(shown);
-          }}
-          onBlur={() => text !== shown && text.trim() && onType(text)}
-        />
-        {mark && (
-          <button type="button" className="icon-btn ghost" title={t('Clear')} onClick={(e) => { e.preventDefault(); onClear(); }}>
-            <X size={13} />
-          </button>
-        )}
-        <button type="button" className="icon-btn" title={takeTitle} onClick={onTake}>
-          {icon}
+    <span className={`sc-mtag ${kind} ${mark ? 'set' : ''}`} data-tip={kind === 'in' ? t('In point (type a timecode)') : t('Out point (type a timecode)')}>
+      <i>{kind === 'in' ? t('In').charAt(0) : t('Out').charAt(0)}</i>
+      <input
+        value={text}
+        placeholder="--:--:--:--"
+        onChange={(e) => setText(e.target.value)}
+        onFocus={(e) => e.currentTarget.select()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') setText(shown);
+        }}
+        onBlur={() => text !== shown && text.trim() && onType(text)}
+      />
+      {mark && (
+        <button type="button" className="sc-mtag-x" data-tip={t('Clear')} onClick={onClear}>
+          <X size={12} />
         </button>
-      </div>
-    </label>
+      )}
+    </span>
   );
 }
 

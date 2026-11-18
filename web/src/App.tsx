@@ -13,6 +13,7 @@ import { needsLook, useHealth, watchHealth } from './ui/health';
 import { Shortcuts } from './ui/Shortcuts';
 import { StatusPill } from './ui/StatusPill';
 import { Toasts } from './ui/Toasts';
+import { FollowTip } from './ui/FollowTip';
 import { UserMenu } from './ui/UserMenu';
 import { Login } from './pages/Login';
 import { SystemPage, visibleSystem } from './pages/SystemPage';
@@ -50,6 +51,7 @@ export function App() {
       <ContextMenuHost />
       <DialogHost />
       <Toasts />
+      <FollowTip />
     </div>
   );
 }

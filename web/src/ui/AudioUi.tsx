@@ -122,8 +122,8 @@ export function VolumeControl({ volume, setVolume, muted, setMuted }: { volume: 
   const Icon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
   return (
     <div className="sc-volume">
-      <button type="button" className={`icon-btn ghost ${muted ? 'on' : ''}`} title={muted ? t('Sound on  (M)') : t('Mute  (M)')} aria-pressed={muted} onClick={() => setMuted(!muted)}>
-        <Icon size={16} />
+      <button type="button" className={`ctl ${muted ? 'on' : ''}`} data-tip={muted ? t('Sound on') : t('Mute')} data-keys="M" aria-pressed={muted} onClick={() => setMuted(!muted)}>
+        <Icon size={18} />
       </button>
       <input
         type="range"
@@ -131,7 +131,7 @@ export function VolumeControl({ volume, setVolume, muted, setMuted }: { volume: 
         max={1}
         step={0.01}
         value={muted ? 0 : volume}
-        title={t('Volume')}
+        data-tip={t('Volume')}
         aria-label={t('Volume')}
         onChange={(e) => {
           setVolume(Number(e.target.value));
