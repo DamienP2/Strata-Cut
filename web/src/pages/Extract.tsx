@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
@@ -409,6 +409,9 @@ function Editor({ rec }: { rec: Recorder }) {
     void pl.seekWall(wall).then(() => set({ run: pl.run?.id ?? '', t: pl.t, wall: pl.wallOf(pl.t) }));
   };
 
+  const act = useRef<GuideActs>({ markProgramme, extractProgramme, programmeIt, seekWall });
+  act.current = { markProgramme, extractProgramme, programmeIt, seekWall };
+
   const now = serverNow();
   const media = run?.media ?? status?.media ?? null;
   const ago = pos ? now - pos.wall : 0;
@@ -509,51 +512,135 @@ function Editor({ rec }: { rec: Recorder }) {
       {/* The timeline takes the whole width, under the panels. */}
       <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
 
-      <aside className="panel right sc-guide-panel">
-        {myJobs.length > 0 && <Jobs jobs={myJobs} />}
-        <section className="insp-section sc-guide-sec">
-          <header>
-            <span>{t('Programme guide')}</span>
-          </header>
-          {programmes.length === 0 ? (
-            <p className="muted sc-guide-none">{t('This source sends no programme guide.')}</p>
-          ) : (
-            <div className="sc-guide">
-              {programmes.map((g) => {
-                const state = g.end > now && g.start <= now ? 'live' : g.start > now ? 'soon' : g.share >= 0.98 ? 'ok' : g.share >= 0.5 ? 'part' : 'none';
-                const usable = state === 'ok' || state === 'part';
-                const pick = () => (usable ? void markProgramme(g) : state === 'live' ? seekWall(g.start) : undefined);
-                return (
-                  <div key={`${g.id}-${g.start}`} className={`sc-gitem ${state}`} data-tip={g.text || undefined}>
-                    <button type="button" className="sc-gitem-pick" onClick={pick} disabled={state === 'soon' || state === 'none'}>
-                      <span className="sc-gthumb">{(usable || state === 'live') && <Still url={`/api/recorders/${rec.id}/frame.jpg?at=${Math.round(g.start + Math.min(60_000, (Math.min(g.end, now) - g.start) / 2))}&h=72&fast=1`} />}</span>
-                      <span className="sc-gtext">
-                        <span className="sc-gtime">
-                          {clock(g.start, timezone).slice(0, 5)}–{clock(g.end, timezone).slice(0, 5)}
-                        </span>
-                        <span className="sc-gname">{g.name}</span>
-                        <span className={`sc-gpill ${state}`}>{state === 'live' ? t('On air') : state === 'soon' ? t('To come') : state === 'ok' ? t('Recorded') : state === 'part' ? t('Partly recorded {p} %', { p: Math.round(g.share * 100) }) : t('Not recorded')}</span>
-                      </span>
-                    </button>
-                    {usable && can.extract(user) && (
-                      <button className="ctl" data-tip={t('Extract it now')} onClick={() => void extractProgramme(g)}>
-                        <Scissors size={16} />
-                      </button>
-                    )}
-                    {state === 'soon' && admin && (
-                      <button className="ctl" data-tip={t('Programme its recording')} onClick={() => void programmeIt(g)}>
-                        <CalendarPlus size={16} />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-      </aside>
+      <GuidePanel recId={rec.id} programmes={programmes} jobs={myJobs} timezone={timezone} canExtract={can.extract(user)} admin={admin} act={act} />
     </>
   );
+}
+
+/** The timeline's layers that do not move with the playhead: drawn again when the view,
+ * the time (once a second) or the data change, not at each frame shown. */
+const Layers = memo(function Layers(props: { recId: string; start: number; span: number; timezone: string; ticks: { step: number; out: number[] }; guide: Programme[]; onAir: string; strip: { d: number; out: number[] }; now: number; spans: Span[]; wavePath: string; gaps: [number, number][] }) {
+  const { recId, start, span, timezone, ticks, guide, onAir, strip, now, spans, wavePath, gaps } = props;
+  const end = start + span;
+  const x = (wall: number) => ((wall - start) / span) * 100;
+  const recorded = (w: number) => spans.some((s) => w >= s.from && w < s.to);
+  return (
+    <>
+      <div className="sc-ruler">
+        {ticks.out.filter((v) => x(v) < 94).map((v) => (
+          <span key={v} style={{ left: `${x(v)}%` }}>
+            {ticks.step >= 60_000 ? clock(v, timezone).slice(0, 5) : clock(v, timezone)}
+          </span>
+        ))}
+      </div>
+      {guide.length > 0 && (
+        <div className="sc-epg">
+          {guide
+            .filter((g) => g.end > start && g.start < end)
+            .map((g) => {
+              const l = Math.max(0, x(g.start));
+              const r = Math.min(100, x(g.end));
+              const on = onAir === String(g.id) + g.start;
+              return (
+                <div
+                  key={String(g.id) + g.start}
+                  data-key={String(g.id) + g.start}
+                  className={`sc-epg-item ${on ? 'on' : ''}`}
+                  style={{ left: `${l}%`, width: `${Math.max(0, r - l)}%` }}
+                  title={`${g.name}\n${clock(g.start, timezone).slice(0, 5)} → ${clock(g.end, timezone).slice(0, 5)}${g.text ? `\n${g.text}` : ''}\n\n${t('Click: go to its start · Shift+click: in and out on the whole programme')}`}
+                >
+                  <span>{g.name}</span>
+                </div>
+              );
+            })}
+        </div>
+      )}
+      <div className="sc-strip">
+        {strip.out.map((w) => (
+          <div key={w} className="sc-tile" style={{ left: `${x(w - strip.d / 2)}%`, width: `${(strip.d / span) * 100}%` }}>
+            {recorded(w) && w < now - 2000 && <Still url={`/api/recorders/${recId}/frame.jpg?at=${Math.round(w)}&h=54${strip.d >= 2000 ? '&fast=1' : ''}`} />}
+          </div>
+        ))}
+      </div>
+      <div className="sc-wave">
+        <svg viewBox="0 0 1000 30" preserveAspectRatio="none" aria-hidden="true">
+          <path d={wavePath} fill="currentColor" />
+        </svg>
+      </div>
+      {gaps.map(([a, b], i) => (
+        <div key={i} className="sc-gap" style={{ left: `${x(a)}%`, width: `${x(b) - x(a)}%` }} title={t('Not recorded')} />
+      ))}
+    </>
+  );
+});
+
+/** What the guide panel asks of the editor (the latest functions, behind a stable ref). */
+interface GuideActs {
+  markProgramme: (g: Programme) => Promise<unknown>;
+  extractProgramme: (g: Programme) => Promise<unknown>;
+  programmeIt: (g: Programme) => Promise<unknown>;
+  seekWall: (wall: number) => void;
+}
+type Listed = Programme & { share: number };
+
+/** The jobs and the programme guide: drawn again when they change, not at each frame shown. */
+const GuidePanel = memo(function GuidePanel({ recId, programmes, jobs, timezone, canExtract, admin, act }: { recId: string; programmes: Listed[]; jobs: Job[]; timezone: string; canExtract: boolean; admin: boolean; act: { current: GuideActs } }) {
+  const now = useNow(30_000);
+  return (
+    <aside className="panel right sc-guide-panel">
+      {jobs.length > 0 && <Jobs jobs={jobs} />}
+      <section className="insp-section sc-guide-sec">
+        <header>
+          <span>{t('Programme guide')}</span>
+        </header>
+        {programmes.length === 0 ? (
+          <p className="muted sc-guide-none">{t('This source sends no programme guide.')}</p>
+        ) : (
+          <div className="sc-guide">
+            {programmes.map((g) => {
+              const state = g.end > now && g.start <= now ? 'live' : g.start > now ? 'soon' : g.share >= 0.98 ? 'ok' : g.share >= 0.5 ? 'part' : 'none';
+              const usable = state === 'ok' || state === 'part';
+              const pick = () => (usable ? void act.current.markProgramme(g) : state === 'live' ? act.current.seekWall(g.start) : undefined);
+              return (
+                <div key={`${g.id}-${g.start}`} className={`sc-gitem ${state}`} data-tip={g.text || undefined}>
+                  <button type="button" className="sc-gitem-pick" onClick={pick} disabled={state === 'soon' || state === 'none'}>
+                    <span className="sc-gthumb">{(usable || state === 'live') && <Still url={`/api/recorders/${recId}/frame.jpg?at=${Math.round(g.start + Math.min(60_000, (Math.min(g.end, now) - g.start) / 2))}&h=72&fast=1`} />}</span>
+                    <span className="sc-gtext">
+                      <span className="sc-gtime">
+                        {clock(g.start, timezone).slice(0, 5)}–{clock(g.end, timezone).slice(0, 5)}
+                      </span>
+                      <span className="sc-gname">{g.name}</span>
+                      <span className={`sc-gpill ${state}`}>{state === 'live' ? t('On air') : state === 'soon' ? t('To come') : state === 'ok' ? t('Recorded') : state === 'part' ? t('Partly recorded {p} %', { p: Math.round(g.share * 100) }) : t('Not recorded')}</span>
+                    </span>
+                  </button>
+                  {usable && canExtract && (
+                    <button className="ctl" data-tip={t('Extract it now')} onClick={() => void act.current.extractProgramme(g)}>
+                      <Scissors size={16} />
+                    </button>
+                  )}
+                  {state === 'soon' && admin && (
+                    <button className="ctl" data-tip={t('Programme its recording')} onClick={() => void act.current.programmeIt(g)}>
+                      <CalendarPlus size={16} />
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    </aside>
+  );
+});
+
+/** The server's time, again every `ms` (for what changes with time but not at each frame). */
+function useNow(ms: number): number {
+  const [now, setNow] = useState(() => serverNow());
+  useEffect(() => {
+    const i = setInterval(() => setNow(serverNow()), ms);
+    return () => clearInterval(i);
+  }, [ms]);
+  return now;
 }
 
 /** The mark-in icon: an opening bracket and its point; the mark-out one, the closing bracket. */
@@ -741,7 +828,8 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
 
   const end = start + span;
   const x = (wall: number) => ((wall - start) / span) * 100;
-  const now = serverNow();
+  // Once a second: what depends on the time (not each frame shown) is drawn again only then.
+  const now = useNow(1000);
   const loopFrom = now - rec.loopHours * 3_600_000;
 
   const ticks = useMemo(() => {
@@ -810,7 +898,6 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
     }
     return d;
   }, [wave, start, span]);
-  const recorded = (w: number) => spans.some((s) => w >= s.from && w < s.to);
 
   const gaps = useMemo(() => {
     const out: [number, number][] = [];
@@ -854,6 +941,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
     return Math.abs(clientX - (r.left + ((pos.wall - start) / span) * r.width)) <= 7;
   };
 
+  const onAirKey = pos ? guide.find((g) => g.start <= pos.wall && pos.wall < g.end) : undefined;
   // Overview: the whole loop.
   const oFrom = loopFrom;
   const oSpan = now - loopFrom;
@@ -961,50 +1049,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         }}
         onPointerLeave={() => !drag.current && setGrab('')}
       >
-        <div className="sc-ruler">
-          {ticks.out.filter((v) => x(v) < 94).map((v) => (
-            <span key={v} style={{ left: `${x(v)}%` }}>
-              {ticks.step >= 60_000 ? clock(v, timezone).slice(0, 5) : clock(v, timezone)}
-            </span>
-          ))}
-        </div>
-        {guide.length > 0 && (
-          <div className="sc-epg">
-            {guide
-              .filter((g) => g.end > start && g.start < end)
-              .map((g) => {
-                const l = Math.max(0, x(g.start));
-                const r = Math.min(100, x(g.end));
-                const on = pos && g.start <= pos.wall && pos.wall < g.end;
-                return (
-                  <div
-                    key={String(g.id) + g.start}
-                    data-key={String(g.id) + g.start}
-                    className={`sc-epg-item ${on ? 'on' : ''}`}
-                    style={{ left: `${l}%`, width: `${Math.max(0, r - l)}%` }}
-                    title={`${g.name}\n${clock(g.start, timezone).slice(0, 5)} → ${clock(g.end, timezone).slice(0, 5)}${g.text ? `\n${g.text}` : ''}\n\n${t('Click: go to its start · Shift+click: in and out on the whole programme')}`}
-                  >
-                    <span>{g.name}</span>
-                  </div>
-                );
-              })}
-          </div>
-        )}
-        <div className="sc-strip">
-          {strip.out.map((w) => (
-            <div key={w} className="sc-tile" style={{ left: `${x(w - strip.d / 2)}%`, width: `${(strip.d / span) * 100}%` }}>
-              {recorded(w) && w < now - 2000 && <Still url={`/api/recorders/${rec.id}/frame.jpg?at=${Math.round(w)}&h=54${strip.d >= 2000 ? '&fast=1' : ''}`} />}
-            </div>
-          ))}
-        </div>
-        <div className="sc-wave">
-          <svg viewBox="0 0 1000 30" preserveAspectRatio="none" aria-hidden="true">
-            <path d={wavePath} fill="currentColor" />
-          </svg>
-        </div>
-        {gaps.map(([a, b], i) => (
-          <div key={i} className="sc-gap" style={{ left: `${x(a)}%`, width: `${x(b) - x(a)}%` }} title={t('Not recorded')} />
-        ))}
+        <Layers recId={rec.id} start={start} span={span} timezone={timezone} ticks={ticks} guide={guide} onAir={onAirKey ? String(onAirKey.id) + onAirKey.start : ''} strip={strip} now={now} spans={spans} wavePath={wavePath} gaps={gaps} />
         {sel && <div className="sc-sel" style={{ left: `${x(sel[0])}%`, width: `${x(sel[1]) - x(sel[0])}%` }} />}
         {/* The in and out points, each shown as soon as it is set. */}
         {mIn && <div className="sc-mark in" style={{ left: `${x(mIn.wall)}%` }}><b>{t('In').charAt(0)}</b></div>}

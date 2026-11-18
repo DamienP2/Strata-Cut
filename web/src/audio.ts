@@ -20,10 +20,10 @@ export class AudioOut {
     const split = this.ctx.createChannelSplitter(2);
     this.meters = [0, 1].map(() => {
       const a = this.ctx.createAnalyser();
-      a.fftSize = 1024;
+      a.fftSize = 2048; // 43 ms at 48 kHz: the meters, read 30 times a second, see every peak
       return a;
     });
-    this.data = new Float32Array(1024);
+    this.data = new Float32Array(2048);
     this.ctx.createMediaElementSource(media).connect(this.bus);
     this.bus.connect(split);
     split.connect(this.meters[0], 0);

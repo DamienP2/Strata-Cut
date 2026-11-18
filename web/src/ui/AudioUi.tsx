@@ -50,35 +50,18 @@ export function Meters({ out }: { out: AudioOut | null }) {
     const holdAt = [0, 0];
     let raf = 0;
     let last = performance.now();
+    let shown = '';
+    // The scale, the bars' backgrounds and L / R: drawn once per size, then copied.
+    const bg = document.createElement('canvas');
+    let bgKey = '';
+    const barW = 7;
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      // 30 measures and images a second are enough for a meter (the analyser sees the last 40 ms).
+      if (now - last < 32) return;
       const dt = (now - last) / 1000;
       last = now;
-      const dpr = devicePixelRatio || 1;
-      const w = c.clientWidth;
-      const h = c.clientHeight;
-      if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
-        c.width = Math.round(w * dpr);
-        c.height = Math.round(h * dpr);
-      }
-      g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      g.clearRect(0, 0, w, h);
       const peaks = out.peaks();
-      const top = 6;
-      const bottom = h - 16;
-      const y = (db: number) => top + ((0 - db) / -FLOOR) * (bottom - top);
-      const barW = 7;
-      const xs = [w - 2 * barW - 5, w - barW - 2];
-      // Scale.
-      g.font = '9px ui-monospace, monospace';
-      g.textAlign = 'right';
-      g.textBaseline = 'middle';
-      for (const tk of TICKS) {
-        g.fillStyle = 'rgba(255,255,255,0.55)';
-        g.fillText(String(-tk), xs[0] - 4, y(tk));
-        g.fillStyle = 'rgba(255,255,255,0.18)';
-        g.fillRect(xs[0] - 2, Math.round(y(tk)), 2 * barW + 5, 1);
-      }
       for (let ch = 0; ch < 2; ch++) {
         const db = dbOf(peaks[ch]);
         // Fast attack, ~20 dB/s fall.
@@ -87,9 +70,53 @@ export function Meters({ out }: { out: AudioOut | null }) {
           hold[ch] = level[ch];
           holdAt[ch] = now;
         }
+      }
+      // Nothing drawn while nothing moves (pause, silence).
+      const dpr = devicePixelRatio || 1;
+      const w = c.clientWidth;
+      const h = c.clientHeight;
+      const key = `${w}x${h}@${dpr}`;
+      const state = `${key}|${level.map((v) => v.toFixed(1))}|${hold.map((v) => v.toFixed(1))}`;
+      if (state === shown) return;
+      shown = state;
+      const top = 6;
+      const bottom = h - 16;
+      const y = (db: number) => top + ((0 - db) / -FLOOR) * (bottom - top);
+      const xs = [w - 2 * barW - 5, w - barW - 2];
+      if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+        c.width = Math.round(w * dpr);
+        c.height = Math.round(h * dpr);
+      }
+      if (bgKey !== key) {
+        bgKey = key;
+        bg.width = c.width;
+        bg.height = c.height;
+        const b = bg.getContext('2d')!;
+        b.setTransform(dpr, 0, 0, dpr, 0, 0);
+        b.font = '9px ui-monospace, monospace';
+        b.textAlign = 'right';
+        b.textBaseline = 'middle';
+        for (const tk of TICKS) {
+          b.fillStyle = 'rgba(255,255,255,0.55)';
+          b.fillText(String(-tk), xs[0] - 4, y(tk));
+          b.fillStyle = 'rgba(255,255,255,0.18)';
+          b.fillRect(xs[0] - 2, Math.round(y(tk)), 2 * barW + 5, 1);
+        }
+        b.textAlign = 'center';
+        b.textBaseline = 'alphabetic';
+        for (let ch = 0; ch < 2; ch++) {
+          b.fillStyle = 'rgba(255,255,255,0.08)';
+          b.fillRect(xs[ch], top, barW, bottom - top);
+          b.fillStyle = 'rgba(255,255,255,0.7)';
+          b.fillText(ch ? 'R' : 'L', xs[ch] + barW / 2, h - 4);
+        }
+      }
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, c.width, c.height);
+      g.drawImage(bg, 0, 0);
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      for (let ch = 0; ch < 2; ch++) {
         const x = xs[ch];
-        g.fillStyle = 'rgba(255,255,255,0.08)';
-        g.fillRect(x, top, barW, bottom - top);
         const seg = (from: number, to: number, col: string) => {
           if (level[ch] <= from) return;
           const a = y(Math.min(level[ch], to));
@@ -103,12 +130,6 @@ export function Meters({ out }: { out: AudioOut | null }) {
           g.fillStyle = hold[ch] > -6 ? red : hold[ch] > -18 ? yellow : green;
           g.fillRect(x, Math.round(y(hold[ch])) - 1, barW, 2);
         }
-        g.fillStyle = 'rgba(255,255,255,0.7)';
-        g.textAlign = 'center';
-        g.textBaseline = 'alphabetic';
-        g.fillText(ch ? 'R' : 'L', x + barW / 2, h - 4);
-        g.textAlign = 'right';
-        g.textBaseline = 'middle';
       }
     };
     raf = requestAnimationFrame(draw);

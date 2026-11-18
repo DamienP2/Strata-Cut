@@ -245,7 +245,7 @@ impl Clips {
         let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into(), "-i".into(), input];
         args.extend(["-map", "0:v:0", "-map", "0:a?"].map(String::from));
         args.extend(["-vf".into(), format!("trim=start={start:.6},setpts=PTS-STARTPTS")]);
-        args.extend(["-af".into(), format!("atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS", start + dur)]);
+        args.extend(["-af".into(), format!("{},atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS", crate::recorder::AUDIO_SYNC, start + dur)]);
         args.extend(["-frames:v".into(), job.req.frames.to_string()]);
         args.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "16", "-profile:v", "high", "-pix_fmt", "yuv420p"].map(String::from));
         if media.interlaced {

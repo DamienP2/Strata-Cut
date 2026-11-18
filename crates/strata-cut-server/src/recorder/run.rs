@@ -18,6 +18,9 @@ use super::{
 const SEGMENT: u32 = 6;
 /// Length of the proxy segments, seconds.
 const PROXY_SEGMENT: u32 = 4;
+/// Sound kept on its timestamps: a hole of more than 10 ms is filled with silence, an
+/// overlap cut (by default FFmpeg joins the samples and the sound drifts ahead after a loss).
+pub const AUDIO_SYNC: &str = "aresample=async=1:min_hard_comp=0.01";
 
 enum Outcome {
     /// The settings changed: start again at once.
@@ -260,7 +263,9 @@ pub fn ffmpeg_args(input: Vec<String>, run_dir: &Path, thumb: &Path, audio: bool
     a.push(d("video/index.m3u8"));
     // 3. The browser proxy, audio (first track, stereo).
     if audio {
-        a.extend(s(&["-map", "0:a:0", "-vn", "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "10", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
+        // Lost or damaged audio packets leave a hole in the times: filled with silence (and
+        // overlaps cut), else the sound after it is joined early and drifts ahead of the picture.
+        a.extend(s(&["-map", "0:a:0", "-vn", "-af", AUDIO_SYNC, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "10", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
         a.push(d("audio/p%08d.m4s"));
         a.push(d("audio/index.m3u8"));
     }
@@ -818,6 +823,13 @@ mod tests {
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
         RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true }
+    }
+
+    #[test]
+    fn audio_kept_on_its_times() {
+        let a = ffmpeg_args(vec!["-i".into(), "x".into()], Path::new("/r"), Path::new("/t.jpg"), true, false, None);
+        let i = a.iter().position(|x| x == "0:a:0").unwrap();
+        assert_eq!(a[i + 2..i + 4], ["-af".to_string(), AUDIO_SYNC.to_string()]);
     }
 
     #[test]

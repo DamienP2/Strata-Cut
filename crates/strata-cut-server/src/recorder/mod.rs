@@ -3,6 +3,7 @@
 mod media;
 pub mod index;
 mod run;
+pub use run::AUDIO_SYNC;
 pub mod web;
 pub mod epg;
 pub mod schedule;

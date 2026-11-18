@@ -13,11 +13,22 @@ function fmt(tz: string): Intl.DateTimeFormat {
   return f;
 }
 
+type Parts = { y: number; mo: number; d: number; h: number; m: number; s: number };
+/** The last seconds asked (a timecode shown 25 times a second asks the same one): formatToParts is slow. */
+const recent = new Map<string, Parts>();
+
 /** Date and time of day of an instant in a time zone. */
-export function parts(ms: number, tz: string) {
+export function parts(ms: number, tz: string): Parts {
+  const sec = Math.floor(ms / 1000);
+  const key = `${tz}|${sec}`;
+  const known = recent.get(key);
+  if (known) return known;
   const p: Record<string, number> = {};
-  for (const x of fmt(tz).formatToParts(new Date(Math.floor(ms)))) if (x.type !== 'literal') p[x.type] = Number(x.value);
-  return { y: p.year, mo: p.month, d: p.day, h: p.hour % 24, m: p.minute, s: p.second };
+  for (const x of fmt(tz).formatToParts(new Date(sec * 1000))) if (x.type !== 'literal') p[x.type] = Number(x.value);
+  const out = { y: p.year, mo: p.month, d: p.day, h: p.hour % 24, m: p.minute, s: p.second };
+  if (recent.size >= 256) recent.delete(recent.keys().next().value!);
+  recent.set(key, out);
+  return out;
 }
 
 const two = (n: number) => String(n).padStart(2, '0');
@@ -73,8 +84,15 @@ export function parseTimecode(text: string, near: number, fps: number, tz: strin
 }
 
 /** "mer. 18 nov." in the interface language. */
+const dayFormats = new Map<string, Intl.DateTimeFormat>();
 export function day(ms: number, tz: string, locale?: string): string {
-  return new Intl.DateTimeFormat(locale, { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short' }).format(new Date(ms));
+  const key = `${locale}|${tz}`;
+  let f = dayFormats.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(locale, { timeZone: tz, weekday: 'short', day: 'numeric', month: 'short' });
+    dayFormats.set(key, f);
+  }
+  return f.format(new Date(ms));
 }
 
 /** "1080i50" */

@@ -166,24 +166,39 @@ export class LoopPlayer {
     return g + Math.round((t - g) * this.fps) / this.fps;
   }
 
-  wallOf(t: number): number {
-    const m = [...this.map.values()];
-    let best = m[0];
-    for (const s of m) {
-      if (s[0] <= t) best = s;
-      if (s[0] <= t && t < s[1]) break;
+  /** The map's segments in order (rebuilt when the map changes): searched in halves. */
+  private sorted: [number, number, number][] | null = null;
+  private segments(): [number, number, number][] {
+    if (!this.sorted) this.sorted = [...this.map.values()].sort((a, b) => a[0] - b[0]);
+    return this.sorted;
+  }
+  /** The last segment starting at or before v (by source time, or by server time); -1 if none. */
+  private static before(m: [number, number, number][], v: number, k: 0 | 2): number {
+    let lo = 0;
+    let hi = m.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (m[mid][k] <= v) {
+        found = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
     }
-    return best ? best[2] + (t - best[0]) * 1000 : 0;
+    return found;
+  }
+
+  wallOf(t: number): number {
+    const m = this.segments();
+    if (!m.length) return 0;
+    const best = m[Math.max(0, LoopPlayer.before(m, t, 0))];
+    return best[2] + (t - best[0]) * 1000;
   }
 
   tOf(wall: number): number | null {
-    let best: [number, number, number] | null = null;
-    for (const s of this.map.values()) {
-      if (s[2] <= wall) best = s;
-      if (s[2] <= wall && wall < s[2] + (s[1] - s[0]) * 1000) break;
-    }
-    if (!best) return null;
-    return best[0] + (wall - best[2]) / 1000;
+    const m = this.segments();
+    const i = LoopPlayer.before(m, wall, 2);
+    if (i < 0) return null;
+    return m[i][0] + (wall - m[i][2]) / 1000;
   }
 
   private async fetchInfo(from: number, to: number): Promise<RunInfo[]> {
@@ -200,6 +215,7 @@ export class LoopPlayer {
     this.run.from = r.from;
     if (r.media) this.run.media = r.media;
     for (const s of r.map) this.map.set(s[0], s);
+    this.sorted = null;
     const tracks = [r.video, r.audio].filter(Boolean) as TrackInfo[];
     tracks.forEach((tr, i) => {
       const b = this.bufs[i];
@@ -215,6 +231,7 @@ export class LoopPlayer {
     this.fps = fpsOf(r.media?.fpsNum, r.media?.fpsDen);
     this.base = Math.floor(r.video?.offset ?? 0);
     this.map = new Map(r.map.map((s) => [s[0], s]));
+    this.sorted = null;
     this.bufs = [];
     this.audioBuf = null;
     const ms = new MediaSource();
