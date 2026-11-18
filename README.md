@@ -9,11 +9,25 @@ Enregistre des flux vidéo en continu, en boucle (24 h par défaut, réglable pa
 
 ## Installer sur un serveur Ubuntu
 
-Guide pas à pas : [docs/INSTALL-UBUNTU.md](docs/INSTALL-UBUNTU.md). En résumé, depuis le dossier du dépôt :
+Le script `scripts/install-ubuntu.sh` télécharge le code par SSH depuis GitHub, le compile et installe Strata Cut comme service systemd. Guide complet : [docs/INSTALL-UBUNTU.md](docs/INSTALL-UBUNTU.md).
+
+1. Copiez le script sur le serveur (depuis un poste qui a le dépôt) :
+   ```bash
+   scp scripts/install-ubuntu.sh utilisateur@serveur:
+   ```
+2. Sur le serveur, lancez-le depuis votre compte habituel :
+   ```bash
+   sudo bash install-ubuntu.sh --admin admin
+   ```
+3. La première fois, le script crée une clé SSH et l'affiche : ajoutez-la sur GitHub dans **Settings › Deploy keys › Add deploy key** du dépôt (lecture seule, sans cocher « Allow write access »), puis appuyez sur Entrée. Il clone le dépôt dans `~/Strata-Cut`, compile et installe.
+
+Mettre à jour (le script récupère la dernière version par SSH, puis réinstalle) :
 
 ```bash
-sudo ./scripts/install-ubuntu.sh --admin admin
+sudo ~/Strata-Cut/scripts/install-ubuntu.sh
 ```
+
+Si le compte a déjà une clé SSH acceptée par GitHub, aucune clé de déploiement n'est créée. Options utiles : `--branch NOM`, `--src DIR`, `--repo URL`, `--no-pull` ; `--help` pour la liste complète.
 
 ## Prérequis (développement)
 

@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 # Strata Cut — installation sur un serveur Ubuntu (22.04 ou 24.04, 64 bits).
 #
-# À lancer depuis le dossier du dépôt :   sudo ./scripts/install-ubuntu.sh
-# Relancer le même script met à jour une installation existante (les données restent).
+# Deux façons de le lancer :
+#   - seul (copié sur le serveur) :  sudo bash install-ubuntu.sh
+#     il télécharge le dépôt par SSH (git@github.com:DamienP2/Strata-Cut.git) dans ~/Strata-Cut,
+#     en créant au besoin une clé de déploiement à ajouter sur GitHub ;
+#   - depuis le dépôt :              sudo ./scripts/install-ubuntu.sh
+# Relancer le script met à jour le code (git pull par SSH) puis l'installation ; les données restent.
 #
 # Options :
+#   --repo URL            dépôt git en SSH (défaut git@github.com:DamienP2/Strata-Cut.git)
+#   --branch NOM          branche à installer (défaut : la branche par défaut du dépôt)
+#   --src DIR             dossier du code source (défaut : le dépôt du script, sinon ~/Strata-Cut)
+#   --no-pull             n'actualise pas le code source
 #   --port N              port de l'interface web (défaut 8080)
 #   --data-dir DIR        dossier des données (défaut /var/lib/strata-cut)
 #   --recordings-dir DIR  dossier des boucles (défaut <données>/loops) — idéalement un disque dédié
@@ -42,7 +50,15 @@ NO_SERVICE=0
 UNINSTALL=0
 PURGE=0
 
-SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO="git@github.com:DamienP2/Strata-Cut.git"
+BRANCH=""
+SRC_DIR=""
+NO_PULL=0
+# Empreinte publiée par GitHub de sa clé d'hôte ED25519.
+GITHUB_ED25519="SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
+
+# Le script est-il dans un dépôt Strata Cut ?
+SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ---------------------------------------------------------------- affichage
 if [ -t 1 ]; then B=$'\e[1m'; G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; N=$'\e[0m'; else B=; G=; Y=; R=; N=; fi
@@ -50,7 +66,7 @@ step() { printf '\n%s==> %s%s\n' "$B" "$*" "$N"; }
 ok() { printf '%s  ✓ %s%s\n' "$G" "$*" "$N"; }
 warn() { printf '%s  ! %s%s\n' "$Y" "$*" "$N" >&2; }
 die() { printf '%s  ✗ %s%s\n' "$R" "$*" "$N" >&2; exit 1; }
-usage() { sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0; }
+usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'; exit 0; }
 
 # ---------------------------------------------------------------- options
 while [ $# -gt 0 ]; do
@@ -62,6 +78,10 @@ while [ $# -gt 0 ]; do
     --admin) ADMIN="${2:?}"; shift 2 ;;
     --open-ports) OPEN_PORTS="${2:?}"; shift 2 ;;
     --package) PACKAGE="${2:?}"; shift 2 ;;
+    --repo) REPO="${2:?}"; shift 2 ;;
+    --branch) BRANCH="${2:?}"; shift 2 ;;
+    --src) SRC_DIR="${2:?}"; shift 2 ;;
+    --no-pull) NO_PULL=1; shift ;;
     --no-apt) NO_APT=1; shift ;;
     --no-service) NO_SERVICE=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
@@ -80,9 +100,16 @@ done
 
 # Le compte qui a lancé sudo compile (pas root).
 BUILD_USER="${SUDO_USER:-root}"
+BUILD_HOME="$(getent passwd "$BUILD_USER" | cut -d: -f6)"
 as_builder() {
   if [ "$BUILD_USER" = root ]; then bash -lc "$1"; else sudo -u "$BUILD_USER" -H bash -lc "$1"; fi
 }
+
+# Le code source : le dépôt du script, sinon ~/Strata-Cut du compte qui compile.
+if [ -z "$SRC_DIR" ]; then
+  if [ -f "$SCRIPT_REPO/Cargo.toml" ]; then SRC_DIR="$SCRIPT_REPO"; else SRC_DIR="$BUILD_HOME/Strata-Cut"; fi
+fi
+[[ "$SRC_DIR" = /* ]] || SRC_DIR="$(pwd)/$SRC_DIR"
 
 has_systemd() { [ -d /run/systemd/system ]; }
 
@@ -111,7 +138,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
 fi
 
 # ---------------------------------------------------------------- 1. système
-step "1/8  Vérification du système"
+step "1/9  Vérification du système"
 if [ -r /etc/os-release ]; then
   . /etc/os-release
   if [ "${ID:-}" != ubuntu ]; then warn "système $PRETTY_NAME : ce script vise Ubuntu, il peut fonctionner sur Debian"; fi
@@ -119,10 +146,9 @@ if [ -r /etc/os-release ]; then
 fi
 case "$(uname -m)" in x86_64 | aarch64) ok "processeur $(uname -m)" ;; *) die "processeur $(uname -m) non pris en charge (64 bits requis)" ;; esac
 if [ "$NO_SERVICE" -eq 0 ] && ! has_systemd; then die "systemd ne tourne pas sur cette machine (utilisez --no-service pour un essai)"; fi
-if [ -z "$PACKAGE" ] && [ ! -f "$SRC_DIR/Cargo.toml" ]; then die "lancez ce script depuis le dépôt Strata Cut ($SRC_DIR ne contient pas Cargo.toml), ou utilisez --package"; fi
 
 # ---------------------------------------------------------------- 2. paquets
-step "2/8  Paquets Ubuntu"
+step "2/9  Paquets Ubuntu"
 apt_install() {
   local missing=()
   for p in "$@"; do dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p"); done
@@ -136,7 +162,7 @@ if [ "$NO_APT" -eq 1 ]; then
 else
   apt-get update -qq
   apt_install ca-certificates curl ffmpeg python3
-  if [ -z "$PACKAGE" ]; then apt_install git build-essential pkg-config; fi
+  if [ -z "$PACKAGE" ]; then apt_install git openssh-client build-essential pkg-config; fi
   ok "ffmpeg, python3 et outils de base en place"
 fi
 
@@ -154,8 +180,139 @@ grep -qw aac <<<"$encoders" || die "ffmpeg $FF_VERSION n'a pas l'encodeur aac"
 ffmpeg -hide_banner -h muxer=image2 2>/dev/null | grep -q atomic_writing || warn "ffmpeg $FF_VERSION est ancien (option atomic_writing absente) : Ubuntu 24.04 est conseillé"
 ok "ffmpeg $FF_VERSION"
 
-# ---------------------------------------------------------------- 3. compilation
-step "3/8  Programme"
+# ---------------------------------------------------------------- 3. code source (git par SSH)
+# Lance git en tant que compte qui compile, avec la commande SSH retenue.
+GIT_SSH="ssh -o BatchMode=yes -o ConnectTimeout=20"
+as_git() {
+  local cmd env
+  cmd="$(printf '%q ' git "$@")"
+  env="export GIT_SSH_COMMAND=$(printf '%q' "$GIT_SSH");"
+  if [ -n "${SSH_AUTH_SOCK:-}" ]; then env="$env export SSH_AUTH_SOCK=$(printf '%q' "$SSH_AUTH_SOCK");"; fi
+  as_builder "$env $cmd"
+}
+
+# "git@github.com:owner/repo.git" ou "ssh://git@host:22/owner/repo.git" → host, port, owner/repo.
+repo_host() {
+  local r="$1" h
+  case "$r" in
+    ssh://*) h="${r#ssh://}"; h="${h#*@}"; h="${h%%/*}"; echo "${h%%:*}" ;;
+    *@*:*) h="${r#*@}"; echo "${h%%:*}" ;;
+    *) echo "" ;;
+  esac
+}
+repo_port() {
+  local r="$1" h
+  case "$r" in ssh://*) h="${r#ssh://}"; h="${h#*@}"; h="${h%%/*}"; [[ "$h" == *:* ]] && echo "${h##*:}" || echo 22 ;; *) echo 22 ;; esac
+}
+repo_path() {
+  local r="$1"
+  case "$r" in ssh://*) r="${r#ssh://}"; r="${r#*/}" ;; *@*:*) r="${r#*:}" ;; esac
+  echo "${r%.git}"
+}
+
+# Ajoute la clé d'hôte du serveur git aux hôtes connus (vérifiée pour github.com).
+trust_host() {
+  local host="$1" port="$2" entry fp
+  local name="$host"; [ "$port" = 22 ] || name="[$host]:$port"
+  as_builder "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts"
+  if as_builder "ssh-keygen -F '$name' -f ~/.ssh/known_hosts >/dev/null"; then return 0; fi
+  entry="$(ssh-keyscan -p "$port" -t ed25519 "$host" 2>/dev/null | grep -v '^#' || true)"
+  [ -n "$entry" ] || die "impossible de joindre $host:$port en SSH (réseau, pare-feu sortant ?)"
+  fp="$(ssh-keygen -lf - <<<"$entry" | awk '{print $2}')"
+  if [ "$host" = github.com ] && [ "$fp" != "$GITHUB_ED25519" ]; then
+    die "la clé d'hôte reçue pour github.com ($fp) n'est pas celle de GitHub : connexion interceptée ?"
+  fi
+  printf '%s\n' "$entry" | as_builder "cat >> ~/.ssh/known_hosts"
+  ok "hôte $host ajouté aux hôtes connus ($fp)"
+}
+
+if [ -n "$PACKAGE" ]; then
+  : # rien à télécharger
+elif [ -d "$SRC_DIR/.git" ] && [ "$NO_PULL" -eq 1 ]; then
+  step "3/9  Code source"
+  ok "$SRC_DIR (non actualisé : --no-pull)"
+elif [ -f "$SRC_DIR/Cargo.toml" ] && [ ! -d "$SRC_DIR/.git" ]; then
+  step "3/9  Code source"
+  ok "$SRC_DIR (copie sans git : non actualisée)"
+else
+  step "3/9  Code source (git par SSH)"
+  command -v git >/dev/null || die "git est introuvable"
+  # Un dépôt déjà cloné garde son adresse et sa clé.
+  if [ -d "$SRC_DIR/.git" ]; then
+    REPO="$(as_builder "git -C '$SRC_DIR' remote get-url origin")"
+    key_cmd="$(as_builder "git -C '$SRC_DIR' config --get core.sshCommand" || true)"
+    [ -z "$key_cmd" ] || GIT_SSH="$key_cmd -o BatchMode=yes -o ConnectTimeout=20"
+  fi
+  host="$(repo_host "$REPO")"
+  [ -n "$host" ] || die "le dépôt doit être une adresse SSH (git@hôte:propriétaire/dépôt.git) : $REPO"
+  port="$(repo_port "$REPO")"
+  trust_host "$host" "$port"
+
+  # L'accès : les clés du compte (ou l'agent SSH), sinon une clé de déploiement dédiée.
+  KEY="$BUILD_HOME/.ssh/strata-cut_deploy"
+  KEY_SSH="ssh -i $KEY -o IdentitiesOnly=yes"
+  if ! as_git ls-remote --exit-code "$REPO" HEAD >/dev/null 2>&1; then
+    GIT_SSH="$KEY_SSH -o BatchMode=yes -o ConnectTimeout=20"
+    if [ ! -f "$KEY" ]; then
+      as_builder "ssh-keygen -q -t ed25519 -N '' -C 'strata-cut@$(hostname)' -f '$KEY'"
+      ok "clé de déploiement créée : $KEY"
+    fi
+    tries=0
+    until as_git ls-remote --exit-code "$REPO" HEAD >/dev/null 2>&1; do
+      tries=$((tries + 1))
+      repo="$(repo_path "$REPO")"
+      printf "\n%s  Ce serveur n'a pas encore accès au dépôt %s.%s\n" "$Y" "$repo" "$N"
+      if [ "$host" = github.com ]; then
+        echo "  Ajoutez cette clé sur GitHub, en lecture seule :"
+        echo "    https://github.com/$repo/settings/keys/new"
+        echo "    Title : Strata Cut $(hostname) — Key : la ligne ci-dessous — ne cochez pas « Allow write access »"
+      else
+        echo "  Ajoutez cette clé publique au dépôt sur $host (clé de déploiement en lecture seule) :"
+      fi
+      echo
+      echo "    $(cat "$KEY.pub")"
+      echo
+      if [ -t 0 ] && [ "$tries" -lt 10 ]; then
+        read -r -p "  Appuyez sur Entrée une fois la clé ajoutée (Ctrl-C pour arrêter)… " _
+      else
+        die "accès au dépôt refusé : ajoutez la clé ci-dessus puis relancez le script"
+      fi
+    done
+    ok "accès au dépôt par la clé de déploiement"
+  else
+    ok "accès au dépôt $REPO"
+  fi
+
+  if [ -d "$SRC_DIR/.git" ]; then
+    if [ -n "$(as_builder "git -C '$SRC_DIR' status --porcelain --untracked-files=no")" ]; then
+      warn "$SRC_DIR a des modifications locales : code non actualisé"
+    else
+      as_git -C "$SRC_DIR" fetch --quiet origin
+      if [ -n "$BRANCH" ] && [ "$(as_builder "git -C '$SRC_DIR' rev-parse --abbrev-ref HEAD")" != "$BRANCH" ]; then
+        as_git -C "$SRC_DIR" checkout --quiet "$BRANCH"
+      fi
+      if as_git -C "$SRC_DIR" pull --quiet --ff-only; then
+        ok "code actualisé : $(as_builder "git -C '$SRC_DIR' log -1 --format='%h %s'")"
+      else
+        warn "la mise à jour du code a échoué : installation du code déjà présent"
+      fi
+    fi
+  else
+    [ ! -e "$SRC_DIR" ] || [ -z "$(ls -A "$SRC_DIR" 2>/dev/null)" ] || die "$SRC_DIR existe et n'est pas un dépôt git : choisissez un autre dossier (--src)"
+    clone_args=(clone --quiet)
+    [ -z "$BRANCH" ] || clone_args+=(--branch "$BRANCH")
+    as_git "${clone_args[@]}" "$REPO" "$SRC_DIR"
+    # Les mises à jour suivantes réutilisent la même clé.
+    if [ "$GIT_SSH" != "ssh -o BatchMode=yes -o ConnectTimeout=20" ]; then
+      as_builder "git -C '$SRC_DIR' config core.sshCommand $(printf '%q' "$KEY_SSH")"
+    fi
+    ok "dépôt cloné dans $SRC_DIR : $(as_builder "git -C '$SRC_DIR' log -1 --format='%h %s'")"
+  fi
+  [ -f "$SRC_DIR/Cargo.toml" ] || die "$SRC_DIR ne contient pas Strata Cut (Cargo.toml absent)"
+fi
+
+# ---------------------------------------------------------------- 4. compilation
+step "4/9  Compilation"
 if [ -n "$PACKAGE" ]; then
   [ -f "$PACKAGE" ] || die "paquet introuvable : $PACKAGE"
   TMP="$(mktemp -d)"
@@ -203,8 +360,8 @@ else
   ok "serveur compilé : $("$NEW_BIN" --version)"
 fi
 
-# ---------------------------------------------------------------- 4. réglages système
-step "4/8  Réglages du système"
+# ---------------------------------------------------------------- 5. réglages système
+step "5/9  Réglages du système"
 # Gros tampons UDP : FFmpeg en demande 8 Mo par source (UDP, RTP, SRT).
 cat >"$SYSCTL_FILE" <<'EOF'
 # Strata Cut : tampons de réception pour les flux UDP / RTP / SRT
@@ -220,8 +377,8 @@ if command -v timedatectl >/dev/null && has_systemd; then
   ok "fuseau horaire : $(timedatectl show -p Timezone --value 2>/dev/null)"
 fi
 
-# ---------------------------------------------------------------- 5. installation
-step "5/8  Installation dans $INSTALL_DIR"
+# ---------------------------------------------------------------- 6. installation
+step "6/9  Installation dans $INSTALL_DIR"
 was_running=0
 if has_systemd && systemctl is-active --quiet "$UNIT" 2>/dev/null; then
   was_running=1
@@ -241,8 +398,8 @@ chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR"
 ln -sf "$BIN" "$LINK"
 ok "$("$BIN" --version) → $BIN (commande « strata-cut »)"
 
-# ---------------------------------------------------------------- 6. données
-step "6/8  Dossiers des données"
+# ---------------------------------------------------------------- 7. données
+step "7/9  Dossiers des données"
 mkdir -p "$DATA_DIR"
 for d in "$RECORDINGS_DIR" "$CLIPS_DIR"; do
   [ -n "$d" ] || continue
@@ -279,8 +436,8 @@ rec_dir="${RECORDINGS_DIR:-$DATA_DIR}"
 free_gb="$(df -BG --output=avail "$rec_dir" | tail -1 | tr -dc 0-9)"
 if [ -n "$free_gb" ]; then ok "espace libre pour les boucles : ${free_gb} Go (≈ 108 Go par source à 10 Mb/s sur 24 h)"; fi
 
-# ---------------------------------------------------------------- 7. service
-step "7/8  Service systemd"
+# ---------------------------------------------------------------- 8. service
+step "8/9  Service systemd"
 if [ "$NO_SERVICE" -eq 1 ]; then
   warn "service non installé (--no-service). Pour lancer à la main :"
   echo "    sudo -u $SERVICE_USER $BIN run --bind 0.0.0.0:$PORT --data-dir $DATA_DIR"
@@ -301,8 +458,8 @@ else
   if [ "$was_running" -eq 1 ]; then ok "mise à jour terminée"; fi
 fi
 
-# ---------------------------------------------------------------- 8. pare-feu
-step "8/8  Pare-feu"
+# ---------------------------------------------------------------- 9. pare-feu
+step "9/9  Pare-feu"
 if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q 'Status: active'; then
   ufw allow "$PORT/tcp" comment "$BRAND web" >/dev/null
   ok "ufw : $PORT/tcp ouvert (interface web)"
@@ -337,4 +494,4 @@ if [ -z "$ADMIN" ] && [ ! -s "$DATA_DIR/users.json" ]; then
 fi
 echo
 echo "  Service :   systemctl status $UNIT   ·   journalctl -u $UNIT -f"
-echo "  Mettre à jour : git pull, puis relancer ce script."
+echo "  Mettre à jour : sudo $SRC_DIR/scripts/install-ubuntu.sh   (télécharge la dernière version par SSH)"
