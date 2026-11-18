@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, ChevronsRight, Crosshair, Download, Eraser, FastForward, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, Tv, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, ChevronsRight, Crosshair, Download, Eraser, FastForward, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { t, tn, locale } from '../i18n';
 import { navigate } from '../router';
@@ -496,11 +496,6 @@ function Editor({ rec }: { rec: Recorder }) {
           <MarkTag kind="out" mark={mOut} fps={fps} timezone={timezone} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} />
           <span className="sc-clipdur">{duration(frames, fps)}</span>
           <input className="sc-clipname" value={name} placeholder={mIn ? `${rec.name} ${timecode(mIn.wall, fps, timezone)}` : t('Name of the clip')} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
-          {onAir && (
-            <button className="ctl" data-tip={t('Whole programme: {name}', { name: onAir.name })} onClick={() => void markProgramme(onAir)}>
-              <Tv size={18} />
-            </button>
-          )}
           <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>
             <Eraser size={18} />
           </button>
