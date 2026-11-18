@@ -7,7 +7,15 @@ Enregistre des flux vidéo en continu, en boucle (24 h par défaut, réglable pa
 - Extraits : MP4 H.264 haute qualité (CRF 16) + AAC 256 kb/s, coupés sur l'image exacte de l'entrée, téléchargeables.
 - Serveur Rust (axum) qui embarque l'interface web (React). Linux.
 
-## Prérequis
+## Installer sur un serveur Ubuntu
+
+Guide pas à pas : [docs/INSTALL-UBUNTU.md](docs/INSTALL-UBUNTU.md). En résumé, depuis le dossier du dépôt :
+
+```bash
+sudo ./scripts/install-ubuntu.sh --admin admin
+```
+
+## Prérequis (développement)
 
 `ffmpeg` et `ffprobe` dans le `PATH` (avec libsrt et libx264), ou `SC_FFMPEG=/chemin/ffmpeg`.
 
