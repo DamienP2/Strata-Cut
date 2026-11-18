@@ -41,6 +41,7 @@ impl AppState {
 }
 
 /// Who receives an event.
+#[allow(dead_code)] // Admins / User: used by the recording engine
 #[derive(Clone, Debug, PartialEq)]
 pub enum Audience {
     All,

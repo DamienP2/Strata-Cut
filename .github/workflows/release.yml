@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  web:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Version from the tag
+        run: scripts/set-version.sh "$GITHUB_REF_NAME"
+      - name: Build the web app
+        working-directory: web
+        run: |
+          npm ci
+          node scripts/i18n-check.mjs
+          npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+
+  build:
+    needs: web
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+          - platform: linux-arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version from the tag
+        id: version
+        run: echo "version=$(scripts/set-version.sh "$GITHUB_REF_NAME" | sed 's/^version //')" >>"$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+      - name: Build the server
+        run: cargo build --release --locked -p strata-cut-server
+      - name: Check the version
+        run: test "$(target/release/strata-cut --version)" = "strata-cut ${{ steps.version.outputs.version }}"
+      - name: Update package
+        run: |
+          name="Strata-Cut-${{ steps.version.outputs.version }}-${{ matrix.platform }}"
+          mkdir -p "dist/$name"
+          cp target/release/strata-cut "dist/$name/strata-cut"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.platform }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true

@@ -1,6 +1,6 @@
 //! Strata Cut server: records streams in loops, cuts clips at the frame.
 use clap::{Args, Parser, Subcommand};
-use std::{future::Future, net::SocketAddr, path::PathBuf, sync::Arc, time::{Duration, Instant}};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::{Duration, Instant}};
 use tokio::sync::{watch, Notify};
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -74,8 +74,8 @@ pub fn supervised() -> bool {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Some(Cmd::Service(c)) => return service::run(c),
-        Some(Cmd::User(c)) => return cli::user(c),
+        Some(Cmd::Service(c)) => service::run(c),
+        Some(Cmd::User(c)) => cli::user(c),
         Some(Cmd::Run(a)) => run(a),
         None => run(cli.run),
     }
@@ -143,12 +143,10 @@ async fn bind_retry(wanted: SocketAddr) -> anyhow::Result<tokio::net::TcpListene
     anyhow::bail!("{wanted} is in use")
 }
 
-fn until_true(mut rx: watch::Receiver<bool>) -> impl Future<Output = ()> {
-    async move {
-        while !*rx.borrow() {
-            if rx.changed().await.is_err() {
-                return;
-            }
+async fn until_true(mut rx: watch::Receiver<bool>) {
+    while !*rx.borrow() {
+        if rx.changed().await.is_err() {
+            return;
         }
     }
 }
