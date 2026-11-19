@@ -32,6 +32,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
         .route("/api/recorders/{id}/clear", post(clear))
+        .route("/api/recorders/{id}/logo", get(logo_get).put(logo_put).delete(logo_delete).layer(axum::extract::DefaultBodyLimit::max(super::logo::MAX + 4096)))
+        .route("/api/recorders/{id}/logo/url", post(logo_url))
         .route("/api/schedules", get(schedules).post(put_slot))
         .route("/api/schedules/occurrences", get(occurrences))
         .route("/api/schedules/{id}", axum::routing::put(put_slot_id).delete(delete_slot))
@@ -60,6 +62,48 @@ struct CardName {
 async fn hardware_name(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<CardName>) -> ApiResult<StatusCode> {
     require(me.is_admin())?;
     super::decklink::set_name(s.recorders.data_dir(), &b.key, &b.name).await.map_err(bad)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A recorder's logo (an SVG is shown as an image only: no script of its own runs).
+async fn logo_get(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
+    let (path, mime) = super::logo::find(s.recorders.data_dir(), &id).ok_or_else(|| not_found("logo"))?;
+    let bytes = tokio::fs::read(&path).await.map_err(|_| not_found("logo"))?;
+    Ok((
+        [(header::CONTENT_TYPE, mime), (header::CACHE_CONTROL, "private, max-age=86400"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff"), (header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'unsafe-inline'; sandbox")],
+        bytes,
+    )
+        .into_response())
+}
+
+/// A logo sent by the browser (the image itself as the body).
+async fn logo_put(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, body: axum::body::Bytes) -> ApiResult<StatusCode> {
+    require(me.is_admin())?;
+    s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    super::logo::save(s.recorders.data_dir(), &id, &body).map_err(bad)?;
+    s.recorders.list_changed();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct LogoUrl {
+    url: String,
+}
+
+/// A logo fetched from an address.
+async fn logo_url(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<LogoUrl>) -> ApiResult<StatusCode> {
+    require(me.is_admin())?;
+    s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    let bytes = tokio::task::spawn_blocking(move || super::logo::fetch(&b.url)).await.map_err(internal)?.map_err(bad)?;
+    super::logo::save(s.recorders.data_dir(), &id, &bytes).map_err(bad)?;
+    s.recorders.list_changed();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn logo_delete(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
+    require(me.is_admin())?;
+    super::logo::remove(s.recorders.data_dir(), &id);
+    s.recorders.list_changed();
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -8,6 +8,7 @@ pub mod web;
 pub mod epg;
 pub mod schedule;
 pub mod decklink;
+pub mod logo;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -977,6 +978,7 @@ impl Manager {
         let _ = std::fs::remove_file(epg::path(&self.data_dir, id));
         let _ = std::fs::remove_file(epg::found_path(&self.data_dir, id));
         let _ = std::fs::remove_file(self.data_dir.join("capture").join(format!("{id}.ts")));
+        logo::remove(&self.data_dir, id);
         self.schedules.delete_recorder(id);
         let name = rec.config().name;
         let _ = tokio::task::spawn_blocking(move || {
@@ -1011,7 +1013,17 @@ impl Manager {
     }
 
     pub fn list_json(&self) -> Value {
-        Value::Array(self.recs().iter().map(|r| r.config().public()).collect())
+        Value::Array(
+            self.recs()
+                .iter()
+                .map(|r| {
+                    let mut v = r.config().public();
+                    // The logo's version: the interface asks for it again when it changes.
+                    v["logo"] = json!(logo::version(&self.data_dir, &r.id));
+                    v
+                })
+                .collect(),
+        )
     }
 
     pub fn status_json(&self) -> Value {

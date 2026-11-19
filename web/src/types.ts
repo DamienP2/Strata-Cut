@@ -33,6 +33,8 @@ export interface Recorder {
   enabled: boolean;
   /** DeckLink: the card (from 0), its video input, the format ("auto": detected), the audio input and the channels captured. */
   device?: number;
+  /** The logo's version (when it last changed), null without one (sent by the server). */
+  logo?: number | null;
   connection?: string;
   videoMode?: string;
   audioInput?: string;

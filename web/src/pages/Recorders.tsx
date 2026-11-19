@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, Copy, Eraser, MoreHorizontal, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { CalendarClock, Copy, Eraser, ImagePlus, MoreHorizontal, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
@@ -271,6 +271,7 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
       <div className="project-body">
         <div className="sc-card-title">
           <span className={`nav-dot ${recording ? 'ok' : state === 'off' || state === 'waiting' ? '' : state === 'error' ? 'bad' : 'warn'}`} />
+          {rec.logo && <img className="sc-logo" src={`/api/recorders/${rec.id}/logo?v=${rec.logo}`} alt="" />}
           <strong title={[sourceAddress(rec), fmt].filter(Boolean).join('\n')}>{rec.name}</strong>
           <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
         </div>
@@ -419,11 +420,23 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
   const tooBig = left !== null && need > left;
   const gb = (b: number) => `${(b / 1e9).toLocaleString(locale(), { maximumFractionDigits: b < 1e10 ? 1 : 0 })} ${lang() === 'fr' ? 'Go' : 'GB'}`;
 
+  // The logo: a file dropped or chosen, an address, or removed; sent once the recorder is saved.
+  const [logo, setLogo] = useState<LogoChange>(null);
   const save = async () => {
     setBusy(true);
     try {
+      let id = rec?.id ?? '';
       if (rec) await api('PUT', `/api/recorders/${rec.id}`, c);
-      else await api('POST', from ? `/api/recorders?copyOf=${encodeURIComponent(from.id)}` : '/api/recorders', c);
+      else id = (await api<{ id: string }>('POST', from ? `/api/recorders?copyOf=${encodeURIComponent(from.id)}` : '/api/recorders', c)).id;
+      if (logo && id) {
+        try {
+          if (logo.file) await api('PUT', `/api/recorders/${id}/logo`, logo.file);
+          else if (logo.url) await api('POST', `/api/recorders/${id}/logo/url`, { url: logo.url });
+          else if (logo.remove) await api('DELETE', `/api/recorders/${id}/logo`);
+        } catch (e) {
+          toast(t((e as Error).message), 'error');
+        }
+      }
       onClose();
     } catch (e) {
       toast(t((e as Error).message), 'error');
@@ -522,6 +535,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
               </Field>
             </>
           )}
+          <LogoField rec={rec} change={logo} onChange={setLogo} />
           <Field label={t('Loop length')} group className="span2">
             <div className="sc-looplen">
               <input type="range" min={0} max={LOOP_STEPS.length - 1} step={1} value={stepOf(c.loopHours)} aria-label={t('Loop length')} onChange={(e) => set({ loopHours: LOOP_STEPS[Number(e.target.value)] })} />
@@ -694,5 +708,67 @@ function InputPreview({ device, connection, mode, onFormat }: { device: number; 
         {shot?.src ? (shot.format ? t('Signal: {f}', { f: formatName(shot.format, lang() === 'fr') }) : t('Signal')) : shot ? t('No signal') : ''}
       </span>
     </div>
+  );
+}
+
+/** A logo to send with the recorder: a file, an address, or none any more. */
+type LogoChange = { file?: File; url?: string; remove?: boolean } | null;
+
+/** The recorder's logo: dropped or chosen (PNG, JPEG, WebP, GIF, SVG, 2 MB), or from an address. */
+function LogoField({ rec, change, onChange }: { rec: Recorder | null; change: LogoChange; onChange: (c: LogoChange) => void }) {
+  const toast = useApp((s) => s.toast);
+  const [over, setOver] = useState(false);
+  const [url, setUrl] = useState('');
+  const [preview, setPreview] = useState<string | null>(null);
+  useEffect(() => {
+    if (!change?.file) return setPreview(null);
+    const u = URL.createObjectURL(change.file);
+    setPreview(u);
+    return () => URL.revokeObjectURL(u);
+  }, [change]);
+  const take = (f: File | undefined) => {
+    if (!f) return;
+    if (!/^image\/(png|jpeg|webp|gif|svg\+xml)$/.test(f.type)) return toast(t('the logo is a PNG, JPEG, WebP, GIF or SVG image'), 'error');
+    if (f.size > 2 << 20) return toast(t('the logo is 2 MB at most'), 'error');
+    onChange({ file: f });
+  };
+  const shown = change?.remove ? null : change?.file ? preview : change?.url ? change.url : rec?.logo ? `/api/recorders/${rec.id}/logo?v=${rec.logo}` : null;
+  return (
+    <Field label={t('Logo')} group className="span2" hint={t('PNG, JPEG, WebP, GIF or SVG, 2 MB at most. Shown with the recorder’s name.')}>
+      <div className="sc-logo-field">
+        <label
+          className={`sc-logo-drop ${over ? 'over' : ''}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setOver(true);
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setOver(false);
+            const f = e.dataTransfer.files?.[0];
+            if (f) return take(f);
+            // An image dragged from another page: its address.
+            const u = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+            if (/^https?:\/\//.test(u)) onChange({ url: u.trim() });
+          }}
+        >
+          {shown ? <img src={shown} alt="" /> : <ImagePlus size={22} />}
+          <span>{shown ? t('Drop another image, or click to choose one') : t('Drop an image here, or click to choose one')}</span>
+          <input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" hidden onChange={(e) => take(e.target.files?.[0])} />
+        </label>
+        <div className="sc-logo-url">
+          <input value={url} placeholder={t('or the address of an image (https://…)')} spellCheck={false} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+          <button type="button" className="btn small" disabled={!/^https?:\/\/./.test(url.trim())} onClick={() => onChange({ url: url.trim() })}>
+            {t('Use it')}
+          </button>
+          {shown && (
+            <button type="button" className="btn small ghost" onClick={() => onChange(rec?.logo ? { remove: true } : null)}>
+              {t('Remove')}
+            </button>
+          )}
+        </div>
+      </div>
+    </Field>
   );
 }

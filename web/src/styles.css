@@ -938,3 +938,13 @@ a.btn { color: inherit; }
 .sc-pick { width: 32px; }
 .user-table tr.picked td { background: var(--accent-soft); }
 .sc-selbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--panel); }
+
+/* Recorders' logos. */
+.sc-logo { height: 20px; max-width: 56px; object-fit: contain; flex: none; border-radius: 3px; }
+.sc-logo-field { display: grid; grid-template-columns: 220px 1fr; gap: 12px; align-items: start; }
+.sc-logo-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 96px; padding: 10px; border: 1px dashed var(--line-2); border-radius: var(--radius); color: var(--text-3); font-size: var(--fs-12); text-align: center; cursor: pointer; background: var(--panel-2); }
+.sc-logo-drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.sc-logo-drop img { max-height: 56px; max-width: 180px; object-fit: contain; }
+.sc-logo-url { display: flex; gap: 6px; flex-wrap: wrap; }
+.sc-logo-url input { flex: 1 1 200px; }
+@media (max-width: 640px) { .sc-logo-field { grid-template-columns: 1fr; } }

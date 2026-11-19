@@ -114,6 +114,7 @@ function Sources({ current }: { current?: string }) {
         return (
           <div key={r.id} className={`lib-nav-item sc-src ${r.id === current ? 'on' : ''}`} onClick={() => void navigate(`/extract/${r.id}`)}>
             <span className={`nav-dot ${st === 'recording' ? 'ok' : st === 'off' || st === 'waiting' ? '' : st === 'error' ? 'bad' : 'warn'}`} />
+            {r.logo && <img className="sc-logo" src={`/api/recorders/${r.id}/logo?v=${r.logo}`} alt="" />}
             <span className="sc-src-t">
               <span className="sc-src-name">{r.name}</span>
               <span className="sc-src-prog">{status[r.id]?.onAir?.name ?? (st === 'recording' ? t('Recording') : st === 'off' ? t('Stopped') : st === 'waiting' ? t('Programmed') : st === 'error' ? t('Error') : t('No signal'))}</span>
