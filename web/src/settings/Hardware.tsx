@@ -6,7 +6,7 @@ import { lang, t, tn } from '../i18n';
 import { formatName } from '../tc';
 import { navigate } from '../router';
 import { PageHead } from '../pages/SidePage';
-import { modelOf, type ConnKind } from './decklinkModels';
+import { modelOf, type ConnKind, type Connector } from './decklinkModels';
 import { Card } from './ui';
 
 type PortState = 'signal' | 'nosignal' | 'busy' | 'unknown';
@@ -128,80 +128,91 @@ export function Hardware() {
   );
 }
 
-const CONN_LABEL: Record<ConnKind, string> = { sdi: 'SDI', 'sdi-out': 'SDI OUT', hdmi: 'HDMI', 'hdmi-out': 'HDMI OUT', ref: 'REF', optical: 'OPTICAL', sfp: 'SFP', analog: 'ANALOG' };
+/** What is printed on the bracket above each connector. */
+const SILK: Record<ConnKind, string> = { sdi: 'SDI IN', 'sdi-out': 'SDI OUT', hdmi: 'HDMI IN', 'hdmi-out': 'HDMI OUT', ref: 'REF IN', optical: 'FIBRE', sfp: 'SFP', analog: 'AUDIO' };
+/** The room a connector takes on the bracket (px). */
+const pitch = (c: Connector) => (c.kind === 'analog' ? 96 : c.mini ? 54 : 74);
 
 /**
- * The device drawn simply, as its model is made: a full-height or low-profile PCIe card (board,
- * PCI Express connector, bracket) or an external box, with its connectors in order. Each input
- * connector shows its sub-device's signal; outputs, reference and analogue stay grey.
+ * The device's bracket, seen from the back of the server: the metal plate with its mounting tab,
+ * the labels printed on it and its connectors as they look (BNC, mini-BNC, HDMI, SFP cage, sub-D).
+ * Under the plate, each input's state: signal and format, no signal, busy.
  */
 function CardPicture({ card }: { card: CaptureCard }) {
   const model = modelOf(card.model, card.inputs.length, card.connector === 'hdmi');
   const conns = model.connectors;
-  const step = 36;
   const box = model.form === 'box';
-  const low = model.form === 'low';
-  const bodyH = Math.max(low ? 140 : 150, 40 + conns.length * step);
-  const h = bodyH + (box ? 16 : 34);
-  const first = 12 + bodyH / 2 - ((conns.length - 1) * step) / 2;
-  const boardW = low ? 250 : 340;
-  const boardX = 356 - boardW;
-  // The input connectors of a sub-device: several (SDI and HDMI of a Mini Recorder) say which one.
+  const tab = box ? 18 : 46;
+  const inner = conns.reduce((a, c) => a + pitch(c), 0);
+  // A full-height bracket is longer than its connectors need; a low-profile one is just enough.
+  const plateW = inner + 28 + (model.form === 'full' ? 70 : 0);
+  const w = tab + plateW + 24;
+  const plateY = 18;
+  const plateH = 74;
+  const cy = plateY + plateH / 2 + 7;
   const perInput = (i: number) => conns.filter((c) => c.input === i).length;
+  let x = tab + 14;
+  const placed = conns.map((c) => {
+    const cx = x + pitch(c) / 2;
+    x += pitch(c);
+    return { c, cx };
+  });
+  const first = (i: number) => placed.findIndex((p) => p.c.input === i);
+  const middle = (i: number) => {
+    const xs = placed.filter((p) => p.c.input === i).map((p) => p.cx);
+    return (Math.min(...xs) + Math.max(...xs)) / 2;
+  };
   return (
-    <svg className="hw-card" viewBox={`0 0 680 ${h}`} role="img" aria-label={model.name}>
+    <svg className="hw-card" viewBox={`0 0 ${w} 158`} role="img" aria-label={model.name} style={{ maxWidth: `${w * 1.25}px` }}>
+      <defs>
+        <linearGradient id="hw-steel" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#d7dae0" />
+          <stop offset="0.5" stopColor="#bfc3cb" />
+          <stop offset="1" stopColor="#a4a9b3" />
+        </linearGradient>
+        <linearGradient id="hw-anod" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#3b3f48" />
+          <stop offset="1" stopColor="#24272e" />
+        </linearGradient>
+        <radialGradient id="hw-nickel" cx="0.4" cy="0.35" r="0.75">
+          <stop offset="0" stopColor="#f2f3f5" />
+          <stop offset="0.6" stopColor="#b9bdc5" />
+          <stop offset="1" stopColor="#80858f" />
+        </radialGradient>
+      </defs>
+      {/* The plate: a PCIe bracket (mounting tab on the left, tongue on the right) or a box's panel. */}
       {box ? (
-        <>
-          <rect className="hw-box" x={boardX} y={12} width={boardW} height={bodyH} rx={14} />
-          <text className="hw-model" x={boardX + 18} y={36}>
-            {model.name}
-          </text>
-          <text className="hw-chip-t" x={boardX + 18} y={12 + bodyH - 16}>
-            Thunderbolt / USB
-          </text>
-        </>
+        <rect x={6} y={plateY - 4} width={tab + plateW + 6} height={plateH + 8} rx={10} fill="url(#hw-anod)" stroke="#15171c" />
       ) : (
         <>
-          <rect className="hw-board" x={boardX} y={12 + (low ? 20 : 0)} width={boardW} height={bodyH - (low ? 20 : 0)} rx={8} />
-          {/* The chip at the bottom right, under the model's name. */}
-          <rect className="hw-chip" x={boardX + boardW - 104} y={12 + bodyH - 72} width={64} height={52} rx={4} />
-          <text className="hw-chip-t" x={boardX + boardW - 72} y={12 + bodyH - 42} textAnchor="middle">
-            BMD
-          </text>
-          {Array.from({ length: low ? 12 : 20 }, (_, i) => (
-            <rect key={i} className="hw-finger" x={boardX + 40 + i * 9} y={12 + bodyH} width={6} height={12} rx={1} />
-          ))}
-          <text className="hw-model" x={boardX + 12} y={32 + (low ? 20 : 0)}>
-            {model.name}
-          </text>
+          <path d={`M6 ${plateY + 6} h${tab - 2} v${plateH - 12} h-${tab - 2} z`} fill="url(#hw-steel)" stroke="#8a8f99" />
+          <rect x={18} y={plateY + plateH / 2 - 6} width={16} height={12} rx={6} fill="#5d626c" />
+          <path d={`M${tab + 4} ${plateY} h${plateW} l14 ${plateH / 2 - 8} v16 l-14 ${plateH / 2 - 8} h-${plateW} z`} fill="url(#hw-steel)" stroke="#8a8f99" />
         </>
       )}
-      {!box && <rect className="hw-bracket" x={356} y={4} width={18} height={bodyH + 16} rx={2} />}
-      {conns.map((c, k) => {
-        const y = first + k * step;
+      {placed.map(({ c, cx }, k) => {
         const port = c.input !== undefined ? card.inputs[c.input] : undefined;
-        // An input used by a recorder on one of its connectors only: the other one stays grey.
         const chosen = port?.recorder?.connection;
-        const active = port && (perInput(c.input!) === 1 || !chosen || chosen === 'auto' || chosen === c.kind);
-        const state = port ? (active ? port.state : 'idle') : 'idle';
-        const title = port ? `${t('Input {n}', { n: c.input! + 1 })}${perInput(c.input!) > 1 ? ` · ${CONN_LABEL[c.kind]}` : ''}` : CONN_LABEL[c.kind];
+        const active = !!port && (perInput(c.input!) === 1 || !chosen || chosen === 'auto' || chosen === c.kind);
+        const state = port ? (active ? port.state : 'idle') : 'other';
+        const silk = c.input !== undefined && c.kind === 'sdi' ? `SDI ${c.input + 1}` : SILK[c.kind];
         return (
-          <g key={k} className={`hw-in ${state} ${port ? '' : 'other'}`}>
-            <Conn kind={c.kind} y={y} />
-            <line className="hw-lead" x1={384} y1={y} x2={398} y2={y} />
-            {port ? (
+          <g key={k} className={`hw-in ${state}`}>
+            <text className={`hw-silk ${box ? 'on-dark' : ''}`} x={cx} y={plateY + 14} textAnchor="middle">
+              {silk}
+            </text>
+            <Conn c={c} x={cx} y={cy} />
+            {port && <circle className="hw-led" cx={cx} cy={plateH + plateY + 18} r={3.5} />}
+            {/* One caption per input, under its connector (between them when it has an SDI and an HDMI). */}
+            {port && first(c.input!) === k && (
               <>
-                <text className="hw-label" x={404} y={y - 3}>
-                  {title}
+                <text className="hw-cap" x={middle(c.input!)} y={plateH + plateY + 38} textAnchor="middle">
+                  {t('Input {n}', { n: c.input! + 1 })}
                 </text>
-                <text className="hw-sub" x={404} y={y + 13}>
-                  {[active ? (port.state === 'signal' && port.format ? formatName(port.format, lang() === 'fr') : STATE_LABEL(port.state)) : t('Not used'), active ? port.recorder?.name : undefined].filter(Boolean).join(' · ')}
+                <text className={`hw-cap2 ${port.state}`} x={middle(c.input!)} y={plateH + plateY + 54} textAnchor="middle">
+                  {port.state === 'signal' ? formatName(port.format, lang() === 'fr') || t('Signal') : port.state === 'nosignal' ? '—' : port.state === 'busy' ? t('Busy') : '…'}
                 </text>
               </>
-            ) : (
-              <text className="hw-other" x={404} y={y + 4}>
-                {title}
-              </text>
             )}
           </g>
         );
@@ -210,25 +221,62 @@ function CardPicture({ card }: { card: CaptureCard }) {
   );
 }
 
-/** One connector, as it looks: BNC (SDI, reference), HDMI, optical / SFP cage, analogue breakout. */
-function Conn({ kind, y }: { kind: ConnKind; y: number }) {
-  const x = 365;
-  if (kind === 'hdmi' || kind === 'hdmi-out') return <path className="hw-conn" d={`M${x - 13} ${y - 7} h26 l-4 14 h-18 z`} />;
-  if (kind === 'optical' || kind === 'sfp')
+/** A connector drawn as it looks, centred on (x, y). */
+function Conn({ c, x, y }: { c: Connector; x: number; y: number }) {
+  if (c.kind === 'hdmi' || c.kind === 'hdmi-out')
     return (
-      <>
-        <rect className="hw-conn" x={x - 12} y={y - 8} width={24} height={16} rx={2} />
-        <circle className="hw-pin" cx={x - 5} cy={y} r={2.5} />
-        <circle className="hw-pin" cx={x + 5} cy={y} r={2.5} />
-      </>
+      <g>
+        <path d={`M${x - 16} ${y - 7} h32 v6 l-4 6 h-24 l-4 -6 z`} fill="url(#hw-nickel)" stroke="#6f747e" />
+        <path d={`M${x - 12} ${y - 4} h24 v3 l-3 4 h-18 l-3 -4 z`} fill="#16181d" />
+        <rect x={x - 9} y={y - 3} width={18} height={2.4} fill="#2c3038" />
+        <circle className="hw-ring" cx={x} cy={y} r={21} />
+      </g>
     );
-  if (kind === 'analog') return <path className="hw-conn" d={`M${x - 15} ${y - 8} h30 l-4 16 h-22 z`} />;
-  const r = kind === 'ref' ? 10 : 13;
+  if (c.kind === 'sfp' || c.kind === 'optical')
+    return (
+      <g>
+        <rect x={x - 15} y={y - 10} width={30} height={20} rx={1.5} fill="url(#hw-nickel)" stroke="#6f747e" />
+        <rect x={x - 11} y={y - 6} width={22} height={12} fill="#121418" />
+        <circle cx={x - 5} cy={y} r={2.2} fill="#3d424c" />
+        <circle cx={x + 5} cy={y} r={2.2} fill="#3d424c" />
+        <circle className="hw-ring" cx={x} cy={y} r={21} />
+      </g>
+    );
+  if (c.kind === 'analog')
+    return (
+      <g>
+        <path d={`M${x - 30} ${y - 9} h60 l-5 18 h-50 z`} fill="url(#hw-nickel)" stroke="#6f747e" />
+        <path d={`M${x - 26} ${y - 6} h52 l-4 12 h-44 z`} fill="#16181d" />
+        {Array.from({ length: 12 }, (_, i) => (
+          <circle key={i} cx={x - 22 + i * 4} cy={y - 2} r={0.9} fill="#c9a227" />
+        ))}
+        {Array.from({ length: 11 }, (_, i) => (
+          <circle key={i} cx={x - 20 + i * 4} cy={y + 2.5} r={0.9} fill="#c9a227" />
+        ))}
+        <circle cx={x - 38} cy={y} r={2.5} fill="#6f747e" />
+        <circle cx={x + 38} cy={y} r={2.5} fill="#6f747e" />
+      </g>
+    );
+  // BNC or mini-BNC (DIN 1.0/2.3): hex nut, barrel with its bayonet lugs, white insulator, gold pin.
+  const k = c.mini ? 0.62 : 1;
+  const hex = Array.from({ length: 6 }, (_, i) => {
+    const a = (Math.PI / 3) * i + Math.PI / 6;
+    return `${(x + Math.cos(a) * 17 * k).toFixed(1)},${(y + Math.sin(a) * 17 * k).toFixed(1)}`;
+  }).join(' ');
   return (
-    <>
-      <circle className="hw-bnc" cx={x} cy={y} r={r} />
-      <circle className="hw-conn" cx={x} cy={y} r={r - 5} />
-      <circle className="hw-pin" cx={x} cy={y} r={2.5} />
-    </>
+    <g>
+      <polygon points={hex} fill="url(#hw-nickel)" stroke="#6f747e" />
+      <circle cx={x} cy={y} r={11.5 * k} fill="#cfd2d8" stroke="#7d828c" />
+      {!c.mini && (
+        <>
+          <rect x={x - 14.5} y={y - 1.6} width={3.6} height={3.2} rx={1} fill="#9ea3ad" />
+          <rect x={x + 10.9} y={y - 1.6} width={3.6} height={3.2} rx={1} fill="#9ea3ad" />
+        </>
+      )}
+      <circle cx={x} cy={y} r={7.5 * k} fill="#2a2d33" />
+      <circle cx={x} cy={y} r={5.2 * k} fill="#ece8dc" />
+      <circle cx={x} cy={y} r={1.6 * k + 0.4} fill="#c9a227" />
+      <circle className="hw-ring" cx={x} cy={y} r={21 * k} />
+    </g>
   );
 }

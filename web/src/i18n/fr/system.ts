@@ -102,4 +102,5 @@ export const system: Record<string, string> = {
   'Open it in Extraction': 'L’ouvrir dans Extraction',
   'Create a recorder': 'Créer un enregistreur',
   'Not used': 'Non utilisé',
+  Busy: 'Occupée',
 };

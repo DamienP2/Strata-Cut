@@ -12,6 +12,8 @@ export interface Connector {
   kind: ConnKind;
   /** The sub-device whose input it is (from 0). */
   input?: number;
+  /** DIN 1.0/2.3 (mini-BNC) instead of a full-size BNC. */
+  mini?: boolean;
 }
 
 export interface Model {
@@ -25,6 +27,9 @@ export interface Model {
 }
 
 const sdi = (...inputs: number[]): Connector[] => inputs.map((input) => ({ kind: 'sdi', input }));
+/** Mini-BNC (DIN 1.0/2.3) inputs, as on the Quad 2 and the "Mini" multi-channel cards. */
+const din = (...inputs: number[]): Connector[] => inputs.map((input) => ({ kind: 'sdi', input, mini: true }));
+const dinRef: Connector = { kind: 'ref', mini: true };
 const hdmi = (...inputs: number[]): Connector[] => inputs.map((input) => ({ kind: 'hdmi', input }));
 const out = (kind: ConnKind, n = 1): Connector[] => Array.from({ length: n }, () => ({ kind }));
 /** The usual "full" set: SDI in and out, HDMI in and out, reference, analogue breakout. */
@@ -40,13 +45,16 @@ export const MODELS: Model[] = [
   { name: 'DeckLink SDI Micro', match: /sdi micro/i, form: 'low', connectors: [...sdi(0), ...out('sdi-out')] },
   { name: 'DeckLink SDI 4K', match: /sdi 4k/i, form: 'low', connectors: [...sdi(0), ...out('sdi-out'), ...out('ref')] },
   // Multi-channel SDI.
-  { name: 'DeckLink 8K Pro Mini', match: /8k pro mini/i, form: 'low', connectors: [...sdi(0, 1, 2, 3), ...out('ref')] },
+  { name: 'DeckLink 8K Pro Mini', match: /8k pro mini/i, form: 'low', connectors: [...din(0, 1, 2, 3), dinRef] },
+  { name: 'DeckLink 8K Pro G2', match: /8k pro g2/i, form: 'full', connectors: [...sdi(0, 1, 2, 3), ...out('ref'), ...out('hdmi-out')] },
   { name: 'DeckLink 8K Pro', match: /8k pro/i, form: 'full', connectors: [...sdi(0, 1, 2, 3), ...out('ref')] },
   { name: 'DeckLink Quad HDMI Recorder', match: /quad hdmi/i, form: 'full', connectors: hdmi(0, 1, 2, 3) },
-  { name: 'DeckLink Quad 2', match: /quad/i, inputs: 8, form: 'full', connectors: sdi(0, 1, 2, 3, 4, 5, 6, 7) },
-  { name: 'DeckLink Quad', match: /quad/i, form: 'full', connectors: sdi(0, 1, 2, 3, 4, 5, 6, 7) },
-  { name: 'DeckLink Duo 2 Mini', match: /duo 2 mini|duo mini/i, form: 'low', connectors: sdi(0, 1, 2, 3) },
-  { name: 'DeckLink Duo 2', match: /duo/i, inputs: 4, form: 'full', connectors: sdi(0, 1, 2, 3) },
+  // Quad 2: 8 mini-BNC and a mini-BNC reference input.
+  { name: 'DeckLink Quad 2', match: /quad/i, inputs: 8, form: 'full', connectors: [...din(0, 1, 2, 3, 4, 5, 6, 7), dinRef] },
+  { name: 'DeckLink Quad', match: /quad/i, form: 'full', connectors: [...din(0, 1, 2, 3, 4, 5, 6, 7), dinRef] },
+  { name: 'DeckLink Duo 2 Mini', match: /duo 2 mini|duo mini/i, form: 'low', connectors: din(0, 1, 2, 3) },
+  // Duo 2: 4 BNC and a BNC reference input (blackburst / tri-level).
+  { name: 'DeckLink Duo 2', match: /duo/i, inputs: 4, form: 'full', connectors: [...sdi(0, 1, 2, 3), ...out('ref')] },
   { name: 'DeckLink Duo', match: /duo/i, form: 'full', connectors: [...sdi(0, 1), ...out('sdi-out', 2)] },
   // Single channel, every connector.
   { name: 'DeckLink 4K Extreme 12G', match: /4k extreme 12g/i, form: 'full', connectors: studio() },
