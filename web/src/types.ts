@@ -39,6 +39,8 @@ export interface Recorder {
   videoMode?: string;
   audioInput?: string;
   audioChannels?: number;
+  /** HLS: the stream read when the playlist offers several (its playlist's address as written in it; empty: the best picture). */
+  variant?: string;
 }
 
 export type RecorderState = 'off' | 'starting' | 'recording' | 'nosignal' | 'error' | 'waiting';

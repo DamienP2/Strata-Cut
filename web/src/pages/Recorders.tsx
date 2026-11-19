@@ -423,6 +423,15 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
   const placeholder = PLACEHOLDERS[c.protocol];
   const web = c.protocol === 'web';
   const card = c.protocol === 'decklink';
+  // Another source (or a new recorder): tried before it is saved. HLS: tried also as it is, for
+  // the qualities its playlist offers.
+  const probe = useProbe(cleaned(c), !card && (!sameSource(rec, c) || c.protocol === 'hls') && triable(cleaned(c)));
+  // HLS: the streams its playlist offers, in its order (the one chosen kept while it is tried).
+  const [streams, setStreams] = useState<NonNullable<Probe['variants']>>([]);
+  useEffect(() => {
+    if (probe.result) setStreams(probe.result.variants ?? []);
+  }, [probe.result]);
+  useEffect(() => setStreams([]), [c.url, c.protocol]);
   const importCookies = (file: File | undefined) => {
     if (!file) return;
     void file.text().then((text) => set({ cookies: text }));
@@ -513,6 +522,23 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
               <input value={c.url} placeholder={placeholder} spellCheck={false} onChange={(e) => set({ url: e.target.value })} />
             </Field>
           )}
+          {c.protocol === 'hls' && (streams.length > 1 || !!c.variant) && (
+            <Field label={t('Stream')} hint={t('The playlist offers several streams: only this one is read and recorded (with its sounds).')}>
+              <Dropdown
+                value={c.variant ?? ''}
+                options={[
+                  { value: '', label: t('Automatic (the best picture)') },
+                  ...streams.map((v, i) => ({
+                    value: v.uri,
+                    label: `${i + 1}. ${v.name || (v.height ? `${v.height}p` : v.uri.split('/').pop())}`,
+                    detail: [v.width ? `${v.width}×${v.height}` : '', v.bandwidth ? t('{n} Mb/s', { n: (v.bandwidth / 1e6).toLocaleString(locale(), { maximumFractionDigits: 1 }) }) : ''].filter(Boolean).join(' · '),
+                  })),
+                  ...(c.variant && !streams.some((v) => v.uri === c.variant) ? [{ value: c.variant, label: c.variant.split('/').pop() ?? c.variant }] : []),
+                ]}
+                onChange={(v) => set({ variant: v })}
+              />
+            </Field>
+          )}
           {web && (
             <Field
               className="span2"
@@ -576,7 +602,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
           </Field>
         </div>
         <aside className="sc-rm-side">
-          <RecorderSide c={c} rec={rec} st={rec ? status[rec.id] : undefined} dl={dl} detected={detected} onFormat={setDetected} />
+          <RecorderSide c={c} rec={rec} st={rec ? status[rec.id] : undefined} dl={dl} detected={detected} onFormat={setDetected} probe={probe} />
           {c.enabled && (
             <div className={`sc-space ${tooBig ? 'bad' : ''}`}>
               <span>{t('Reserved for the loop: {need}', { need: gb(need) })}</span>
@@ -800,6 +826,15 @@ interface Probe {
   audio: number;
   epg: boolean;
   services: string[];
+  /** HLS: the qualities its playlist offers (several, else none). */
+  variants?: { uri: string; name: string; width: number; height: number; bandwidth: number; fps: number }[];
+}
+
+/** The settings being edited are those it records (its state, its picture are then its own). */
+function sameSource(rec: Recorder | null, c: Recorder): boolean {
+  if (!rec || rec.protocol !== c.protocol) return false;
+  if (c.protocol === 'decklink') return rec.device === c.device;
+  return rec.url === c.url && rec.mode === c.mode && rec.port === c.port && rec.iface === c.iface && (rec.variant ?? '') === (c.variant ?? '');
 }
 
 /** The source as written can be tried: an address of its kind, a caller (a listening one waits for its source). */
@@ -829,7 +864,7 @@ function triable(c: Recorder): boolean {
 function useProbe(c: Recorder, on: boolean) {
   const [state, setState] = useState<{ busy: boolean; result: Probe | null; error: string }>({ busy: false, result: null, error: '' });
   const [again, setAgain] = useState(0);
-  const key = on ? JSON.stringify([c.protocol, c.url, c.mode, c.iface, c.latency, c.passphrase, (c.cookies ?? '').length, again]) : '';
+  const key = on ? JSON.stringify([c.protocol, c.url, c.mode, c.iface, c.latency, c.passphrase, (c.cookies ?? '').length, c.variant ?? '', again]) : '';
   useEffect(() => {
     if (!key) return setState({ busy: false, result: null, error: '' });
     let dead = false;
@@ -849,18 +884,16 @@ function useProbe(c: Recorder, on: boolean) {
 }
 
 /** The right side of the recorder's window: what it receives, its technical details, its programme guide. */
-function RecorderSide({ c, rec, st, dl, detected, onFormat }: { c: Recorder; rec: Recorder | null; st?: RecorderStatus; dl: DecklinkInfo | null; detected: string; onFormat: (f: string) => void }) {
+function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Recorder; rec: Recorder | null; st?: RecorderStatus; dl: DecklinkInfo | null; detected: string; onFormat: (f: string) => void; probe: ReturnType<typeof useProbe> }) {
   const timezone = useApp((s) => s.timezone);
   const fr = lang() === 'fr';
   const card = c.protocol === 'decklink';
   const device = c.device ?? 0;
   const input = card ? dl?.devices.find((d) => d.number === device) : undefined;
   // The settings being edited are what it records: its state only while they are unchanged.
-  const unchanged = !!rec && rec.protocol === c.protocol && (card ? rec.device === c.device : rec.url === c.url && rec.mode === c.mode && rec.port === c.port && rec.iface === c.iface);
+  const unchanged = sameSource(rec, c);
   const media = st && unchanged ? st.media : null;
-  // Another source (or a new recorder): tried before it is saved.
   const listening = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
-  const probe = useProbe(cleaned(c), !card && !unchanged && triable(cleaned(c)));
   const tried = probe.result;
   const rows: [string, string][] = [];
   if (card) {

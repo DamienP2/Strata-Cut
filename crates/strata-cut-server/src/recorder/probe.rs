@@ -118,10 +118,13 @@ async fn run(m: &Manager, c: &RecorderConfig) -> Result<Value, String> {
     } else {
         super::run::input_args(c)
     };
+    // HLS: the qualities offered, and the one chosen (its picture, its streams).
+    let (variants, program) = if c.protocol == Protocol::Hls { super::hls::choose(&c.url, &c.variant).await } else { (Vec::new(), None) };
     let mut args: Vec<String> = ["-hide_banner", "-nostats", "-loglevel", "info", "-analyzeduration", "3000000", "-probesize", "8000000"].map(String::from).to_vec();
     args.extend(input);
     // One picture: deinterlaced, 640 wide.
-    args.extend(["-map", "0:v:0?", "-frames:v", "1", "-vf", "yadif=deint=interlaced,scale=640:-2", "-q:v", "4", "-f", "image2", "-c:v", "mjpeg", "pipe:1"].map(String::from));
+    let video = program.map_or("0:v:0?".to_string(), |p| format!("0:p:{p}:v:0?"));
+    args.extend(["-map", video.as_str(), "-frames:v", "1", "-vf", "yadif=deint=interlaced,scale=640:-2", "-q:v", "4", "-f", "image2", "-c:v", "mjpeg", "pipe:1"].map(String::from));
     let mut cmd = Command::new(&m.ffmpeg);
     cmd.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut pipe = None;
@@ -150,7 +153,14 @@ async fn run(m: &Manager, c: &RecorderConfig) -> Result<Value, String> {
     let timed_out = tokio::time::timeout(Duration::from_secs(15), read).await.is_err();
     drop(feeder);
     let text = String::from_utf8_lossy(&text).into_owned();
-    let d = describe(&text);
+    let mut d = describe(&program.map_or_else(|| text.clone(), |p| super::hls::program_text(&text, p)));
+    // FFmpeg had not measured that stream's picture: as its playlist announces it.
+    if let Some(v) = program.and_then(|p| variants.get(p)).filter(|v| d.width == 0 && v.height > 0) {
+        (d.width, d.height) = (v.width, v.height);
+        if d.fps == 0.0 {
+            d.fps = v.fps;
+        }
+    }
     if d.codec.is_empty() && d.audio == 0 {
         let why = super::run::best_line(&text.lines().map(str::to_string).collect::<Vec<_>>());
         // Nothing came (FFmpeg only says its input could not be read): said plainly.
@@ -168,6 +178,7 @@ async fn run(m: &Manager, c: &RecorderConfig) -> Result<Value, String> {
         "audio": d.audio,
         "epg": d.epg,
         "services": d.services,
+        "variants": if variants.len() > 1 { serde_json::to_value(&variants).unwrap_or_default() } else { json!([]) },
     }))
 }
 

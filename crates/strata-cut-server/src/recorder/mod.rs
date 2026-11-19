@@ -10,6 +10,7 @@ pub mod schedule;
 pub mod decklink;
 pub mod sdk;
 pub mod probe;
+pub mod hls;
 pub mod logo;
 
 use serde::{Deserialize, Serialize};
@@ -135,6 +136,10 @@ pub struct RecorderConfig {
     pub audio_channels: u32,
     #[serde(default = "auto")]
     pub audio_input: String,
+    /// HLS: the stream read when the playlist offers several (its playlist's address as written
+    /// in it, see `hls`; empty: the best picture).
+    #[serde(default)]
+    pub variant: String,
 }
 
 fn auto() -> String {
@@ -215,6 +220,9 @@ impl RecorderConfig {
         }
         if self.protocol == Protocol::Srt && !self.passphrase.is_empty() && self.passphrase != MASKED && !(10..=79).contains(&self.passphrase.chars().count()) {
             return Err("the srt passphrase has 10 to 79 characters".into());
+        }
+        if self.variant.len() > 2000 {
+            return Err("the hls stream chosen is not valid".into());
         }
         if !self.iface.is_empty() && self.iface.parse::<std::net::IpAddr>().is_err() {
             return Err("the network interface is an ip address".into());

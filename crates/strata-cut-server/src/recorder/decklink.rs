@@ -969,6 +969,7 @@ mod tests {
             video_mode: "1080i50".into(),
             audio_channels: 8,
             audio_input: "embedded".into(),
+            variant: String::new(),
         }
     }
 

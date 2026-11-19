@@ -289,7 +289,8 @@ fn urlencode(s: &str) -> String {
 /// preview's encoding, the heavy part, runs in another process and can never hold it up.
 /// `describe`: FFmpeg also describes the input (programmes, streams: how the guide is found);
 /// `epg`: the guide's stream, written raw on FFmpeg's output.
-pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Option<&str>, preview_port: u16) -> Vec<String> {
+/// `program`: the only program read (HLS: the variant of the quality chosen, see `super::hls`).
+pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Option<&str>, preview_port: u16, program: Option<usize>) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
     let level = if describe { "info" } else { "warning" };
     // Damaged packets are kept (no +discardcorrupt): a frame with a few lost packets decodes
@@ -298,12 +299,14 @@ pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Op
     let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", level, "-copyts", "-thread_queue_size", "4096"].map(String::from).to_vec();
     a.extend(input);
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let from = program.map_or("0:".to_string(), |p| format!("0:p:{p}:"));
+    let (video, sounds, sound) = (format!("{from}v:0"), format!("{from}a?"), format!("{from}a:0?"));
     // 1. The stream as received, in segments.
-    a.extend(s(&["-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
+    a.extend(s(&["-map", &video, "-map", &sounds, "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
     a.push(d("master/list.csv"));
     a.push(d("master/s%08d.ts"));
     // 2. The same picture and first sound, same timestamps, for the preview (UDP never waits for it).
-    a.extend(s(&["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts"]));
+    a.extend(s(&["-map", &video, "-map", &sound, "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts"]));
     a.push(format!("udp://127.0.0.1:{preview_port}?pkt_size=1316"));
     // 3. The programme guide (DVB EIT sections), decoded by the recorder.
     if let Some(map) = epg {
@@ -458,7 +461,9 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         finish_run(rec, &run_id);
         return Outcome::Exited { had_data: false, message: "no free local port for the preview".into() };
     };
-    let args = receiver_args(input, &run_dir, ts, epg_map.as_deref(), port);
+    // HLS: the variant of the quality chosen, when the playlist offers several.
+    let program = if cfg.protocol == Protocol::Hls { super::hls::choose(&cfg.url, &cfg.variant).await.1 } else { None };
+    let args = receiver_args(input, &run_dir, ts, epg_map.as_deref(), port, program);
     let preview_args = preview_args(port, &run_dir, &base.join("thumb.jpg"), audio);
     tracing::debug!("{}: ffmpeg {}", cfg.name, args.join(" "));
     tracing::debug!("{}: preview: ffmpeg {}", cfg.name, preview_args.join(" "));
@@ -1172,7 +1177,7 @@ mod tests {
     use super::*;
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
-        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into() }
+        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into(), variant: String::new() }
     }
 
     #[test]
@@ -1183,7 +1188,7 @@ mod tests {
         assert!(a.contains(&"udp://127.0.0.1:5000?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216".to_string()));
         // The receiver only copies (no encoding), and keeps the damaged frames: thrown away, they
         // make the mosaic last to the next key frame.
-        let r = receiver_args(vec!["-i".into(), "x".into()], Path::new("/r"), false, None, 5000);
+        let r = receiver_args(vec!["-i".into(), "x".into()], Path::new("/r"), false, None, 5000, None);
         assert!(!r.iter().any(|x| x.contains("discardcorrupt") || x.contains("libx264") || x == "-vf" || x == "-af"));
         assert!(r.contains(&"udp://127.0.0.1:5000?pkt_size=1316".to_string()));
     }
