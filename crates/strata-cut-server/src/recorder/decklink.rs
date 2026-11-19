@@ -181,13 +181,14 @@ async fn list_inputs() -> Vec<Input> {
 async fn list(data_dir: &Path) -> Vec<Value> {
     let inputs = list_inputs().await;
     let names = names(data_dir);
+    let keys = card_keys(&inputs);
     let mut rank: std::collections::HashMap<String, u32> = Default::default();
     let mut sorted = inputs.clone();
-    sorted.sort_by_key(|i| i.number);
+    sorted.sort_by(connector_order);
     sorted
         .iter()
         .map(|i| {
-            let key = card_key(i);
+            let key = keys[&i.number].clone();
             let k = rank.entry(key.clone()).or_insert(0);
             *k += 1;
             json!({ "number": i.number, "name": i.name, "card": names.get(&key).cloned().unwrap_or_else(|| model_of(&i.name)), "input": *k })
@@ -195,13 +196,49 @@ async fn list(data_dir: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// A card, for the names given to it: its serial number (its inputs share it), else its model.
+/// The input's number on its card, from the driver's name: "DeckLink Quad 2 (5)" → 5. It is the
+/// connector's (SDI 5); the driver's own numbering goes in another order (1, 5, 2, 6… on a Quad 2).
+fn sub_index(name: &str) -> Option<u32> {
+    let n = name.trim();
+    let i = n.rfind(" (")?;
+    n.ends_with(')').then_some(())?;
+    n[i + 2..n.len() - 1].parse().ok()
+}
+
+/// A card, for grouping its inputs and naming it: the driver gives each input of a card a number
+/// of its own (…cb00 to …cb07 on a Quad 2); what they share, else the model.
 fn card_key(i: &Input) -> String {
-    if i.serial.is_empty() {
-        model_of(&i.name)
+    let model = model_of(&i.name);
+    if i.serial.chars().count() > 1 {
+        let s: String = i.serial.chars().take(i.serial.chars().count() - 1).collect();
+        format!("{model} {s}")
     } else {
-        i.serial.clone()
+        model
     }
+}
+
+/// Each input's card: by `card_key`, except that inputs of a model each alone on its "card"
+/// (numbers that share nothing) are one card of that model.
+fn card_keys(inputs: &[Input]) -> std::collections::HashMap<u32, String> {
+    let mut keys: std::collections::HashMap<u32, String> = inputs.iter().map(|i| (i.number, card_key(i))).collect();
+    let mut by_model: std::collections::HashMap<String, Vec<&Input>> = Default::default();
+    for i in inputs {
+        by_model.entry(model_of(&i.name)).or_default().push(i);
+    }
+    for (model, list) in by_model {
+        let alone = list.iter().all(|i| list.iter().filter(|o| keys[&o.number] == keys[&i.number]).count() == 1);
+        if list.len() > 1 && alone {
+            for i in list {
+                keys.insert(i.number, model.clone());
+            }
+        }
+    }
+    keys
+}
+
+/// The inputs in the order of the card's connectors (the number in their name), else the driver's.
+fn connector_order(a: &Input, b: &Input) -> std::cmp::Ordering {
+    (sub_index(&a.name).unwrap_or(u32::MAX), a.number).cmp(&(sub_index(&b.name).unwrap_or(u32::MAX), b.number))
 }
 
 /// The names given to the cards (Système › Matériel), by card.
@@ -328,7 +365,8 @@ pub async fn preview(number: u32, connection: &str, mode: &str) -> Option<(Vec<u
     let file = std::env::temp_dir().join(format!("strata-cut-preview-{}-{number}.jpg", std::process::id()));
     let _ = std::fs::remove_file(&file);
     let args: Vec<String> = [
-        "-v", "decklinkvideosrc", &format!("device-number={number}"), &format!("connection={connection}"), &format!("mode={mode}"), "num-buffers=4", "!",
+        // Without signal the card still gives (black) frames, in a default format: not a picture.
+        "-v", "decklinkvideosrc", &format!("device-number={number}"), &format!("connection={connection}"), &format!("mode={mode}"), "drop-no-signal-frames=true", "num-buffers=4", "!",
         "deinterlace", "!", "videoconvert", "!", "videoscale", "!", "video/x-raw,width=640,pixel-aspect-ratio=1/1", "!",
         "jpegenc", "quality=80", "snapshot=true", "!", "filesink", &format!("location={}", file.display()),
     ]
@@ -348,7 +386,8 @@ pub async fn preview(number: u32, connection: &str, mode: &str) -> Option<(Vec<u
 async fn probe(number: u32) -> Option<(bool, String)> {
     let lock = input_lock(number);
     let _one = lock.lock().await;
-    let args = [GST_LAUNCH, "-v", "decklinkvideosrc", &format!("device-number={number}"), "mode=auto", "num-buffers=1", "!", "fakesink", "sync=false"];
+    // Frames without signal (black, in a default format) are dropped: only a real picture counts.
+    let args = [GST_LAUNCH, "-v", "decklinkvideosrc", &format!("device-number={number}"), "mode=auto", "drop-no-signal-frames=true", "num-buffers=1", "!", "fakesink", "sync=false"];
     let run = tokio::process::Command::new(args[0]).args(&args[1..]).stdin(std::process::Stdio::null()).kill_on_drop(true).output();
     let out = match tokio::time::timeout(Duration::from_secs(4), run).await {
         Ok(Ok(o)) => o,
@@ -358,6 +397,9 @@ async fn probe(number: u32) -> Option<(bool, String)> {
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     if text.contains("Failed to acquire input") || text.contains("has no input") {
         return None;
+    }
+    if text.contains("Signal lost") {
+        return Some((false, String::new()));
     }
     Some(caps_mode(&text).map_or((false, String::new()), |m| (true, m)))
 }
@@ -432,10 +474,13 @@ pub async fn hardware(m: &super::Manager) -> Value {
         probed.insert(n, p);
     }
     let names = names(m.data_dir());
+    let keys = card_keys(&inputs);
+    let mut ordered: Vec<&Input> = inputs.iter().collect();
+    ordered.sort_by(|a, b| connector_order(a, b));
     let mut cards: Vec<(String, String, Vec<Value>)> = Vec::new();
-    for input in &inputs {
+    for input in ordered {
         let model = model_of(&input.name);
-        let key = card_key(input);
+        let key = keys[&input.number].clone();
         let user = recs.iter().find(|r| r.config().device == input.number);
         let running = running_of(input.number);
         let (state, format) = match &running {
@@ -463,9 +508,9 @@ pub async fn hardware(m: &super::Manager) -> Value {
     }
     let cards: Vec<Value> = cards
         .into_iter()
-        .map(|(key, model, mut ports)| {
-            ports.sort_by_key(|p| p["number"].as_u64());
-            let serial = if key == model { String::new() } else { key.clone() };
+        .map(|(key, model, ports)| {
+            // Already in the order of the connectors.
+            let serial = key.strip_prefix(&model).map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| format!("{s}x")).unwrap_or_default();
             json!({ "key": key, "name": names.get(&key).cloned().unwrap_or_default(), "model": model, "serial": serial, "connector": connector_of(&model), "inputs": ports })
         })
         .collect();
@@ -531,6 +576,20 @@ mod tests {
         let d = parse_monitor(m);
         assert_eq!(d.iter().map(|i| (i.number, i.name.as_str(), i.persistent_id)).collect::<Vec<_>>(), vec![(1, "DeckLink Duo (2)", Some(123)), (0, "DeckLink Duo (1)", Some(122))]);
         assert_eq!(model_of("DeckLink Duo (2)"), "DeckLink Duo");
+        // A Quad 2: its inputs numbered …cb00 to …cb07 by the driver, in the order 1, 5, 2, 6…
+        let quad: Vec<Input> = [1, 5, 2, 6, 3, 7, 4, 8]
+            .iter()
+            .enumerate()
+            .map(|(k, n)| Input { number: k as u32, name: format!("DeckLink Quad 2 ({n})"), serial: format!("5848cb0{}", n - 1), persistent_id: None })
+            .collect();
+        let keys = card_keys(&quad);
+        assert!(keys.values().all(|k| k == "DeckLink Quad 2 5848cb0"), "{keys:?}");
+        let mut order: Vec<&Input> = quad.iter().collect();
+        order.sort_by(|a, b| connector_order(a, b));
+        assert_eq!(order.iter().map(|i| i.number).collect::<Vec<_>>(), vec![0, 2, 4, 6, 1, 3, 5, 7]);
+        // Numbers that share nothing: still one card of that model.
+        let odd: Vec<Input> = (0..4).map(|k| Input { number: k, name: format!("DeckLink Duo ({})", k + 1), serial: format!("{}ab", k * 7), persistent_id: None }).collect();
+        assert!(card_keys(&odd).values().all(|k| k == "DeckLink Duo"));
         assert_eq!(model_of("Intensity Pro 4K"), "Intensity Pro 4K");
         assert_eq!(connector_of("Intensity Pro 4K"), "hdmi");
         assert_eq!(connector_of("DeckLink Quad 2"), "sdi");
