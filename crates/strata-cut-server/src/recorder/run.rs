@@ -1008,7 +1008,9 @@ impl Scanner {
             let file = dir.join(super::index::MASTER).join(name);
             // The first segment says it starts at 0: read its real start.
             if self.anchor.is_none() || t1 - t0 > (SEGMENT * 4) as f64 {
-                t0 = start_time(ffmpeg, &file).unwrap_or(t1 - SEGMENT as f64);
+                // The file's clock starts again from 0 every 26 h 30 (MPEG-TS), the list's goes on:
+                // the start read in the file, on the list's turn of the clock.
+                t0 = start_time(ffmpeg, &file).map(|t| same_turn(t, t1)).unwrap_or(t1 - SEGMENT as f64);
             }
             if t1 <= t0 {
                 continue;
@@ -1070,6 +1072,13 @@ impl Scanner {
         }
         out
     }
+}
+
+/// A time read in an MPEG-TS file (its clock starts again from 0 every 26 h 30) put on the turn
+/// of `near`, a time kept whole (an RTMP encoder up for days gives large ones).
+fn same_turn(t: f64, near: f64) -> f64 {
+    let wrap = super::PTS_WRAP;
+    t + ((near - t) / wrap).round() * wrap
 }
 
 /// How far the preview is behind the recording (s), from their times. The recording keeps a
@@ -1149,6 +1158,16 @@ mod tests {
         let r = receiver_args(vec!["-i".into(), "x".into()], Path::new("/r"), false, None, 5000);
         assert!(!r.iter().any(|x| x.contains("discardcorrupt") || x.contains("libx264") || x == "-vf" || x == "-af"));
         assert!(r.contains(&"udp://127.0.0.1:5000?pkt_size=1316".to_string()));
+    }
+
+    #[test]
+    fn a_file_start_on_the_right_turn() {
+        let wrap = crate::recorder::PTS_WRAP;
+        // Ten turns: the file says 500 s, the list ends the segment 6 s later on the tenth turn.
+        assert!((same_turn(500.0, 10.0 * wrap + 506.0) - (10.0 * wrap + 500.0)).abs() < 1e-6);
+        assert_eq!(same_turn(500.0, 506.0), 500.0);
+        // Just after a turn: the file says near the end of the turn, the list a little past it.
+        assert!((same_turn(wrap - 2.0, wrap + 4.0) - (wrap - 2.0)).abs() < 1e-6);
     }
 
     #[test]
