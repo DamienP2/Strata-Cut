@@ -7,6 +7,7 @@ pub use run::AUDIO_SYNC;
 pub mod web;
 pub mod epg;
 pub mod schedule;
+pub mod decklink;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -67,6 +68,8 @@ pub enum Protocol {
     Srt,
     /// A live on a web page (YouTube, Facebook, Instagram, X, LinkedIn…), read with yt-dlp.
     Web,
+    /// An input of a Blackmagic DeckLink card (SDI, HDMI…), captured with GStreamer.
+    Decklink,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -108,6 +111,26 @@ pub struct RecorderConfig {
     pub bitrate: f64,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// DeckLink: the card (its number, from 0), its video input, the video format ("auto":
+    /// detected), the audio input and the channels captured (recorded by stereo pairs).
+    /// The recording's bitrate is `bitrate`.
+    #[serde(default)]
+    pub device: u32,
+    #[serde(default = "auto")]
+    pub connection: String,
+    #[serde(default = "auto")]
+    pub video_mode: String,
+    #[serde(default = "two")]
+    pub audio_channels: u32,
+    #[serde(default = "auto")]
+    pub audio_input: String,
+}
+
+fn auto() -> String {
+    "auto".into()
+}
+fn two() -> u32 {
+    2
 }
 
 fn listener() -> Mode {
@@ -132,6 +155,9 @@ impl RecorderConfig {
         if self.path.is_empty() && self.protocol == Protocol::Rtmp {
             self.path = "live/stream".into();
         }
+        if self.protocol == Protocol::Decklink && self.bitrate == 0.0 {
+            self.bitrate = decklink::DEFAULT_BITRATE;
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -154,6 +180,7 @@ impl RecorderConfig {
             Protocol::Rtmp => "rtmp://",
             Protocol::Srt => "srt://",
             Protocol::Web => "https://",
+            Protocol::Decklink => return decklink::validate(self),
         };
         if self.protocol == Protocol::Web {
             if !self.url.starts_with("https://") && !self.url.starts_with("http://") {
@@ -288,6 +315,8 @@ pub struct Rec {
     pub epg_from_disk: std::sync::atomic::AtomicBool,
     /// Reception problems of the last 10 minutes (when, which), and when the log last told them.
     glitches: Mutex<(std::collections::VecDeque<(i64, Glitch)>, i64)>,
+    /// A DeckLink card without signal on its input (its frames, black, are recorded all the same).
+    pub no_signal: std::sync::atomic::AtomicBool,
     /// How far the preview is behind the recording (s); when it last dropped some of the stream.
     pub preview_lag: std::sync::atomic::AtomicU32,
     preview_dropped_at: std::sync::atomic::AtomicI64,
@@ -775,6 +804,7 @@ impl Manager {
             epg_from_disk: found_known.into(),
             glitches: Mutex::new((std::collections::VecDeque::new(), 0)),
             preview_lag: 0.into(),
+            no_signal: false.into(),
             preview_dropped_at: 0.into(),
             task: Mutex::new(None),
         });
@@ -870,6 +900,15 @@ impl Manager {
                 }
             }
         }
+        // One recorder per card input.
+        if c.protocol == Protocol::Decklink {
+            for r in self.recs() {
+                let o = r.config();
+                if o.id != c.id && o.protocol == Protocol::Decklink && o.device == c.device {
+                    return Err("this card is used by another recorder".into());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -930,6 +969,7 @@ impl Manager {
         let _ = std::fs::remove_file(self.data_dir.join("cookies").join(format!("{id}.txt")));
         let _ = std::fs::remove_file(epg::path(&self.data_dir, id));
         let _ = std::fs::remove_file(epg::found_path(&self.data_dir, id));
+        let _ = std::fs::remove_file(self.data_dir.join("capture").join(format!("{id}.ts")));
         self.schedules.delete_recorder(id);
         let name = rec.config().name;
         let _ = tokio::task::spawn_blocking(move || {

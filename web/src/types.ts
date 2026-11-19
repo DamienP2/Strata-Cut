@@ -1,6 +1,6 @@
 // The app's own data, as the server sends it.
 
-export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'web';
+export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'web' | 'decklink';
 export const PROTOCOLS: Protocol[] = ['udp', 'rtp', 'rtmp', 'srt', 'web'];
 
 /** A recorder's settings. */
@@ -28,9 +28,15 @@ export interface Recorder {
   platform?: string;
   /** Loop length, hours. */
   loopHours: number;
-  /** Expected bitrate, Mb/s: the loop's space is reserved from it (0 = unknown). */
+  /** Expected bitrate, Mb/s: the loop's space is reserved from it (0 = unknown). DeckLink: the recording's bitrate. */
   bitrate: number;
   enabled: boolean;
+  /** DeckLink: the card (from 0), its video input, the format ("auto": detected), the audio input and the channels captured. */
+  device?: number;
+  connection?: string;
+  videoMode?: string;
+  audioInput?: string;
+  audioChannels?: number;
 }
 
 export type RecorderState = 'off' | 'starting' | 'recording' | 'nosignal' | 'error' | 'waiting';

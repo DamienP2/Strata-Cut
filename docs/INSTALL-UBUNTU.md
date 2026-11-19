@@ -177,6 +177,14 @@ ffmpeg -re -f lavfi -i testsrc2=size=1920x1080:rate=25 -f lavfi -i sine -c:v lib
 - **Écoute** : port `1935` et chemin `live/<nom>`. Dans OBS ou l'encodeur : serveur `rtmp://<serveur>:1935/live`, clé `<nom>`. Le port doit être ouvert en **TCP**.
 - **Appel** : le serveur lit un flux RTMP existant (`rtmp://serveur/app/clé`).
 
+### Carte Blackmagic DeckLink (SDI, HDMI)
+
+1. Installez le pilote **Desktop Video** de Blackmagic (site de Blackmagic, page *Support*, paquet `.deb` pour Linux), puis redémarrez le serveur. Dans une machine virtuelle (Proxmox…), la carte doit d'abord être attribuée à la VM (*passthrough PCI*).
+2. Relancez le script d'installation : il installe GStreamer et ses modules (capture DeckLink, H.264, AAC) et vérifie que le service voit les entrées de la carte.
+3. Créez un enregistreur de type **DeckLink** : la carte (numérotées à partir de 1), l'entrée vidéo (SDI, HDMI…), le format (*Automatique* si la carte détecte celui de son entrée), l'entrée audio et le nombre de canaux (2, 8 ou 16, enregistrés en 1, 4 ou 8 pistes stéréo), le débit d'enregistrement.
+
+La carte fournit des images brutes : le serveur les encode en H.264 (entrelacé conservé), ce qui demande environ 1 à 2 cœurs de processeur par entrée HD. Sans signal sur l'entrée, la carte affiche **Sans signal** et l'enregistrement continue (image noire) jusqu'au retour du signal. Une entrée ne sert qu'à un enregistreur.
+
 Une seule source par enregistreur, et un port par enregistreur en écoute.
 
 Dès qu'une source envoie, sa carte passe en **REC** et la boucle se remplit. Si la source s'arrête, la carte indique **Sans signal** et l'enregistrement reprend tout seul à son retour.

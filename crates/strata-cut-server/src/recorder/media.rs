@@ -25,6 +25,7 @@ use crate::{
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/recorders", get(list).post(create))
+        .route("/api/decklink", get(decklink))
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
         .route("/api/recorders/{id}/clear", post(clear))
@@ -39,6 +40,11 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders/{id}/epg", get(epg))
         .route("/api/recorders/{id}/runs/{run}/{track}/{file}", get(fragment))
         .route("/api/storage", get(storage))
+}
+
+/// DeckLink cards: what the server has (GStreamer's module, Blackmagic's driver) and the cards seen.
+async fn decklink(CurrentUser(_): CurrentUser) -> Json<Value> {
+    Json(super::decklink::status().await)
 }
 
 async fn list(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Value> {

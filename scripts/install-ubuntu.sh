@@ -187,6 +187,10 @@ else
   apt_install ca-certificates curl ffmpeg python3 cloud-guest-utils
   if [ -z "$PACKAGE" ]; then apt_install git openssh-client build-essential pkg-config; fi
   ok "ffmpeg, python3 et outils de base en place"
+  # Cartes DeckLink (Blackmagic) : GStreamer les capture (module DeckLink dans « bad »,
+  # H.264 dans « ugly », AAC dans libav) ; gst-device-monitor liste les cartes.
+  apt_install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+  ok "GStreamer en place (cartes DeckLink)"
 fi
 
 # FFmpeg doit savoir recevoir et encoder ce que le serveur lui demande.
@@ -433,6 +437,24 @@ fi
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --no-create-home --home-dir "$DATA_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
   ok "compte de service « $SERVICE_USER » créé"
+fi
+# Cartes DeckLink : le pilote Desktop Video de Blackmagic s'installe à part (site de Blackmagic).
+decklink_lib=""
+for f in /usr/lib/libDeckLinkAPI.so /usr/lib64/libDeckLinkAPI.so /usr/lib/x86_64-linux-gnu/libDeckLinkAPI.so; do
+  [ -e "$f" ] && decklink_lib="$f"
+done
+if [ -n "$decklink_lib" ]; then
+  inputs=(/dev/blackmagic/io*)
+  if [ -e "${inputs[0]}" ]; then
+    ok "DeckLink : pilote Desktop Video et ${#inputs[@]} entrée(s) de carte"
+    for d in "${inputs[@]}"; do
+      runuser -u "$SERVICE_USER" -- test -r "$d" -a -w "$d" || warn "DeckLink : le compte $SERVICE_USER ne peut pas ouvrir $d (droits du périphérique)"
+    done
+  else
+    warn "DeckLink : pilote présent mais aucune carte vue (carte en place ? dans une VM : passthrough PCI ; redémarrage après l'installation du pilote ?)"
+  fi
+else
+  echo "  DeckLink : pilote Desktop Video absent (nécessaire seulement pour les cartes Blackmagic)"
 fi
 mkdir -p "$INSTALL_DIR"
 if [ -f "$BIN" ]; then cp -p "$BIN" "$BIN.previous"; fi

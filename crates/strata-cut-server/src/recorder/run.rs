@@ -83,7 +83,9 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                 } else {
                     failures += 1;
                     // A setting that cannot work is an error; anything else means the source is not there.
-                    let broken = ["Address already in use", "Cannot assign requested address", "Permission denied", "Protocol not found", "Invalid argument", "cannot start", "Error opening output", "No space left", "not installed", "javascript runtime"].iter().any(|k| message.contains(k));
+                    let broken = ["Address already in use", "Cannot assign requested address", "Permission denied", "Protocol not found", "Invalid argument", "cannot start", "Error opening output", "No space left", "not installed", "javascript runtime"].iter().any(|k| message.contains(k))
+                        // A card that cannot be captured (missing module, card not found, settings refused).
+                        || (cfg.protocol == Protocol::Decklink && message.starts_with("decklink: "));
                     if broken {
                         // Two recorders on the same UDP address and port: only one can receive it.
                         let message = if matches!(cfg.protocol, Protocol::Udp | Protocol::Rtp) && message.contains("Address already in use") { "udp: this address and port are already received by another recorder".to_string() } else { message };
@@ -234,6 +236,8 @@ pub fn input_args(c: &RecorderConfig) -> Vec<String> {
         }
         // Read from the page before each recording (super::web).
         Protocol::Web => c.url.clone(),
+        // GStreamer's named pipe, made for each recording (record_once).
+        Protocol::Decklink => String::new(),
     };
     a.extend(["-i".into(), url]);
     a
@@ -332,8 +336,57 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     rec.runs.write().unwrap().push(run);
 
     let audio = !rec.no_audio.load(Ordering::Relaxed);
+    // A DeckLink card: GStreamer captures and encodes it into a named pipe the receiver reads.
+    let mut capture: Option<tokio::process::Child> = None;
+    let clog: Arc<Mutex<VecDeque<String>>> = Default::default();
     let input = match &source {
         Some(s) => super::web::input_args(s),
+        None if cfg.protocol == Protocol::Decklink => {
+            let fifo = match super::decklink::fifo(m.data_dir(), &rec.id) {
+                Ok(p) => p,
+                Err(e) => {
+                    finish_run(rec, &run_id);
+                    return Outcome::Exited { had_data: false, message: format!("decklink: {e}") };
+                }
+            };
+            let gst = Command::new(super::decklink::GST_LAUNCH).args(super::decklink::pipeline(cfg, &fifo)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
+            match gst {
+                Ok(mut c) => {
+                    rec.no_signal.store(false, Ordering::Relaxed);
+                    // Its messages: on its output (warnings, the signal) and its errors.
+                    let outs: Vec<Box<dyn tokio::io::AsyncRead + Unpin + Send>> = [c.stdout.take().map(|o| Box::new(o) as _), c.stderr.take().map(|e| Box::new(e) as _)].into_iter().flatten().collect();
+                    for out in outs {
+                        let (clog, rec2, name) = (clog.clone(), rec.clone(), cfg.name.clone());
+                        tokio::spawn(async move {
+                            let mut lines = tokio::io::BufReader::new(out).lines();
+                            while let Ok(Some(l)) = lines.next_line().await {
+                                match super::decklink::signal(&l) {
+                                    Some(false) => tracing::warn!("{name}: no signal on the card's input"),
+                                    Some(true) => tracing::info!("{name}: the card's input has a signal again"),
+                                    None => {}
+                                }
+                                if let Some(on) = super::decklink::signal(&l) {
+                                    rec2.no_signal.store(!on, Ordering::Relaxed);
+                                }
+                                tracing::debug!("{name}: capture: {l}");
+                                let mut q = clog.lock().unwrap();
+                                q.push_back(l);
+                                if q.len() > 30 {
+                                    q.pop_front();
+                                }
+                            }
+                        });
+                    }
+                    capture = Some(c);
+                }
+                Err(e) => {
+                    finish_run(rec, &run_id);
+                    let message = if e.kind() == std::io::ErrorKind::NotFound { "decklink: GStreamer is not installed (gstreamer1.0-tools)".to_string() } else { format!("decklink: cannot start GStreamer: {e}") };
+                    return Outcome::Exited { had_data: false, message };
+                }
+            }
+            vec!["-f".into(), "mpegts".into(), "-i".into(), fifo.to_string_lossy().into_owned()]
+        }
         None => input_args(cfg),
     };
     // MPEG-TS sources may carry a programme guide: FFmpeg describes the input to find it.
@@ -503,6 +556,15 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 }
                 break Outcome::Exited { had_data: scan.had_data, message: clean_message(&message) };
             }
+            status = async { match capture.as_mut() { Some(c) => c.wait().await, None => std::future::pending().await } } => {
+                // The capture ended: the card is gone, refused the settings, or GStreamer is missing something.
+                let lines: Vec<String> = clog.lock().unwrap().iter().cloned().collect();
+                stop_child(&mut child).await;
+                tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                let why = super::decklink::reason(&lines);
+                tracing::warn!("{}: the capture stopped ({}): {why}", cfg.name, status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string()));
+                break Outcome::Exited { had_data: scan.had_data, message: if why.is_empty() { "decklink: the capture stopped".into() } else { why } };
+            }
             status = preview.wait() => {
                 // The preview ended on its own: it cannot go on without the receiver, nor this run without it.
                 let lines: Vec<String> = plog.lock().unwrap().iter().cloned().collect();
@@ -573,6 +635,10 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     stop_child(&mut preview).await;
     tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
     rec.preview_lag.store(0, Ordering::Relaxed);
+    if let Some(mut c) = capture {
+        stop_child(&mut c).await;
+        rec.no_signal.store(false, Ordering::Relaxed);
+    }
     if let Some(mut f) = feeder {
         let _ = f.start_kill();
         let _ = f.wait().await;
@@ -779,7 +845,8 @@ impl Scanner {
             self.still_ticks = 0;
             if size > 0 || new_segments {
                 self.had_data = true;
-                rec.set_state(State::Recording, "");
+                // A card without signal goes on giving (black) frames: recorded, but said.
+                rec.set_state(if rec.no_signal.load(Ordering::Relaxed) { State::Nosignal } else { State::Recording }, "");
             }
         } else {
             self.still_ticks += 1;
@@ -923,7 +990,7 @@ mod tests {
     use super::*;
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
-        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true }
+        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into() }
     }
 
     #[test]

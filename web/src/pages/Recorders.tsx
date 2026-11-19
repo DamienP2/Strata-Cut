@@ -20,7 +20,25 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'rtmp', label: 'RTMP', detail: 'rtmp://' },
   { value: 'srt', label: 'SRT', detail: 'srt://' },
   { value: 'web', label: 'Web', detail: 'https://' },
+  { value: 'decklink', label: 'DeckLink', detail: 'SDI · HDMI' },
 ];
+
+/** DeckLink: the card's inputs, the formats and the audio inputs, as the server knows them. */
+const DL_CONNECTIONS = ['auto', 'sdi', 'hdmi', 'optical-sdi', 'component', 'composite', 'svideo'];
+const DL_MODES = ['auto', '1080i50', '1080i5994', '1080i60', '1080p25', '1080p2997', '1080p30', '1080p50', '1080p5994', '1080p60', '1080p24', '1080p2398', '720p50', '720p5994', '720p60', 'pal', 'ntsc', '2160p25', '2160p2997', '2160p50', '2160p5994', '2160p60'];
+const DL_AUDIO_INPUTS = ['auto', 'embedded', 'aes', 'analog'];
+const dlConnection = (v: string) => ({ auto: t('Automatic'), sdi: 'SDI', hdmi: 'HDMI', 'optical-sdi': t('Optical SDI'), component: t('Component'), composite: t('Composite'), svideo: 'S-Video' })[v] ?? v;
+/** "1080i50" → "1080i 50", "1080p5994" → "1080p 59.94" (French: 59,94). */
+const dlMode = (v: string) => {
+  if (v === 'auto') return t('Automatic (detected by the card)');
+  if (v === 'pal') return 'PAL (576i 50)';
+  if (v === 'ntsc') return 'NTSC (480i 59.94)'.replace('.', lang() === 'fr' ? ',' : '.');
+  const m = /^(\d+[ip])(\d+)$/.exec(v);
+  if (!m) return v;
+  const rate = m[2].length > 2 ? `${m[2].slice(0, 2)}${lang() === 'fr' ? ',' : '.'}${m[2].slice(2)}` : m[2];
+  return `${m[1]} ${rate}`;
+};
+const dlAudioInput = (v: string) => ({ auto: t('Automatic'), embedded: t('Embedded in the signal (SDI / HDMI)'), aes: 'AES/EBU', analog: t('Analogue') })[v] ?? v;
 
 /** The platform of a web page, from its address (the server says the same). */
 export function platformOf(url: string): string {
@@ -35,7 +53,7 @@ export function platformOf(url: string): string {
 }
 const PLATFORM_NAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', x: 'X', linkedin: 'LinkedIn', web: 'Web' };
 /** The badge on a recorder's picture: the protocol, or the platform of a web page. */
-const badge = (r: Recorder) => (r.protocol === 'web' ? PLATFORM_NAME[platformOf(r.url)] : r.protocol.toUpperCase());
+const badge = (r: Recorder) => (r.protocol === 'web' ? PLATFORM_NAME[platformOf(r.url)] : r.protocol === 'decklink' ? 'DeckLink' : r.protocol.toUpperCase());
 const MASKED = '••••••••';
 
 const CODECS: Record<string, string> = { h264: 'H.264', hevc: 'HEVC', mpeg2video: 'MPEG-2', mpeg4: 'MPEG-4', prores: 'ProRes', dnxhd: 'DNxHD' };
@@ -45,6 +63,7 @@ export function sourceAddress(r: Recorder): string {
   const host = location.hostname;
   if (r.protocol === 'rtmp' && r.mode === 'listener') return `rtmp://${host}:${r.port}/${r.path}`;
   if (r.protocol === 'srt' && r.mode === 'listener') return `srt://${host}:${r.port}`;
+  if (r.protocol === 'decklink') return `DeckLink ${(r.device ?? 0) + 1} · ${dlConnection(r.connection ?? 'auto')} · ${dlMode(r.videoMode ?? 'auto')}`;
   return r.url + (r.iface && (r.protocol === 'udp' || r.protocol === 'rtp') ? ` · ${r.iface}` : '');
 }
 
@@ -239,7 +258,7 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
             <WifiOff size={14} /> {t('No signal')}
           </span>
         )}
-        {state === 'starting' && <span className="sc-onpic mid">{(rec.protocol === 'rtmp' || rec.protocol === 'srt') && rec.mode === 'listener' ? t('Waiting for the source') : t('Connecting…')}</span>}
+        {state === 'starting' && <span className="sc-onpic mid">{(rec.protocol === 'rtmp' || rec.protocol === 'srt') && rec.mode === 'listener' ? t('Waiting for the source') : rec.protocol === 'decklink' ? t('Opening the card…') : t('Connecting…')}</span>}
         {state === 'off' && <span className="sc-onpic mid">{t('Stopped')}</span>}
         {state === 'error' && (
           <span className="sc-onpic lostmsg">
@@ -410,8 +429,9 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<Recorder>) => setC((x) => ({ ...x, ...patch }));
   const listens = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
-  const placeholder = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', web: 'https://www.youtube.com/watch?v=…' }[c.protocol];
+  const placeholder = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', web: 'https://www.youtube.com/watch?v=…', decklink: '' }[c.protocol];
   const web = c.protocol === 'web';
+  const card = c.protocol === 'decklink';
   const importCookies = (file: File | undefined) => {
     if (!file) return;
     void file.text().then((text) => set({ cookies: text }));
@@ -455,14 +475,16 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label={t('Source')} group>
-            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label, detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}) })} />
+            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label, detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}) })} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
             <Field label={t('Mode')} group>
               <Segmented value={c.mode} options={[{ value: 'listener', label: t('Listen'), title: t('The source connects to this server') }, { value: 'caller', label: t('Call'), title: t('This server connects to the source') }]} onChange={(v) => set({ mode: v as Recorder['mode'] })} />
             </Field>
           )}
-          {listens ? (
+          {card ? (
+            <DecklinkFields c={c} set={set} />
+          ) : listens ? (
             <>
               <Field label={t('Port')}>
                 <NumberField value={c.port} min={1} max={65535} onChange={(v) => set({ port: v })} />
@@ -570,5 +592,56 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
         </footer>
       </form>
     </div>
+  );
+}
+
+/** What the server has for DeckLink cards. */
+interface DecklinkInfo {
+  gstreamer: boolean;
+  driver: boolean;
+  nodes: number;
+  devices: { number: number; name: string }[];
+}
+
+/** A DeckLink input: the card, its inputs, the format, the sound and the recording's bitrate. */
+function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder>) => void }) {
+  const [info, setInfo] = useState<DecklinkInfo | null>(null);
+  useEffect(() => {
+    void api<DecklinkInfo>('GET', '/api/decklink').then(setInfo, () => setInfo(null));
+  }, []);
+  const device = c.device ?? 0;
+  const channels = c.audioChannels ?? 2;
+  const devices = info?.devices ?? [];
+  return (
+    <>
+      {info && (!info.gstreamer || !info.driver) && (
+        <div className="sc-space bad span2">
+          <strong>{!info.driver ? t('Blackmagic’s Desktop Video driver is not installed on the server.') : t('GStreamer’s DeckLink module is missing on the server.')}</strong>
+          <span>{!info.driver ? t('Install Desktop Video (Blackmagic’s site, Support page), restart the server, then run the install script again. In a virtual machine, the card must be passed through to it (PCI passthrough).') : t('Run the install script again: it installs GStreamer and its modules.')}</span>
+        </div>
+      )}
+      <Field label={t('Card')} hint={devices.length === 0 ? t('Cards are numbered from 1 in the order the driver sees them.') : undefined}>
+        {devices.length > 0 ? (
+          <Dropdown value={String(device)} options={devices.map((d) => ({ value: String(d.number), label: d.name || t('Card {n}', { n: d.number + 1 }), detail: String(d.number + 1) }))} onChange={(v) => set({ device: Number(v) })} />
+        ) : (
+          <NumberField value={device + 1} min={1} max={64} onChange={(v) => set({ device: Math.max(0, v - 1) })} />
+        )}
+      </Field>
+      <Field label={t('Video input')}>
+        <Dropdown value={c.connection ?? 'auto'} options={DL_CONNECTIONS.map((v) => ({ value: v, label: dlConnection(v) }))} onChange={(v) => set({ connection: v })} />
+      </Field>
+      <Field label={<>{t('Format')}<InfoTip text={t('Automatic works with the cards that detect the format of their input. Otherwise choose it: a wrong format gives no picture.')} /></>}>
+        <Dropdown value={c.videoMode ?? 'auto'} options={DL_MODES.map((v) => ({ value: v, label: dlMode(v) }))} onChange={(v) => set({ videoMode: v })} />
+      </Field>
+      <Field label={t('Audio input')}>
+        <Dropdown value={c.audioInput ?? 'auto'} options={DL_AUDIO_INPUTS.map((v) => ({ value: v, label: dlAudioInput(v) }))} onChange={(v) => set({ audioInput: v })} />
+      </Field>
+      <Field label={t('Audio channels')} group hint={tn(channels / 2, 'Recorded as {n} stereo track', 'Recorded as {n} stereo tracks')}>
+        <Segmented value={String(channels)} options={[2, 8, 16].map((n) => ({ value: String(n), label: String(n) }))} onChange={(v) => set({ audioChannels: Number(v) })} />
+      </Field>
+      <Field label={<>{t('Recording bitrate')}<InfoTip text={t('The card gives raw pictures: the server encodes them in H.264 at this bitrate (about 1 to 2 processor cores per HD input). 25 Mb/s keeps the HD quality for clips; more takes more disk.')} /></>}>
+        <NumberField value={c.bitrate} min={5} max={200} step={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
+      </Field>
+    </>
   );
 }
