@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Expand, HardDrive, PieChart, TriangleAlert } from 'lucide-react';
-import { lang, locale, t } from '../i18n';
+import { lang, locale, t, tn } from '../i18n';
 import { api, useChanged } from '../store';
 import { PageHead } from '../pages/SidePage';
 import { NumberField } from '../ui/fields';
@@ -309,6 +309,13 @@ export function Storage() {
                 <span className="muted">{t('{used} used', { used: sz(info?.clips.bytes ?? 0) })}</span>
               </div>
               {slider(clipsGb, 0, same ? Math.max(0, loopsAvail - loopsMin) : clipsAvail, setClips, 'var(--key)')}
+              <Field label={<>{t('Keep the clips')}<InfoTip text={t('The clips older than this (since they were made) are deleted by themselves, checked every half hour. “Always”: they stay until deleted by hand.')} /></>}>
+                <Dropdown
+                  value={String(num('clipsKeepDays'))}
+                  options={[0, 1, 7, 15, 30, 60, 90, 180, 365].map((d) => ({ value: String(d), label: d === 0 ? t('Always') : tn(d, '{n} day', '{n} days') }))}
+                  onChange={(v) => setCfg((c) => ({ ...c, clipsKeepDays: Number(v) }))}
+                />
+              </Field>
             </div>
           </div>
           <span className="set-hint">{same ? t('The two share what the disk leaves available: moving one gives the rest to the other.') : t('Each use takes at most what its disk leaves available.')}</span>

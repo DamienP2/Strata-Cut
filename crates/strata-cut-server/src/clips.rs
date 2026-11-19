@@ -95,6 +95,8 @@ pub struct Clips {
     wake: Notify,
     /// The running job's FFmpeg, to cancel it.
     running: Mutex<Option<(String, u32)>>,
+    /// Clips older than this many days are deleted (0 = kept).
+    keep_days: std::sync::atomic::AtomicU32,
 }
 
 impl Clips {
@@ -109,13 +111,30 @@ impl Clips {
             jobs: Mutex::new(Vec::new()),
             wake: Notify::new(),
             running: Mutex::new(None),
+            keep_days: cfg.clips_keep_days.into(),
         });
         tokio::spawn(worker(c.clone()));
+        tokio::spawn(purge(c.clone()));
         c
     }
 
     pub fn set_config(&self, cfg: &ServerConfig) {
         *self.dir.lock().unwrap() = cfg.clips_dir(&self.data_dir);
+        self.keep_days.store(cfg.clips_keep_days, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Deletes a clip: its entry, its file and its still.
+    pub async fn delete(&self, id: &str) -> Option<Clip> {
+        let clip = {
+            let mut list = self.clips.lock().unwrap();
+            let i = list.iter().position(|c| c.id == id)?;
+            list.remove(i)
+        };
+        self.save();
+        let _ = tokio::fs::remove_file(&clip.file).await;
+        let _ = tokio::fs::remove_file(self.thumb_path(id)).await;
+        self.clips_changed();
+        Some(clip)
     }
 
     pub fn dir(&self) -> PathBuf {
@@ -392,15 +411,7 @@ async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(req)
 
 async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
     require(me.can_extract())?;
-    let clip = {
-        let mut list = s.clips.clips.lock().unwrap();
-        let i = list.iter().position(|c| c.id == id).ok_or_else(|| not_found("clip"))?;
-        list.remove(i)
-    };
-    s.clips.save();
-    let _ = tokio::fs::remove_file(&clip.file).await;
-    let _ = tokio::fs::remove_file(s.clips.thumb_path(&id)).await;
-    s.clips.clips_changed();
+    s.clips.delete(&id).await.ok_or_else(|| not_found("clip"))?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -447,6 +458,23 @@ async fn thumb(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id)
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"));
     Ok(r)
+}
+
+/// Système › Stockage: the clips older than the days kept are deleted, every half hour.
+async fn purge(c: Arc<Clips>) {
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    loop {
+        let days = c.keep_days.load(std::sync::atomic::Ordering::Relaxed);
+        if days > 0 {
+            let cutoff = now_ms() - days as i64 * 86_400_000;
+            let old: Vec<(String, String)> = c.clips.lock().unwrap().iter().filter(|x| x.created_at < cutoff).map(|x| (x.id.clone(), x.name.clone())).collect();
+            for (id, name) in &old {
+                c.delete(id).await;
+                tracing::info!("clip \"{name}\" deleted: older than {days} days");
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1800)).await;
+    }
 }
 
 #[cfg(test)]

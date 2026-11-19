@@ -82,6 +82,11 @@ export const system: Record<string, string> = {
   'The incidents, the crash reports and the log are deleted. Export them first if the support needs them.': 'Les incidents, les rapports de plantage et le journal sont effacés. Exportez-les d’abord si le support en a besoin.',
   Empty: 'Vider',
   'Journal emptied': 'Journal vidé',
+  'Keep the clips': 'Conserver les extraits',
+  'The clips older than this (since they were made) are deleted by themselves, checked every half hour. “Always”: they stay until deleted by hand.': 'Les extraits plus anciens (depuis leur création) sont supprimés d’eux-mêmes, vérifié toutes les demi-heures. «\u00a0Toujours\u00a0»\u00a0: ils restent jusqu’à leur suppression à la main.',
+  Always: 'Toujours',
+  '{n} day': '{n} jour',
+  '{n} days': '{n} jours',
   // Hardware
   Hardware: 'Matériel',
   Signal: 'Signal',

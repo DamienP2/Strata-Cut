@@ -240,6 +240,14 @@ export const business: Record<string, string> = {
   'Server overloaded: preview {s} s late': 'Serveur surchargé\u00a0: aperçu en retard de {s} s',
   'Server overloaded: the preview skips': 'Serveur surchargé\u00a0: l’aperçu saute des passages',
   'Over the internet: about 4 times the round trip, 500 ms or more. Too low, the lost packets come back too late: glitches.': 'Par Internet\u00a0: environ 4 fois l’aller-retour, 500 ms ou plus. Trop bas, les paquets perdus reviennent trop tard\u00a0: défauts dans l’image.',
+  'Delete {n} clip?': 'Supprimer {n} extrait\u00a0?',
+  'Delete {n} clips?': 'Supprimer {n} extraits\u00a0?',
+  '{n} clip could not be deleted': '{n} extrait n’a pas pu être supprimé',
+  '{n} clips could not be deleted': '{n} extraits n’ont pas pu être supprimés',
+  '{n} clip selected': '{n} extrait sélectionné',
+  '{n} clips selected': '{n} extraits sélectionnés',
+  'Clear the selection': 'Tout désélectionner',
+  'Select the clips of this recorder': 'Sélectionner les extraits de cet enregistreur',
   // Web lives
   'Only YouTube lives are recorded.': 'Seuls les directs YouTube sont enregistrés.',
   'only youtube lives are recorded': 'Seuls les directs YouTube sont enregistrés.',
@@ -312,7 +320,7 @@ export const business: Record<string, string> = {
   'Last frame  (End)': 'Dernière image  (Fin)',
 
   Zoom: 'Zoom',
-  'Zoom to 1 min': 'Zoom à 1 min',
+  'Zoom to 1 h': 'Zoom à 1 h',
 
   // System › General
   'Web interface': 'Interface web',

@@ -4,10 +4,10 @@ import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
 import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, ChevronsRight, Crosshair, Download, Eraser, FastForward, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
-import { t, tn, locale } from '../i18n';
+import { t, locale } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer, type RunInfo } from '../player';
-import { behind, clock, day, duration, fpsOf, parseTimecode, scanFormat, timecode } from '../tc';
+import { behind, clock, day, duration, fpsOf, parseTimecode, timecode } from '../tc';
 import { Empty } from '../ui/Empty';
 import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
 import { GrainCache } from '../audio';
@@ -35,9 +35,9 @@ interface Programme {
   text?: string;
 }
 
-/** The zoom: the timeline shows from 10 s to the whole loop; reset = 1 min. */
+/** The zoom: the timeline shows from 10 s to the whole loop; by default and reset: 1 h. */
 const ZOOM_MIN = 10_000;
-const ZOOM_RESET = 60_000;
+const ZOOM_RESET = 3_600_000;
 const zoomMax = (loopHours: number) => Math.max(3_600_000, loopHours * 3_600_000);
 /** Slider position 0 (whole loop) … 1000 (10 s), logarithmic. */
 const toSlider = (span: number, max: number) => Math.round((1000 * Math.log(max / span)) / Math.log(max / ZOOM_MIN));
@@ -126,7 +126,7 @@ function Sources({ current }: { current?: string }) {
 }
 
 function Editor({ rec }: { rec: Recorder }) {
-  const { status, timezone, user, jobs, toast } = useApp(useShallow((s) => ({ status: s.status[rec.id], timezone: s.timezone, user: s.auth?.user, jobs: s.jobs, toast: s.toast })));
+  const { timezone, user, jobs, toast } = useApp(useShallow((s) => ({ timezone: s.timezone, user: s.auth?.user, jobs: s.jobs, toast: s.toast })));
   const videoRef = useRef<HTMLVideoElement>(null);
   const playerRef = useRef<LoopPlayer | null>(null);
   const [pos, setPos] = useState<Mark | null>(null);
@@ -136,7 +136,7 @@ function Editor({ rec }: { rec: Recorder }) {
   const [mIn, setIn] = useState<Mark | null>(null);
   const [mOut, setOut] = useState<Mark | null>(null);
   const [name, setName] = useState('');
-  const [span, setSpan] = useDisplayPref('extract.zoom', ZOOM_RESET);
+  const [span, setSpan] = useDisplayPref('extract.zoom.h', ZOOM_RESET);
   const [spans, setSpans] = useState<Span[]>([]);
   const [clips, setClips] = useState<Clip[]>([]);
   const [guide, setGuide] = useState<Programme[]>([]);
@@ -160,7 +160,6 @@ function Editor({ rec }: { rec: Recorder }) {
       clearInterval(i);
     };
   }, [rec.id, rec.loopHours]);
-  const onAir = pos ? guide.find((g) => g.start <= pos.wall && pos.wall < g.end) : undefined;
   const audio = useAudioOut(videoRef);
 
   // The player lives as long as this recorder is open.
@@ -413,7 +412,6 @@ function Editor({ rec }: { rec: Recorder }) {
   act.current = { markProgramme, extractProgramme, programmeIt, seekWall };
 
   const now = serverNow();
-  const media = run?.media ?? status?.media ?? null;
   const ago = pos ? now - pos.wall : 0;
   const myJobs = jobs;
 
@@ -424,25 +422,6 @@ function Editor({ rec }: { rec: Recorder }) {
           <div className="sc-viewer">
             <video ref={videoRef} className="sc-video" playsInline />
             {run?.audio && <Meters out={audio.out} />}
-            <span className="sc-onpic tl">
-              {rec.name}
-              {onAir && <span className="sc-onair"> · {onAir.name}</span>}
-            </span>
-            {media && (
-              <span className="sc-onpic tr mono">
-                {scanFormat(media)}
-                {media.audioTracks > 0 && ` · ${tn(media.audioTracks, '{n} track', '{n} tracks')}`}
-              </span>
-            )}
-            {pos && (live && ago < 30_000 ? (
-              <span className="sc-onpic br">
-                <span className="sc-rec" /> {t('LIVE')}
-              </span>
-            ) : (
-              <span className="sc-onpic br mono" title={t('Behind live')}>
-                {behind(ago)}
-              </span>
-            ))}
           </div>
         </div>
         <div className="sc-transport">
@@ -957,7 +936,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
           <input type="range" min={0} max={1000} step={1} value={toSlider(span, maxSpan)} aria-label={t('Zoom')} onChange={(e) => setSpan(fromSlider(Number(e.target.value), maxSpan))} onKeyDown={(e) => e.stopPropagation()} />
           <ZoomIn size={14} />
           <span className="sc-zoom-v">{spanLabel(span)}</span>
-          <button type="button" className="icon-btn ghost" title={t('Zoom to 1 min')} disabled={Math.abs(span - ZOOM_RESET) < 500} onClick={() => setSpan(ZOOM_RESET)}>
+          <button type="button" className="icon-btn ghost" title={t('Zoom to 1 h')} disabled={Math.abs(span - ZOOM_RESET) < 500} onClick={() => setSpan(ZOOM_RESET)}>
             <RotateCcw size={14} />
           </button>
         </div>

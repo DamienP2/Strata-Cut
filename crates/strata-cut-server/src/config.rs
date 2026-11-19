@@ -29,6 +29,9 @@ pub struct ServerConfig {
     /// The clips take at most this many GB (0 = no limit but the disk).
     #[serde(default)]
     pub clips_max_gb: f64,
+    /// Clips older than this many days (since made) are deleted (0 = kept until deleted by hand).
+    #[serde(default)]
+    pub clips_keep_days: u32,
     /// Space always left free on the disks, % (the oldest recordings go first).
     #[serde(default = "default_keep_free")]
     pub keep_free_percent: u32,
@@ -95,6 +98,7 @@ impl ServerConfig {
         self.loops_max_gb = if self.loops_max_gb.is_finite() { self.loops_max_gb.max(0.0) } else { 0.0 };
         self.clips_max_gb = if self.clips_max_gb.is_finite() { self.clips_max_gb.max(0.0) } else { 0.0 };
         self.keep_free_percent = self.keep_free_percent.clamp(1, 50);
+        self.clips_keep_days = self.clips_keep_days.min(3650);
         let mut ntp: Vec<String> = Vec::new();
         for s in self.ntp.iter().flat_map(|s| s.split([' ', ',', ';'])).map(str::trim).filter(|s| !s.is_empty()) {
             if !ntp.iter().any(|x| x.eq_ignore_ascii_case(s)) {

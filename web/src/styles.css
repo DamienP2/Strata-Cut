@@ -929,3 +929,12 @@ a.btn { color: inherit; }
 .hw-name .icon-btn { align-self: center; }
 .hw-name-edit { display: inline-flex; align-items: center; gap: 6px; }
 .hw-name-edit input { height: 28px; width: 260px; font-size: var(--fs-13); }
+
+/* Extraits: the clips by recorder, by day; several ticked for an action. */
+.sc-clip-group { margin-bottom: 22px; }
+.sc-clip-group > header { display: flex; align-items: center; gap: 10px; margin: 6px 0 8px; }
+.sc-clip-group > header h2 { font-size: var(--fs-15); margin: 0; }
+.sc-day-row td { background: var(--panel-2); color: var(--text-2); font-size: var(--fs-12); font-weight: 600; padding: 6px 12px; }
+.sc-pick { width: 32px; }
+.user-table tr.picked td { background: var(--accent-soft); }
+.sc-selbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--panel); }
