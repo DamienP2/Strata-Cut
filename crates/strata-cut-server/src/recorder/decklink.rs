@@ -167,7 +167,8 @@ pub struct Input {
 
 /// The cards GStreamer sees (its device monitor).
 async fn list_inputs() -> Vec<Input> {
-    let run = tokio::process::Command::new("gst-device-monitor-1.0").args(["-f", "Video/Source"]).kill_on_drop(true).output();
+    // The video sources, listed once: no `-f` (it means "follow": it would never end).
+    let run = tokio::process::Command::new("gst-device-monitor-1.0").arg("Video/Source").stdin(std::process::Stdio::null()).kill_on_drop(true).output();
     let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(8), run).await else { return Vec::new() };
     parse_monitor(&String::from_utf8_lossy(&out.stdout))
 }
