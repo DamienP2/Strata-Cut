@@ -565,7 +565,7 @@ impl FakeCapture {
             let on = incoming == Some(mode_id);
             let (w, h) = (mode.width as usize, mode.height as usize);
             let mut video = vec![0u8; w * h * 2];
-            for (i, px) in video.chunks_exact_mut(4).enumerate() {
+            for (i, px) in video.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 let x = (i * 2) % w.max(1);
                 let (y, u, v) = if !on {
                     (16, 128, 128)
@@ -579,7 +579,7 @@ impl FakeCapture {
                         [(180, 128, 128), (168, 44, 136), (145, 147, 44), (133, 63, 52), (63, 193, 204), (51, 109, 212), (28, 212, 120), (16, 128, 128)][bar.min(7)]
                     }
                 };
-                px.copy_from_slice(&[u, y, v, y]);
+                *px = [u, y, v, y];
             }
             // The sound of the frame: 48 kHz, as many samples as the frame lasts.
             let total = ((n + 1) as f64 * period.as_secs_f64() * 48000.0).round() as u64;
