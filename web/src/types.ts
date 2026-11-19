@@ -73,6 +73,9 @@ export interface RecorderStatus {
   /** Reception problems in the last 10 minutes: packets lost before FFmpeg, damaged stream. */
   lost: number;
   damaged: number;
+  /** The server is short of CPU: the preview's delay behind the recording (s), and whether it dropped some of the stream lately. */
+  previewLag: number;
+  previewDropped: boolean;
 }
 
 export interface SlotTime {

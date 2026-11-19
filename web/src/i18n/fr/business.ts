@@ -236,6 +236,9 @@ export const business: Record<string, string> = {
   Mute: 'Couper le son',
   'Packets lost: {lost} (network, or a server too busy) · damaged stream: {damaged} (blocks or freezes in the picture). The last 10 minutes.': 'Paquets perdus\u00a0: {lost} (réseau, ou serveur trop chargé) · flux abîmé\u00a0: {damaged} (blocs ou figés dans l’image). Sur les 10 dernières minutes.',
   'Reception: {n} problems in 10 min': 'Réception\u00a0: {n} incidents en 10 min',
+  'The preview is encoded apart from the recording: when the processor is too busy, only the preview falls behind or skips. The recording and the clips stay whole. Fewer recorders, or more processor, put it right.': 'L’aperçu est encodé à part de l’enregistrement\u00a0: quand le processeur est trop chargé, seul l’aperçu prend du retard ou saute. L’enregistrement et les clips restent complets. Moins d’enregistreurs ou plus de processeur règlent le problème.',
+  'Server overloaded: preview {s} s late': 'Serveur surchargé\u00a0: aperçu en retard de {s} s',
+  'Server overloaded: the preview skips': 'Serveur surchargé\u00a0: l’aperçu saute des passages',
   'Over the internet: about 4 times the round trip, 500 ms or more. Too low, the lost packets come back too late: glitches.': 'Par Internet\u00a0: environ 4 fois l’aller-retour, 500 ms ou plus. Trop bas, les paquets perdus reviennent trop tard\u00a0: défauts dans l’image.',
   // Web lives
   'Address of the live': 'Adresse du direct',

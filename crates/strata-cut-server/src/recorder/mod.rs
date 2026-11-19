@@ -29,10 +29,15 @@ pub const MASKED: &str = "••••••••";
 /// Work that may wait (clips, stills, levels) runs with a lower CPU priority, so that it
 /// never slows the recorders' FFmpeg down (a slowed reception loses packets: glitches).
 pub fn background(cmd: &mut tokio::process::Command) {
+    lower_priority(cmd, 10);
+}
+
+/// A child `by` steps nicer than the server (the recorders' receivers stay at the server's).
+pub fn lower_priority(cmd: &mut tokio::process::Command, by: i32) {
     // SAFETY: setpriority is async-signal-safe and only touches the child.
     unsafe {
-        cmd.pre_exec(|| {
-            libc::setpriority(libc::PRIO_PROCESS, 0, 10);
+        cmd.pre_exec(move || {
+            libc::setpriority(libc::PRIO_PROCESS, 0, by);
             Ok(())
         });
     }
@@ -247,6 +252,10 @@ pub struct Status {
     /// Reception problems in the last 10 minutes: packets lost, damaged stream.
     pub lost: u32,
     pub damaged: u32,
+    /// The server is short of CPU: how far the preview is behind the recording (s), and
+    /// whether it had to drop some of the stream in the last 10 minutes (the recording is whole).
+    pub preview_lag: u32,
+    pub preview_dropped: bool,
 }
 
 pub fn now_ms() -> i64 {
@@ -279,6 +288,9 @@ pub struct Rec {
     pub epg_from_disk: std::sync::atomic::AtomicBool,
     /// Reception problems of the last 10 minutes (when, which), and when the log last told them.
     glitches: Mutex<(std::collections::VecDeque<(i64, Glitch)>, i64)>,
+    /// How far the preview is behind the recording (s); when it last dropped some of the stream.
+    pub preview_lag: std::sync::atomic::AtomicU32,
+    preview_dropped_at: std::sync::atomic::AtomicI64,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
@@ -301,6 +313,15 @@ impl Rec {
             let damaged = minute.len() - lost;
             g.1 = now;
             tracing::warn!("{}: reception problems in the last minute: {lost} packet losses, {damaged} damaged stream", self.config().name);
+        }
+    }
+
+    /// The preview could not keep up and dropped some of the stream (logged once a minute at most).
+    pub fn preview_dropped(&self) {
+        let now = now_ms();
+        let last = self.preview_dropped_at.swap(now, std::sync::atomic::Ordering::Relaxed);
+        if now - last >= 60_000 {
+            tracing::warn!("{}: the server is too busy, the preview drops some of the stream (the recording is whole)", self.config().name);
         }
     }
 
@@ -355,6 +376,8 @@ impl Rec {
             drop(g);
             s.lost = lost;
             s.damaged = damaged;
+            s.preview_lag = self.preview_lag.load(std::sync::atomic::Ordering::Relaxed);
+            s.preview_dropped = now - self.preview_dropped_at.load(std::sync::atomic::Ordering::Relaxed) < 600_000;
         }
         let short = matches!((oldest, newest), (Some(a), Some(b)) if ((b - a) as f64) < cfg.loop_hours as f64 * 3_600_000.0 * 0.98);
         s.space_limited = cut > 0 && now_ms() - cut < 15 * 60_000 && short;
@@ -738,7 +761,7 @@ impl Manager {
         let found_known = found.stream.is_some();
         let rec = Arc::new(Rec {
             id: c.id.clone(),
-            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None, lost: 0, damaged: 0 }),
+            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None, lost: 0, damaged: 0, preview_lag: 0, preview_dropped: false }),
             cfg: watch::channel(c).0,
             runs: RwLock::new(runs),
             stop: watch::channel(false).0,
@@ -751,6 +774,8 @@ impl Manager {
             epg_failed: false.into(),
             epg_from_disk: found_known.into(),
             glitches: Mutex::new((std::collections::VecDeque::new(), 0)),
+            preview_lag: 0.into(),
+            preview_dropped_at: 0.into(),
             task: Mutex::new(None),
         });
         rec.refresh_status();

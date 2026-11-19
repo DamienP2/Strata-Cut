@@ -243,10 +243,13 @@ fn urlencode(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
-/// The whole FFmpeg command line (without the program).
+/// The receiver's FFmpeg (without the program): the stream as received in segments, the
+/// guide on its output, and a copy of the stream on the loopback for the preview.
+/// Copying only, it keeps up with the source even when the server is short of CPU: the
+/// preview's encoding, the heavy part, runs in another process and can never hold it up.
 /// `describe`: FFmpeg also describes the input (programmes, streams: how the guide is found);
 /// `epg`: the guide's stream, written raw on FFmpeg's output.
-pub fn ffmpeg_args(input: Vec<String>, run_dir: &Path, thumb: &Path, audio: bool, describe: bool, epg: Option<&str>) -> Vec<String> {
+pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Option<&str>, preview_port: u16) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
     let level = if describe { "info" } else { "warning" };
     // Damaged packets are kept (no +discardcorrupt): a frame with a few lost packets decodes
@@ -259,12 +262,30 @@ pub fn ffmpeg_args(input: Vec<String>, run_dir: &Path, thumb: &Path, audio: bool
     a.extend(s(&["-map", "0:v:0", "-map", "0:a?", "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
     a.push(d("master/list.csv"));
     a.push(d("master/s%08d.ts"));
-    // 2. The browser proxy, video: same frames, same timestamps, light.
+    // 2. The same picture and first sound, same timestamps, for the preview (UDP never waits for it).
+    a.extend(s(&["-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts"]));
+    a.push(format!("udp://127.0.0.1:{preview_port}?pkt_size=1316"));
+    // 3. The programme guide (DVB EIT sections), decoded by the recorder.
+    if let Some(map) = epg {
+        a.extend(s(&["-map", map, "-c", "copy", "-f", "data", "pipe:1"]));
+    }
+    a
+}
+
+/// The preview's FFmpeg: from the receiver's copy, the browser proxy (video and audio apart,
+/// the same timestamps) and the card's still.
+pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool) -> Vec<String> {
+    let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", "warning", "-copyts", "-thread_queue_size", "4096", "-i"]);
+    // No timeout: it waits for the receiver, and is stopped with it.
+    a.push(format!("udp://127.0.0.1:{preview_port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216"));
+    // 1. Video: same frames, same timestamps, light.
     let keyframes = "expr:if(isnan(prev_forced_t),1,gte(t,prev_forced_t+1))";
     a.extend(s(&["-map", "0:v:0", "-vf", "yadif=deint=interlaced,scale=-2:'min(540,ih)',format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-bf", "0", "-force_key_frames", keyframes, "-b:v", "1200k", "-maxrate", "1600k", "-bufsize", "2400k", "-an", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "10", "-hls_flags", "+independent_segments", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
     a.push(d("video/p%08d.m4s"));
     a.push(d("video/index.m3u8"));
-    // 3. The browser proxy, audio (first track, stereo).
+    // 2. Audio (first track, stereo).
     if audio {
         // Lost or damaged audio packets leave a hole in the times: filled with silence (and
         // overlaps cut), else the sound after it is joined early and drifts ahead of the picture.
@@ -272,14 +293,15 @@ pub fn ffmpeg_args(input: Vec<String>, run_dir: &Path, thumb: &Path, audio: bool
         a.push(d("audio/p%08d.m4s"));
         a.push(d("audio/index.m3u8"));
     }
-    // 4. A still every 2 s for the recorder's card.
+    // 3. A still every 2 s for the recorder's card.
     a.extend(s(&["-map", "0:v:0", "-vf", "fps=1/2,yadif=deint=interlaced,scale=480:-2", "-q:v", "5", "-update", "1", "-atomic_writing", "1"]));
     a.push(thumb.to_string_lossy().into_owned());
-    // 5. The programme guide (DVB EIT sections), decoded by the recorder.
-    if let Some(map) = epg {
-        a.extend(s(&["-map", map, "-c", "copy", "-f", "data", "pipe:1"]));
-    }
     a
+}
+
+/// A free UDP port on the loopback, for the receiver's copy to the preview.
+fn free_port() -> Option<u16> {
+    std::net::UdpSocket::bind("127.0.0.1:0").ok()?.local_addr().ok().map(|a| a.port())
 }
 
 async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg_rx: &mut watch::Receiver<RecorderConfig>, stop_rx: &mut watch::Receiver<bool>) -> Outcome {
@@ -318,8 +340,47 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     let ts = matches!(cfg.protocol, Protocol::Udp | Protocol::Rtp | Protocol::Srt);
     let found = rec.epg_found.lock().unwrap().clone();
     let epg_map = found.stream.clone().filter(|_| ts && !rec.epg_failed.load(Ordering::Relaxed));
-    let args = ffmpeg_args(input, &run_dir, &base.join("thumb.jpg"), audio, ts, epg_map.as_deref());
+    let Some(port) = free_port() else {
+        finish_run(rec, &run_id);
+        return Outcome::Exited { had_data: false, message: "no free local port for the preview".into() };
+    };
+    let args = receiver_args(input, &run_dir, ts, epg_map.as_deref(), port);
+    let preview_args = preview_args(port, &run_dir, &base.join("thumb.jpg"), audio);
     tracing::debug!("{}: ffmpeg {}", cfg.name, args.join(" "));
+    tracing::debug!("{}: preview: ffmpeg {}", cfg.name, preview_args.join(" "));
+    // The preview first: it listens before the receiver sends. A little lower priority: when the
+    // server is short of CPU, the preview falls behind, never the recording.
+    let mut pcmd = Command::new(&m.ffmpeg);
+    pcmd.args(&preview_args).current_dir(&run_dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
+    super::lower_priority(&mut pcmd, 5);
+    let mut preview = match pcmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            finish_run(rec, &run_id);
+            return Outcome::Exited { had_data: false, message: format!("cannot start {}: {e}", m.ffmpeg) };
+        }
+    };
+    let plog: Arc<Mutex<VecDeque<String>>> = Default::default();
+    if let Some(err) = preview.stderr.take() {
+        let (plog, rec2, name) = (plog.clone(), rec.clone(), cfg.name.clone());
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(err).lines();
+            while let Ok(Some(l)) = lines.next_line().await {
+                // Its own input overflowing: the server is too busy for the preview (the recording is
+                // whole). Its decoder's complaints are not counted: the receiver already saw the
+                // damaged packets, and a preview that skips makes its own.
+                if l.contains("Circular buffer overrun") {
+                    rec2.preview_dropped();
+                }
+                tracing::debug!("{name}: preview: {l}");
+                let mut q = plog.lock().unwrap();
+                q.push_back(l);
+                if q.len() > 30 {
+                    q.pop_front();
+                }
+            }
+        });
+    }
     // Picture and sound apart on the page: yt-dlp joins them and feeds FFmpeg.
     let mut feeder = None;
     let mut stdin = Stdio::null();
@@ -360,6 +421,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
+            stop_child(&mut preview).await;
             finish_run(rec, &run_id);
             return Outcome::Exited { had_data: false, message: format!("cannot start {}: {e}", m.ffmpeg) };
         }
@@ -412,11 +474,6 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 tokio::time::sleep(Duration::from_millis(200)).await; // the last lines of the lists
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
                 let lines: Vec<String> = log.lock().unwrap().iter().cloned().collect();
-                if lines.iter().any(|l| l.contains("matches no streams") && l.contains("0:a:0")) && audio {
-                    rec.no_audio.store(true, Ordering::Relaxed);
-                    tracing::info!("{}: no audio in the source", cfg.name);
-                    break Outcome::Exited { had_data: scan.had_data, message: String::new() };
-                }
                 let message = best_line(&lines);
                 match status {
                     Ok(s) if s.success() => tracing::info!("{}: the source stopped", cfg.name),
@@ -443,6 +500,23 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                         rec.epg_found.lock().unwrap().stream = None;
                         break Outcome::Restart;
                     }
+                }
+                break Outcome::Exited { had_data: scan.had_data, message: clean_message(&message) };
+            }
+            status = preview.wait() => {
+                // The preview ended on its own: it cannot go on without the receiver, nor this run without it.
+                let lines: Vec<String> = plog.lock().unwrap().iter().cloned().collect();
+                stop_child(&mut child).await;
+                tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                if audio && lines.iter().any(|l| l.contains("matches no streams") && l.contains("0:a:0")) {
+                    rec.no_audio.store(true, Ordering::Relaxed);
+                    tracing::info!("{}: no audio in the source", cfg.name);
+                    break Outcome::Exited { had_data: scan.had_data, message: String::new() };
+                }
+                let message = best_line(&lines);
+                match status {
+                    Ok(s) => tracing::warn!("{}: the preview stopped ({s}): {message}", cfg.name),
+                    Err(e) => tracing::warn!("{}: the preview: {e}", cfg.name),
                 }
                 break Outcome::Exited { had_data: scan.had_data, message: clean_message(&message) };
             }
@@ -477,6 +551,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             _ = tick.tick() => {
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, false));
                 measure(m, rec, &run_id, std::mem::take(&mut scan.waves));
+                rec.preview_lag.store(scan.preview_lag() as u32, Ordering::Relaxed);
                 if let Some((from, to)) = scan.jumped {
                     tracing::warn!("{}: the source's clock jumped ({from:.1} s → {to:.1} s): a new recording starts", cfg.name);
                     stop_child(&mut child).await;
@@ -493,6 +568,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             }
         }
     };
+    // The preview ends with the receiver: what it still holds is written, then the last fragments read.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    stop_child(&mut preview).await;
+    tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+    rec.preview_lag.store(0, Ordering::Relaxed);
     if let Some(mut f) = feeder {
         let _ = f.start_kill();
         let _ = f.wait().await;
@@ -505,8 +585,8 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
 /// receiver too slow), or a damaged stream (what the picture shows as blocks, freezes).
 fn glitch_of(line: &str) -> Option<super::Glitch> {
     let l = line.to_ascii_lowercase();
-    const DAMAGED: [&str; 12] = [
-        "packet corrupt", "corrupt input", "pes packet size mismatch", "error while decoding", "decode_slice_header error", "concealing",
+    const DAMAGED: [&str; 11] = [
+        "packet corrupt", "pes packet size mismatch", "error while decoding", "decode_slice_header error", "concealing",
         "invalid nal unit", "missing picture", "non-existing pps", "continuity check failed", "corrupt decoded frame", "no frame!",
     ];
     if l.contains("circular buffer overrun") || l.contains("packet loss") || l.contains("missed") && l.contains("packets") {
@@ -626,13 +706,25 @@ struct Scanner {
     last_t1: Option<f64>,
     /// The source's clock jumped (a new encoder, a splice): (from, to).
     jumped: Option<(f64, f64)>,
+    /// The start of the first segment, and the end of the preview's last video fragment (source time, s).
+    first_t0: Option<f64>,
+    video_t1: Option<f64>,
 }
 
 impl Scanner {
+    /// How far the preview is behind the recording (s): the server is short of CPU when it grows.
+    fn preview_lag(&self) -> f64 {
+        match (self.last_t1, self.video_t1.or(self.first_t0)) {
+            (Some(rec), Some(prev)) => (rec - prev).max(0.0),
+            _ => 0.0,
+        }
+    }
+
     fn scan(&mut self, m: &Manager, rec: &Rec, run_id: &str, last: bool) {
         let Some(dir) = rec.runs.read().unwrap().iter().find(|r| r.meta.id == run_id).map(|r| r.dir.clone()) else { return };
         let now = now_ms() as f64;
         let new_master = self.read_csv(&m.ffmpeg, &dir, now);
+        let new_segments = !new_master.is_empty();
         let new_video = self.read_proxy(&dir, true);
         let new_audio = if rec.no_audio.load(Ordering::Relaxed) { Vec::new() } else { self.read_proxy(&dir, false) };
         let mut media = None;
@@ -663,6 +755,9 @@ impl Scanner {
                 for (n, dur, tfdt, bytes) in segs {
                     let t0 = offset + tfdt as f64 / ts;
                     run.append_proxy(video, PSeg { n, t0, t1: t0 + dur, bytes });
+                    if video {
+                        self.video_t1 = Some(self.video_t1.map_or(t0 + dur, |v| v.max(t0 + dur)));
+                    }
                     if !video {
                         self.waves.push((n, run.track_dir(false).join("init.mp4"), run.proxy_path(false, n), run.wave_path(n)));
                     }
@@ -676,18 +771,20 @@ impl Scanner {
         if last {
             return;
         }
-        // Is the stream still coming? The segment being written grows.
+        // Is the stream still coming? The segment being written grows, or a new one is listed.
+        // (FFmpeg writes the segments by 1 MB: at a low bitrate, one only shows when it closes.)
         let size = newest_size(&dir.join(super::index::MASTER));
-        if size != self.growing_size {
+        if size != self.growing_size || new_segments {
             self.growing_size = size;
             self.still_ticks = 0;
-            if size > 0 {
+            if size > 0 || new_segments {
                 self.had_data = true;
                 rec.set_state(State::Recording, "");
             }
         } else {
             self.still_ticks += 1;
-            if self.still_ticks == 8 && self.had_data {
+            // 12 s: more than a segment (6 s, up to the next key frame).
+            if self.still_ticks == 24 && self.had_data {
                 rec.set_state(State::Nosignal, "");
             }
         }
@@ -727,6 +824,7 @@ impl Scanner {
                 }
             }
             self.last_t1 = Some(t1);
+            self.first_t0.get_or_insert(t0);
             // The segment closed when its last packet arrived: now.
             let sample = now - t1 * 1000.0;
             let anchor = match self.anchor {
@@ -830,11 +928,15 @@ mod tests {
 
     #[test]
     fn audio_kept_on_its_times() {
-        let a = ffmpeg_args(vec!["-i".into(), "x".into()], Path::new("/r"), Path::new("/t.jpg"), true, false, None);
+        let a = preview_args(5000, Path::new("/r"), Path::new("/t.jpg"), true);
         let i = a.iter().position(|x| x == "0:a:0").unwrap();
         assert_eq!(a[i + 2..i + 4], ["-af".to_string(), AUDIO_SYNC.to_string()]);
-        // Damaged frames kept: thrown away, they make the mosaic last to the next key frame.
-        assert!(!a.iter().any(|x| x.contains("discardcorrupt")));
+        assert!(a.contains(&"udp://127.0.0.1:5000?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216".to_string()));
+        // The receiver only copies (no encoding), and keeps the damaged frames: thrown away, they
+        // make the mosaic last to the next key frame.
+        let r = receiver_args(vec!["-i".into(), "x".into()], Path::new("/r"), false, None, 5000);
+        assert!(!r.iter().any(|x| x.contains("discardcorrupt") || x.contains("libx264") || x == "-vf" || x == "-af"));
+        assert!(r.contains(&"udp://127.0.0.1:5000?pkt_size=1316".to_string()));
     }
 
     #[test]

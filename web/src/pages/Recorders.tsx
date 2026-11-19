@@ -274,6 +274,11 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
             <TriangleAlert size={12} /> {t('Reception: {n} problems in 10 min', { n: st.lost + st.damaged })}
           </span>
         )}
+        {recording && st && (st.previewLag >= 15 || st.previewDropped) && (
+          <span className="sc-warnline" data-tip={t('The preview is encoded apart from the recording: when the processor is too busy, only the preview falls behind or skips. The recording and the clips stay whole. Fewer recorders, or more processor, put it right.')}>
+            <TriangleAlert size={12} /> {st.previewLag >= 15 ? t('Server overloaded: preview {s} s late', { s: st.previewLag }) : t('Server overloaded: the preview skips')}
+          </span>
+        )}
         {st?.spaceLimited && (
           <span className="sc-warnline">
             <TriangleAlert size={12} /> {t('Loop shortened for lack of disk space')}

@@ -201,6 +201,28 @@ fn stop_others(data_dir: &std::path::Path) {
     }
 }
 
+/// Recorders' FFmpeg left by a Strata Cut that died without stopping them (a receiver goes on
+/// writing an old run, a preview waits for a stream that no longer comes). Adopted by init,
+/// they are known by their command line.
+fn stop_orphan_ffmpeg() {
+    let Ok(dir) = std::fs::read_dir("/proc") else { return };
+    for pid in dir.flatten().filter_map(|e| e.file_name().to_str()?.parse::<i32>().ok()) {
+        // "pid (name) state ppid …": the name may hold spaces and brackets.
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let ppid = stat.rsplit_once(')').and_then(|(_, r)| r.split_whitespace().nth(1)?.parse::<i32>().ok());
+        if ppid != Some(1) {
+            continue;
+        }
+        let cmd = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+        let cmd = cmd.split(|&b| b == 0).map(|a| String::from_utf8_lossy(a).into_owned()).collect::<Vec<_>>().join(" ");
+        if cmd.contains("ffmpeg") && (cmd.contains("/master/list.csv") || cmd.contains("/video/p%08d.m4s")) {
+            tracing::warn!("a recorder's FFmpeg left by an earlier run (pid {pid}): stopped");
+            // SAFETY: kill has no memory effects.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
 async fn until_true(mut rx: watch::Receiver<bool>) {
     while !*rx.borrow() {
         if rx.changed().await.is_err() {
@@ -214,6 +236,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     // One Strata Cut per data folder: an older one still running (an update or a restart
     // that did not end it) would go on recording with its old list of recorders.
     stop_others(&data_dir);
+    stop_orphan_ffmpeg();
     health::start(&data_dir);
     update::startup_guard(&data_dir);
     update::confirm_after(data_dir.clone(), Duration::from_secs(60));
