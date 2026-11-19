@@ -85,6 +85,9 @@ class Buffer {
 }
 
 /** A run the browser can play: its preview has a picture already, and a few seconds of it. */
+/** Live: how far behind the newest fragment it plays (s): enough not to wait for the next one. */
+const LIVE_DELAY = 1.0;
+
 const playable = (r: RunInfo) => !!r.video?.codec && r.video.segs.length > 0 && r.to - r.from > 4000;
 /** The newest run that can be played (else the newest at all). */
 function newest(runs: RunInfo[]): RunInfo | null {
@@ -116,6 +119,10 @@ export class LoopPlayer {
   /** Live: when the picture last moved (server ms), to start again if it stays stuck. */
   private moved = 0;
   private lastTime = -1;
+  /** Live: its speed nudged (a few %) to hold LIVE_DELAY without a jump. */
+  private nudged = false;
+  private refreshing = false;
+  private ticks = 0;
 
   constructor(
     readonly video: HTMLVideoElement,
@@ -136,7 +143,11 @@ export class LoopPlayer {
     tick();
     this.video.addEventListener('timeupdate', this.onTime);
     this.video.addEventListener('waiting', this.onWaiting);
-    this.timer = window.setInterval(() => void this.refresh(), 2000);
+    // Live: every half second (the new fragments, the distance to the edge); else every 2 s.
+    this.timer = window.setInterval(() => {
+      this.ticks++;
+      if (this.live || this.ticks % 4 === 0) void this.refresh();
+    }, 500);
   }
 
   destroy() {
@@ -280,9 +291,42 @@ export class LoopPlayer {
     );
   }
 
+  /** The end of what can be played (s): the newest fragment that every track has. */
+  private edge(): number | null {
+    let e = Infinity;
+    for (const b of this.bufs) {
+      let m = -Infinity;
+      for (const s of b.segs.values()) if (s[2] > m) m = s[2];
+      if (m === -Infinity) return null;
+      e = Math.min(e, m);
+    }
+    return Number.isFinite(e) ? e : null;
+  }
+
+  /** Plays LIVE_DELAY behind the edge (else a few seconds behind the recording's end). */
+  private async seekEdge(fallback: number) {
+    const e = this.edge();
+    if (e === null) return void (await this.seekWall(fallback, true));
+    await this.seekT(e - LIVE_DELAY, true);
+  }
+
   /** New fragments of a live run. */
   private async refresh() {
+    if (this.refreshing) return;
+    this.refreshing = true;
+    try {
+      await this.refreshNow();
+    } finally {
+      this.refreshing = false;
+    }
+  }
+
+  private async refreshNow() {
     const r = this.run;
+    if (!this.live && this.nudged) {
+      this.nudged = false;
+      if (Math.abs(this.video.playbackRate - 1) < 0.1) this.video.playbackRate = 1;
+    }
     if (!r || this.alive.dead) return;
     // Live: when the source came back, the recording goes on in a new run.
     if (this.live) {
@@ -292,14 +336,14 @@ export class LoopPlayer {
       const latest = newest(runs);
       if (latest && latest.id !== r.id && latest.to > r.to && playable(latest)) {
         await this.open(latest);
-        if (this.live) await this.seekWall(latest.to - 4000, true);
+        if (this.live) await this.seekEdge(latest.to - 4000);
         return;
       }
       // This run opened before its preview had a picture: opened again now that it has one.
       const same = runs.find((x) => x.id === r.id);
       if (same && this.bufs.length === 0 && same.video?.codec) {
         await this.open(same);
-        if (this.live) await this.seekWall(same.to - 4000, true);
+        if (this.live) await this.seekEdge(same.to - 4000);
         return;
       }
       // Stuck (no picture for 10 s while the recording goes on): the live is found again.
@@ -314,20 +358,26 @@ export class LoopPlayer {
       }
     }
     const near = this.wallOf(this.t);
-    const runs = await this.fetchInfo(near - 20_000, near + 60_000);
+    const runs = await this.fetchInfo(near - (this.live ? 5_000 : 20_000), near + 60_000);
     const same = runs.find((x) => x.id === r.id);
     if (same) this.merge(same);
-    if (this.live && this.bufs[0]) {
-      const lastEnd = Math.max(...[...this.bufs[0].segs.values()].map((s) => s[2]));
+    const edge = this.live ? this.edge() : null;
+    if (edge !== null) {
       const cur = this.video.currentTime + this.base;
       // Everything from where it plays to the edge (a stall gets no timeupdate to load it).
-      await this.fill(cur, Math.max(8, lastEnd - cur + 2));
-      // Stay close to the edge: too far behind, or stalled while the edge is further.
-      const behind = lastEnd - (this.video.currentTime + this.base);
+      await this.fill(cur, Math.max(4, edge - cur + 1));
+      if (!this.live || this.video.paused) return;
+      // LIVE_DELAY behind the edge: a little faster or slower to hold it (a jump only when far
+      // behind, or stalled while the edge is further).
+      const behind = edge - (this.video.currentTime + this.base);
       const stalled = this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
-      if (!this.video.paused && (behind > 10 || (stalled && behind > 5))) {
-        this.video.currentTime = lastEnd - 4 - this.base;
+      if (behind > 6 || (stalled && behind > LIVE_DELAY + 1)) {
+        this.video.playbackRate = 1;
+        this.video.currentTime = edge - LIVE_DELAY - this.base;
         void this.video.play().catch(() => {});
+      } else {
+        this.video.playbackRate = behind > LIVE_DELAY + 0.4 ? 1.06 : behind < LIVE_DELAY - 0.4 ? 0.94 : 1;
+        this.nudged = true;
       }
     }
   }
@@ -438,7 +488,8 @@ export class LoopPlayer {
     if (latest.id !== this.run?.id || this.bufs.length === 0) await this.open(latest);
     else this.merge(latest);
     if (!this.live) return;
-    // A few seconds behind its last frame (never past what is recorded).
-    await this.seekWall(Math.max(latest.from, Math.min(now - 8000, latest.to - 4000)), true);
+    // LIVE_DELAY behind its newest fragment (else a few seconds behind its last segment).
+    this.video.playbackRate = 1;
+    await this.seekEdge(Math.max(latest.from, Math.min(now - 8000, latest.to - 4000)));
   }
 }

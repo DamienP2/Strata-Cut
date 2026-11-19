@@ -16,8 +16,9 @@ use super::{
 
 /// Length of the original segments, seconds (cut at the source's key frames).
 const SEGMENT: u32 = 6;
-/// Length of the proxy segments, seconds.
-const PROXY_SEGMENT: u32 = 4;
+/// Length of the proxy segments, seconds: short, so that the live plays a second or two
+/// behind the source (a fragment is read once it is whole).
+const PROXY_SEGMENT: u32 = 1;
 /// Sound kept on its timestamps: a hole of more than 10 ms is filled with silence, an
 /// overlap cut (by default FFmpeg joins the samples and the sound drifts ahead after a loss).
 pub const AUDIO_SYNC: &str = "aresample=async=1:min_hard_comp=0.01";
@@ -326,16 +327,17 @@ pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool
     let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", "warning", "-copyts", "-thread_queue_size", "4096", "-i"]);
     // No timeout: it waits for the receiver, and is stopped with it.
     a.push(format!("udp://127.0.0.1:{preview_port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216"));
-    // 1. Video: same frames, same timestamps, light.
+    // 1. Video: same frames, same timestamps, light; no look-ahead (the live a second or two
+    // behind the source).
     let keyframes = "expr:if(isnan(prev_forced_t),1,gte(t,prev_forced_t+1))";
-    a.extend(s(&["-map", "0:v:0", "-vf", "yadif=deint=interlaced,scale=-2:'min(540,ih)',format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "main", "-bf", "0", "-force_key_frames", keyframes, "-b:v", "1200k", "-maxrate", "1600k", "-bufsize", "2400k", "-an", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "10", "-hls_flags", "+independent_segments", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
+    a.extend(s(&["-map", "0:v:0", "-vf", "yadif=deint=interlaced,scale=-2:'min(540,ih)',format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "main", "-bf", "0", "-force_key_frames", keyframes, "-b:v", "1200k", "-maxrate", "1600k", "-bufsize", "2400k", "-an", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_flags", "+independent_segments", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
     a.push(d("video/p%08d.m4s"));
     a.push(d("video/index.m3u8"));
     // 2. Audio (first track, stereo).
     if audio {
         // Lost or damaged audio packets leave a hole in the times: filled with silence (and
         // overlaps cut), else the sound after it is joined early and drifts ahead of the picture.
-        a.extend(s(&["-map", "0:a:0", "-vn", "-af", AUDIO_SYNC, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "10", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
+        a.extend(s(&["-map", "0:a:0", "-vn", "-af", AUDIO_SYNC, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
         a.push(d("audio/p%08d.m4s"));
         a.push(d("audio/index.m3u8"));
     }

@@ -332,9 +332,12 @@ async fn media(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id)
             }
             let (Some(t_from), Some(t_to)) = (run.t_of(w.from.max(first)), run.t_of(w.to.min(last))) else { continue };
             let map: Vec<Value> = run.master.iter().filter(|m| m.t1 >= t_from && m.t0 <= t_to).map(|m| json!([m.t0, m.t1, m.wall0])).collect();
+            // Up to the live: the newest preview fragments, ahead of the recording's last segment
+            // (6 s, listed once whole).
+            let upto = if run.live && w.to >= last { f64::INFINITY } else { t_to + 4.0 };
             let track = |video: bool| {
                 let t = run.track(video);
-                t.offset.map(|offset| json!({"offset": offset, "segs": t.segs.iter().filter(|p| p.t1 >= t_from - 4.0 && p.t0 <= t_to + 4.0).map(|p| json!([p.n, p.t0, p.t1])).collect::<Vec<_>>()}))
+                t.offset.map(|offset| json!({"offset": offset, "segs": t.segs.iter().filter(|p| p.t1 >= t_from - 4.0 && p.t0 <= upto).map(|p| json!([p.n, p.t0, p.t1])).collect::<Vec<_>>()}))
             };
             inits.push((out.len(), run.track_dir(true).join("init.mp4"), run.track_dir(false).join("init.mp4")));
             out.push(json!({

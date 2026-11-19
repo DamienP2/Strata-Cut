@@ -79,6 +79,7 @@ function Shell({ route }: { route: Route }) {
   const admin = can.admin(user);
   const health = useHealth((s) => s.health);
   const system = visibleSystem(user).length > 0;
+  const recorders = can.recorders(user);
   // The extractions under way, on the Clips tab (seen from every page).
   const extracting = useApp((s) => s.jobs.filter((j) => j.state === 'queued' || j.state === 'running').length);
 
@@ -88,8 +89,10 @@ function Shell({ route }: { route: Route }) {
 
   // A page this user may not open goes back home.
   useEffect(() => {
-    if (route.page === 'system' && !system) void navigate('/', true);
-  }, [route.page, system]);
+    if (route.page === 'system' && !system) void navigate(recorders ? '/' : '/extract', true);
+    // The operators' home: Extraction.
+    else if (route.page === 'recorders' && !recorders) void navigate('/extract', true);
+  }, [route.page, system, recorders]);
 
   let page: React.ReactNode;
   switch (route.page) {
@@ -109,7 +112,7 @@ function Shell({ route }: { route: Route }) {
       page = <Help />;
       break;
     default:
-      page = <Recorders />;
+      page = recorders ? <Recorders /> : null;
   }
 
   return (
@@ -117,7 +120,7 @@ function Shell({ route }: { route: Route }) {
       <nav className="topbar">
         <Brand />
         <div className="tabs home-tabs">
-          <Tab on={route.page === 'recorders'} icon={<RadioTower size={14} />} label={t('Recorders')} path="/" />
+          {recorders && <Tab on={route.page === 'recorders'} icon={<RadioTower size={14} />} label={t('Recorders')} path="/" />}
           <Tab on={route.page === 'schedule'} icon={<CalendarClock size={14} />} label={t('Schedule')} path="/schedule" />
           <Tab on={route.page === 'extract'} icon={<Scissors size={14} />} label={t('Extraction')} path="/extract" />
           <Tab on={route.page === 'clips'} icon={<Clapperboard size={14} />} label={t('Clips')} path="/clips" count={extracting} />
