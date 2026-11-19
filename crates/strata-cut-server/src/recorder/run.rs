@@ -77,6 +77,7 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
             }
             Outcome::Stopped => break,
             Outcome::Exited { had_data, message } => {
+                let bot = message == super::web::BOT || message == super::web::BOT_COOKIES;
                 if had_data {
                     failures = 0;
                     rec.set_state(State::Nosignal, "");
@@ -114,8 +115,11 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                     }
                 }
                 rec.refresh_status();
-                // A web page is asked less often (the platforms limit the requests): 15 s, 30 s, then every minute.
-                let wait = if cfg.protocol == Protocol::Web && !had_data {
+                // A web page is asked less often (the platforms limit the requests): 15 s, 30 s, then every
+                // minute; every 10 minutes when YouTube checks for bots (asking more often makes it worse).
+                let wait = if cfg.protocol == Protocol::Web && bot {
+                    Duration::from_secs(600)
+                } else if cfg.protocol == Protocol::Web && !had_data {
                     Duration::from_secs(15 * (1u64 << failures.clamp(1, 3).saturating_sub(1)).min(4))
                 } else {
                     Duration::from_secs((1 + failures.min(5) * 2) as u64)

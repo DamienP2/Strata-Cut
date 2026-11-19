@@ -100,7 +100,8 @@ pub async fn resolve(data_dir: &Path, c: &RecorderConfig) -> Result<Source, Stri
         Ok(Ok(o)) => o,
     };
     if !out.status.success() {
-        return Err(reason(&String::from_utf8_lossy(&out.stderr)));
+        let r = reason(&String::from_utf8_lossy(&out.stderr));
+        return Err(if r == BOT && !c.cookies.trim().is_empty() { BOT_COOKIES.into() } else { r });
     }
     let v: Value = serde_json::from_slice(&out.stdout).map_err(|_| "web: unexpected answer from yt-dlp".to_string())?;
     source(&v)
@@ -161,11 +162,19 @@ pub fn pipe_command(data_dir: &Path, c: &RecorderConfig) -> Command {
     cmd
 }
 
+/// YouTube wants to check that this server is not a bot: it takes a signed-in account's cookies.
+pub const BOT: &str = "web: youtube asks to check this server is not a bot (give the recorder a youtube account's cookies)";
+/// The same with cookies given: YouTube no longer takes them.
+pub const BOT_COOKIES: &str = "web: youtube refuses these cookies (export them again, from a private window)";
+
 /// yt-dlp's error in a few words for the interface.
 pub fn reason(stderr: &str) -> String {
     let line = stderr.lines().rev().find(|l| l.contains("ERROR")).or_else(|| stderr.lines().rev().find(|l| !l.trim().is_empty())).unwrap_or("").trim();
     let low = line.to_ascii_lowercase();
-    let r = if low.contains("will begin") || low.contains("premieres") || low.contains("upcoming") || low.contains("scheduled") {
+    let r = if low.contains("not a bot") {
+        // YouTube checks the server's address (often for servers and virtual machines).
+        BOT
+    } else if low.contains("will begin") || low.contains("premieres") || low.contains("upcoming") || low.contains("scheduled") {
         "web: the live has not started"
     } else if low.contains("not currently live") || low.contains("is not live") || low.contains("no live") || low.contains("not live") {
         "web: this page is not a live"
@@ -252,6 +261,7 @@ mod tests {
         assert_eq!(reason("ERROR: [youtube:tab] @chan: The channel is not currently live"), "web: this page is not a live");
         assert_eq!(reason("ERROR: [instagram] x: Requested content is not available, rate-limit reached or login required. Use --cookies"), "web: this page needs a signed-in account (cookies)");
         assert_eq!(reason("ERROR: Unsupported URL: https://example.com/"), "web: this address is not supported");
+        assert_eq!(reason("ERROR: [youtube] abc: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication."), BOT);
         assert_eq!(reason("ERROR: [x] 1: Something odd happened"), "web: Something odd happened");
     }
 }

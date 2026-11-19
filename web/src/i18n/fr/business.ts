@@ -270,9 +270,11 @@ export const business: Record<string, string> = {
   'See it in Clips': 'Voir dans Extraits',
   'Put away': 'Ranger',
   // Web lives
+  "web: youtube asks to check this server is not a bot (give the recorder a youtube account's cookies)": 'YouTube\u00a0: vérification «\u00a0vous n’êtes pas un robot\u00a0» pour ce serveur (donnez à l’enregistreur les cookies d’un compte YouTube)',
+  'web: youtube refuses these cookies (export them again, from a private window)': 'YouTube\u00a0: ces cookies sont refusés (exportez-les de nouveau, depuis une fenêtre privée)',
   'Only YouTube lives are recorded.': 'Seuls les directs YouTube sont enregistrés.',
   'only youtube lives are recorded': 'Seuls les directs YouTube sont enregistrés.',
-  'Only for YouTube lives that need an account (age-restricted, for members). Export the cookies.txt of that account from a browser (extension “Get cookies.txt”) and import it here. Use an account made for this.': 'Seulement pour les directs YouTube qui demandent un compte (âge limité, réservés aux membres). Exportez le cookies.txt de ce compte depuis un navigateur (extension «\u00a0Get cookies.txt\u00a0») et importez-le ici. Utilisez un compte créé pour cela.',
+  'When YouTube asks to check this server is not a bot, or for lives that need an account. In a private window of a browser, sign in to YouTube (an account made for this), export its cookies.txt (extension “Get cookies.txt LOCALLY”), close the window and import the file here.': 'Quand YouTube demande de vérifier que ce serveur n’est pas un robot, ou pour les directs qui demandent un compte. Dans une fenêtre privée d’un navigateur, connectez-vous à YouTube (un compte créé pour cela), exportez ses cookies.txt (extension «\u00a0Get cookies.txt LOCALLY\u00a0»), fermez la fenêtre et importez le fichier ici.',
   'Address of the live': 'Adresse du direct',
   'Cookies of a signed-in account': 'Cookies d’un compte connecté',
   'Only for lives that need an account (Instagram, some Facebook, LinkedIn or X lives). Export the cookies.txt of that account from a browser (extension “Get cookies.txt”) and import it here. Use an account made for this.': 'Seulement pour les directs qui demandent un compte (Instagram, certains directs Facebook, LinkedIn ou X). Exportez le cookies.txt de ce compte depuis un navigateur (extension «\u00a0Get cookies.txt\u00a0») et importez-le ici. Utilisez un compte dédié.',

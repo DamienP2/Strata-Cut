@@ -500,7 +500,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
               label={
                 <>
                   {t('Cookies of a signed-in account')}
-                  <InfoTip text={t('Only for YouTube lives that need an account (age-restricted, for members). Export the cookies.txt of that account from a browser (extension “Get cookies.txt”) and import it here. Use an account made for this.')} />
+                  <InfoTip text={t('When YouTube asks to check this server is not a bot, or for lives that need an account. In a private window of a browser, sign in to YouTube (an account made for this), export its cookies.txt (extension “Get cookies.txt LOCALLY”), close the window and import the file here.')} />
                 </>
               }
               hint={c.cookies === MASKED ? t('Cookies saved: they stay until you import others or remove them.') : t('Optional. The page is read without an account if empty.')}
