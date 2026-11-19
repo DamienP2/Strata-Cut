@@ -2,13 +2,15 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, ChevronsRight, Crosshair, Download, Eraser, FastForward, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, ChevronsRight, Crosshair, Download, Eraser, FastForward, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
+import { RecLogo } from '../ui/RecLogo';
 import { t, locale } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer, type RunInfo } from '../player';
 import { behind, clock, day, duration, fpsOf, parseTimecode, timecode } from '../tc';
 import { Empty } from '../ui/Empty';
+import { formatDuration } from '../ui/format';
 import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
 import { GrainCache } from '../audio';
 import type { Clip, Job, Recorder } from '../types';
@@ -114,7 +116,7 @@ function Sources({ current }: { current?: string }) {
         return (
           <div key={r.id} className={`lib-nav-item sc-src ${r.id === current ? 'on' : ''}`} onClick={() => void navigate(`/extract/${r.id}`)}>
             <span className={`nav-dot ${st === 'recording' ? 'ok' : st === 'off' || st === 'waiting' ? '' : st === 'error' ? 'bad' : 'warn'}`} />
-            {r.logo && <img className="sc-logo" src={`/api/recorders/${r.id}/logo?v=${r.logo}`} alt="" />}
+            <RecLogo rec={r} size="sm" />
             <span className="sc-src-t">
               <span className="sc-src-name">{r.name}</span>
               <span className="sc-src-prog">{status[r.id]?.onAir?.name ?? (st === 'recording' ? t('Recording') : st === 'off' ? t('Stopped') : st === 'waiting' ? t('Programmed') : st === 'error' ? t('Error') : t('No signal'))}</span>
@@ -139,6 +141,10 @@ function Editor({ rec }: { rec: Recorder }) {
   const [name, setName] = useState('');
   const [span, setSpan] = useDisplayPref('extract.zoom.h', ZOOM_RESET);
   const [spans, setSpans] = useState<Span[]>([]);
+  const spansRef = useRef<Span[]>([]);
+  spansRef.current = spans;
+  /** The playhead in a period not recorded: that period (the picture says so instead of black). */
+  const [hole, setHole] = useState<{ from: number; to: number } | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
   const [guide, setGuide] = useState<Programme[]>([]);
   const fps = fpsOf(run?.media?.fpsNum, run?.media?.fpsDen);
@@ -171,6 +177,7 @@ function Editor({ rec }: { rec: Recorder }) {
     let frame = 0;
     let last: Mark | null = null;
     p.onFrame = (wall, tt) => {
+      setHole(null);
       last = { run: p.run?.id ?? '', t: tt, wall };
       if (!frame)
         frame = requestAnimationFrame(() => {
@@ -253,8 +260,26 @@ function Editor({ rec }: { rec: Recorder }) {
     const pl = playerRef.current;
     if (!pl) return;
     pl.halt();
+    // A moment not recorded (between two recordings): the playhead stays there, the picture says so.
+    const all = [...spansRef.current].sort((a, b) => a.from - b.from);
+    const before = all.filter((x) => x.to <= wall).at(-1);
+    const after = all.find((x) => x.from > wall);
+    if (all.length && !all.some((x) => wall >= x.from && wall < x.to) && wall < serverNow()) {
+      setHole({ from: before?.to ?? wall, to: after?.from ?? serverNow() });
+      setPos({ run: '', t: -1, wall });
+      return;
+    }
+    setHole(null);
     void pl.seekWall(wall);
   }, []);
+  /** From a period not recorded: to the recording after it (or before it, going back). */
+  const leaveHole = (forward: boolean, play = false) => {
+    const pl = p();
+    if (!hole || !pl) return false;
+    setHole(null);
+    void pl.seekWall(forward ? hole.to : hole.from - 1000 / fps, play);
+    return true;
+  };
 
   /** In and out on a whole programme (within what is recorded); its name for the clip. */
   const markProgramme = async (g: Programme): Promise<{ a: Mark; b: Mark } | null> => {
@@ -326,16 +351,18 @@ function Editor({ rec }: { rec: Recorder }) {
       toast(t((e as Error).message), 'error');
     }
   };
-  const markIn = () => pos && setIn(pos);
-  const markOut = () => pos && setOut(pos);
+  const markIn = () => pos && !hole && setIn(pos);
+  const markOut = () => pos && !hole && setOut(pos);
   const step = (n: number) => {
     setLive(false);
+    if (leaveHole(n > 0)) return;
     p()?.step(n);
   };
   const togglePlay = () => {
     const pl = p();
     if (!pl) return;
     setLive(false);
+    if (leaveHole(true, true)) return;
     if (pl.playing) pl.pause();
     else pl.play();
   };
@@ -428,6 +455,16 @@ function Editor({ rec }: { rec: Recorder }) {
         <div className="sc-viewer-wrap">
           <div className="sc-viewer">
             <video ref={videoRef} className="sc-video" playsInline />
+            {hole && (
+              <div className="sc-hole">
+                <VideoOff size={34} strokeWidth={1.5} />
+                <strong>{t('Not recorded')}</strong>
+                <span>
+                  {clock(hole.from, timezone).slice(0, 8)} → {clock(hole.to, timezone).slice(0, 8)} · {formatDuration((hole.to - hole.from) / 1000)}
+                </span>
+                <span className="sc-hole-hint">{t('Play or → goes on with the next recording.')}</span>
+              </div>
+            )}
             {run?.audio && <Meters out={audio.out} />}
           </div>
         </div>
@@ -538,15 +575,37 @@ const Layers = memo(function Layers(props: { recId: string; start: number; span:
         </div>
       )}
       <div className="sc-strip">
-        {strip.out.map((w) => (
-          <div key={w} className="sc-tile" style={{ left: `${x(w - strip.d / 2)}%`, width: `${(strip.d / span) * 100}%` }}>
-            {recorded(w) && w < now - 2000 && <Still url={`/api/recorders/${recId}/frame.jpg?at=${Math.round(w)}&h=54${strip.d >= 2000 ? '&fast=1' : ''}`} />}
-          </div>
-        ))}
+        {/* Each still only over what is recorded: cut clean where a recording starts or ends. */}
+        {strip.out.flatMap((w) => {
+          const a = w - strip.d / 2;
+          const b = w + strip.d / 2;
+          return spans
+            .map((s) => [Math.max(a, s.from), Math.min(b, s.to, now - 2000)] as const)
+            .filter(([l, r]) => r > l)
+            .map(([l, r]) => {
+              // The frame shown: the tile's middle when recorded, else near the start of what is (steady).
+              const at = recorded(w) && w >= l && w < r ? w : l + Math.min((r - l) / 2, 1000);
+              return (
+                <div key={`${w}-${l}`} className="sc-tile" style={{ left: `${x(l)}%`, width: `${((r - l) / span) * 100}%` }}>
+                  <Still url={`/api/recorders/${recId}/frame.jpg?at=${Math.round(at)}&h=54${strip.d >= 2000 ? '&fast=1' : ''}`} />
+                </div>
+              );
+            });
+        })}
       </div>
       <div className="sc-wave">
         <svg viewBox="0 0 1000 30" preserveAspectRatio="none" aria-hidden="true">
-          <path d={wavePath} fill="currentColor" />
+          {/* The sound only over what is recorded. */}
+          <clipPath id={`sc-wave-clip-${recId}`}>
+            {spans
+              .filter((s) => s.to > start && s.from < end)
+              .map((s) => {
+                const l = Math.max(0, ((s.from - start) / span) * 1000);
+                const r = Math.min(1000, ((Math.min(s.to, now) - start) / span) * 1000);
+                return <rect key={s.from} x={l} y={0} width={Math.max(0, r - l)} height={30} />;
+              })}
+          </clipPath>
+          <path d={wavePath} fill="currentColor" clipPath={`url(#sc-wave-clip-${recId})`} />
         </svg>
       </div>
       {gaps.map(([a, b], i) => (

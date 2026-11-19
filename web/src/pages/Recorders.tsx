@@ -3,6 +3,7 @@ import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
 import { CalendarClock, Copy, Eraser, ImagePlus, MoreHorizontal, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
+import { RecLogo } from '../ui/RecLogo';
 import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
 import { advisedBitrate, bitrate, clock, day, DECKLINK_MODES, formatFamily, formatName, scanFormat } from '../tc';
@@ -271,7 +272,7 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
       <div className="project-body">
         <div className="sc-card-title">
           <span className={`nav-dot ${recording ? 'ok' : state === 'off' || state === 'waiting' ? '' : state === 'error' ? 'bad' : 'warn'}`} />
-          {rec.logo && <img className="sc-logo" src={`/api/recorders/${rec.id}/logo?v=${rec.logo}`} alt="" />}
+          <RecLogo rec={rec} />
           <strong title={[sourceAddress(rec), fmt].filter(Boolean).join('\n')}>{rec.name}</strong>
           <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
         </div>

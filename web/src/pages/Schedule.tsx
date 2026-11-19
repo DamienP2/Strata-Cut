@@ -15,6 +15,7 @@ import { confirmDialog } from '../ui/dialogs';
 import { Dropdown } from '../ui/Dropdown';
 import { Segmented } from '../ui/fields';
 import { Field } from '../settings/ui';
+import { RecLogo } from '../ui/RecLogo';
 import type { Programme, Recorder, Slot } from '../types';
 
 /** 1 = Monday … 7 = Sunday: their short names in the interface's language. */
@@ -124,6 +125,7 @@ export function Schedule() {
                 </button>
                 {programmed.map((r) => (
                   <button key={r.id} className={`asr-chip ${only === r.id ? 'on' : ''}`} onClick={() => setOnly(r.id)}>
+                    <RecLogo rec={r} size="sm" />
                     {r.name} <span className="asr-chip-n">{slots.filter((s) => s.recorder === r.id).length}</span>
                   </button>
                 ))}
@@ -161,6 +163,7 @@ export function Schedule() {
                         <strong>{s.name || t('Programmed slot')}</strong>
                         <span className="sc-slot-meta">
                           <span className={`nav-dot ${rec?.enabled ? 'ok' : ''}`} title={rec?.enabled ? t('This recorder already records all the time: its slots change nothing while it runs.') : undefined} />
+                          <RecLogo rec={rec} size="sm" />
                           {nameOf(s.recorder)}
                           <span className="sc-slot-sep">·</span>
                           {s.date ? (
@@ -285,7 +288,10 @@ function Finished({ recorders, only, q, timezone }: { recorders: Recorder[]; onl
               </div>
               <div className="sc-slot-main">
                 <strong>{x.name || t('Programmed slot')}</strong>
-                <span className="sc-slot-meta">{nameOf(x.recorder)}</span>
+                <span className="sc-slot-meta">
+                  <RecLogo rec={recorders.find((r) => r.id === x.recorder)} size="sm" />
+                  {nameOf(x.recorder)}
+                </span>
               </div>
               <div className="sc-slot-hours">
                 <span>
@@ -661,6 +667,7 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
             <div key={r.id} className="sc-cal-row">
               <div className="sc-cal-name" title={r.enabled ? `${r.name}\n${t('This recorder already records all the time: its slots change nothing while it runs.')}` : r.name}>
                 <span className={`nav-dot ${r.enabled ? 'ok' : ''}`} />
+                <RecLogo rec={r} size="sm" />
                 <span className="sc-cal-name-t">{r.name}</span>
               </div>
               <div

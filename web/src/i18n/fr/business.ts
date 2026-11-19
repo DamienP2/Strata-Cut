@@ -331,6 +331,7 @@ export const business: Record<string, string> = {
   'Loop {h} h · since {when}': 'Boucle {h} h · depuis {when}',
   'The whole loop': 'Toute la boucle',
   'Not recorded': 'Non enregistré',
+  'Play or → goes on with the next recording.': 'Lecture ou → reprend à l’enregistrement suivant.',
 
   // Players
   Volume: 'Volume',
