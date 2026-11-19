@@ -1,4 +1,4 @@
-//! Live streams of web pages (YouTube, Facebook, Instagram, X, LinkedIn…), through yt-dlp.
+//! YouTube lives, through yt-dlp.
 //!
 //! Before each recording yt-dlp reads the page: is it live, and where is the stream?
 //! One stream with sound and picture (HLS, most lives) goes straight to FFmpeg with the

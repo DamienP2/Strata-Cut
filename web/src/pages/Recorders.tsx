@@ -19,7 +19,7 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'rtp', label: 'RTP', detail: 'rtp://' },
   { value: 'rtmp', label: 'RTMP', detail: 'rtmp://' },
   { value: 'srt', label: 'SRT', detail: 'srt://' },
-  { value: 'web', label: 'Web', detail: 'https://' },
+  { value: 'web', label: 'YouTube', detail: 'youtube.com' },
   { value: 'decklink', label: 'DeckLink', detail: 'SDI · HDMI' },
 ];
 
@@ -507,7 +507,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
               </Field>
             </>
           ) : (
-            <Field label={web ? t('Address of the live') : t('Address')} hint={web ? (c.url.startsWith('http') && platformOf(c.url) !== 'web' ? PLATFORM_NAME[platformOf(c.url)] : 'YouTube · Facebook · Instagram · X · LinkedIn') : undefined}>
+            <Field label={web ? t('Address of the live') : t('Address')} hint={web && c.url.startsWith('http') && platformOf(c.url) !== 'youtube' ? <span className="sc-warn-text">{t('Only YouTube lives are recorded.')}</span> : undefined}>
               <input value={c.url} placeholder={placeholder} spellCheck={false} onChange={(e) => set({ url: e.target.value })} />
             </Field>
           )}
@@ -518,7 +518,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
               label={
                 <>
                   {t('Cookies of a signed-in account')}
-                  <InfoTip text={t('Only for lives that need an account (Instagram, some Facebook, LinkedIn or X lives). Export the cookies.txt of that account from a browser (extension “Get cookies.txt”) and import it here. Use an account made for this.')} />
+                  <InfoTip text={t('Only for YouTube lives that need an account (age-restricted, for members). Export the cookies.txt of that account from a browser (extension “Get cookies.txt”) and import it here. Use an account made for this.')} />
                 </>
               }
               hint={c.cookies === MASKED ? t('Cookies saved: they stay until you import others or remove them.') : t('Optional. The page is read without an account if empty.')}

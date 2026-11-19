@@ -241,6 +241,9 @@ export const business: Record<string, string> = {
   'Server overloaded: the preview skips': 'Serveur surchargé\u00a0: l’aperçu saute des passages',
   'Over the internet: about 4 times the round trip, 500 ms or more. Too low, the lost packets come back too late: glitches.': 'Par Internet\u00a0: environ 4 fois l’aller-retour, 500 ms ou plus. Trop bas, les paquets perdus reviennent trop tard\u00a0: défauts dans l’image.',
   // Web lives
+  'Only YouTube lives are recorded.': 'Seuls les directs YouTube sont enregistrés.',
+  'only youtube lives are recorded': 'Seuls les directs YouTube sont enregistrés.',
+  'Only for YouTube lives that need an account (age-restricted, for members). Export the cookies.txt of that account from a browser (extension “Get cookies.txt”) and import it here. Use an account made for this.': 'Seulement pour les directs YouTube qui demandent un compte (âge limité, réservés aux membres). Exportez le cookies.txt de ce compte depuis un navigateur (extension «\u00a0Get cookies.txt\u00a0») et importez-le ici. Utilisez un compte créé pour cela.',
   'Address of the live': 'Adresse du direct',
   'Cookies of a signed-in account': 'Cookies d’un compte connecté',
   'Only for lives that need an account (Instagram, some Facebook, LinkedIn or X lives). Export the cookies.txt of that account from a browser (extension “Get cookies.txt”) and import it here. Use an account made for this.': 'Seulement pour les directs qui demandent un compte (Instagram, certains directs Facebook, LinkedIn ou X). Exportez le cookies.txt de ce compte depuis un navigateur (extension «\u00a0Get cookies.txt\u00a0») et importez-le ici. Utilisez un compte dédié.',

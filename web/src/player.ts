@@ -84,6 +84,14 @@ class Buffer {
   }
 }
 
+/** A run the browser can play: its preview has a picture already, and a few seconds of it. */
+const playable = (r: RunInfo) => !!r.video?.codec && r.video.segs.length > 0 && r.to - r.from > 4000;
+/** The newest run that can be played (else the newest at all). */
+function newest(runs: RunInfo[]): RunInfo | null {
+  const by = (list: RunInfo[]) => list.reduce<RunInfo | null>((a, x) => (!a || x.to > a.to ? x : a), null);
+  return by(runs.filter(playable)) ?? by(runs);
+}
+
 export class LoopPlayer {
   run: RunInfo | null = null;
   base = 0;
@@ -105,6 +113,9 @@ export class LoopPlayer {
   private timer = 0;
   private reverse = 0;
   private frameCb = 0;
+  /** Live: when the picture last moved (server ms), to start again if it stays stuck. */
+  private moved = 0;
+  private lastTime = -1;
 
   constructor(
     readonly video: HTMLVideoElement,
@@ -276,12 +287,29 @@ export class LoopPlayer {
     // Live: when the source came back, the recording goes on in a new run.
     if (this.live) {
       const now = this.now();
-      // The newest recording (the one that ends last), only if it is newer than this one.
+      // The newest recording that can be played (its preview started), only if newer than this one.
       const runs = await this.fetchInfo(now - 120_000, now + 10_000);
-      const latest = runs.reduce<RunInfo | null>((a, x) => (!a || x.to > a.to ? x : a), null);
-      if (latest && latest.id !== r.id && latest.to > r.to && latest.to - latest.from > 4000) {
+      const latest = newest(runs);
+      if (latest && latest.id !== r.id && latest.to > r.to && playable(latest)) {
         await this.open(latest);
         if (this.live) await this.seekWall(latest.to - 4000, true);
+        return;
+      }
+      // This run opened before its preview had a picture: opened again now that it has one.
+      const same = runs.find((x) => x.id === r.id);
+      if (same && this.bufs.length === 0 && same.video?.codec) {
+        await this.open(same);
+        if (this.live) await this.seekWall(same.to - 4000, true);
+        return;
+      }
+      // Stuck (no picture for 10 s while the recording goes on): the live is found again.
+      const t = this.video.currentTime;
+      if (t !== this.lastTime || this.video.paused) {
+        this.lastTime = t;
+        this.moved = now;
+      } else if (now - this.moved > 10_000 && latest && latest.to > now - 30_000) {
+        this.moved = now;
+        void this.goLive(now);
         return;
       }
     }
@@ -401,11 +429,13 @@ export class LoopPlayer {
   async goLive(now: number) {
     this.stopReverse();
     this.live = true;
-    // The newest recording, asked afresh (the one in hand may have ended since: a cut, a restart).
+    // The newest recording, asked afresh (the one in hand may have ended since: a cut, a restart);
+    // one whose preview has not started yet, or of a few seconds, is passed over.
     const runs = await this.fetchInfo(now - 120_000, now + 10_000);
-    const latest = runs.reduce<RunInfo | null>((a, x) => (!a || x.to > a.to ? x : a), null);
+    const latest = newest(runs);
+    this.moved = now;
     if (!latest) return void (await this.seekWall(now - 8000, true));
-    if (latest.id !== this.run?.id) await this.open(latest);
+    if (latest.id !== this.run?.id || this.bufs.length === 0) await this.open(latest);
     else this.merge(latest);
     if (!this.live) return;
     // A few seconds behind its last frame (never past what is recorded).

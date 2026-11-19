@@ -66,7 +66,7 @@ pub enum Protocol {
     Rtp,
     Rtmp,
     Srt,
-    /// A live on a web page (YouTube, Facebook, Instagram, X, LinkedIn…), read with yt-dlp.
+    /// A YouTube live, read with yt-dlp.
     Web,
     /// An input of a Blackmagic DeckLink card (SDI, HDMI…), captured with GStreamer.
     Decklink,
@@ -185,6 +185,9 @@ impl RecorderConfig {
         if self.protocol == Protocol::Web {
             if !self.url.starts_with("https://") && !self.url.starts_with("http://") {
                 return Err("the address of the page starts with https://".into());
+            }
+            if web::platform(&self.url) != "youtube" {
+                return Err("only youtube lives are recorded".into());
             }
         } else if !listens && !self.url.starts_with(scheme) {
             return Err(format!("the address starts with {scheme}"));
@@ -315,6 +318,9 @@ pub struct Rec {
     pub epg_from_disk: std::sync::atomic::AtomicBool,
     /// Reception problems of the last 10 minutes (when, which), and when the log last told them.
     glitches: Mutex<(std::collections::VecDeque<(i64, Glitch)>, i64)>,
+    /// Where the last recording of this source ended (source time, s): what a web page gives
+    /// again after a cut is not recorded twice.
+    pub last_end: Mutex<Option<f64>>,
     /// A DeckLink card without signal on its input (its frames, black, are recorded all the same).
     pub no_signal: std::sync::atomic::AtomicBool,
     /// How far the preview is behind the recording (s); when it last dropped some of the stream.
@@ -805,6 +811,7 @@ impl Manager {
             glitches: Mutex::new((std::collections::VecDeque::new(), 0)),
             preview_lag: 0.into(),
             no_signal: false.into(),
+            last_end: Mutex::new(None),
             preview_dropped_at: 0.into(),
             task: Mutex::new(None),
         });

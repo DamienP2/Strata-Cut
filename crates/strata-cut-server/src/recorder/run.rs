@@ -519,7 +519,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         tokio::spawn(read_guide(m.data_dir().to_path_buf(), rec.clone(), found.service, out));
     }
 
-    let mut scan = Scanner::default();
+    let mut scan = Scanner { dup_end: *rec.last_end.lock().unwrap(), ..Default::default() };
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let outcome = loop {
         tokio::select! {
@@ -635,6 +635,9 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     stop_child(&mut preview).await;
     tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
     rec.preview_lag.store(0, Ordering::Relaxed);
+    if let Some(end) = scan.last_t1 {
+        *rec.last_end.lock().unwrap() = Some(end);
+    }
     if let Some(mut c) = capture {
         stop_child(&mut c).await;
         rec.no_signal.store(false, Ordering::Relaxed);
@@ -775,6 +778,16 @@ struct Scanner {
     /// The start of the first segment, and the end of the preview's last video fragment (source time, s).
     first_t0: Option<f64>,
     video_t1: Option<f64>,
+    /// Where the previous recording of this source ended (source time): a live web page read
+    /// again after a cut gives its last segments once more; those are already recorded.
+    dup_end: Option<f64>,
+}
+
+impl Scanner {
+    /// Already recorded: on the previous recording's timeline, before its end.
+    fn duplicate(&self, t0: f64, t1: f64) -> bool {
+        self.dup_end.is_some_and(|e| t0 >= e - 300.0 && t1 <= e + 0.1)
+    }
 }
 
 impl Scanner {
@@ -820,6 +833,9 @@ impl Scanner {
                 let ts = run.track(video).timescale.max(1) as f64;
                 for (n, dur, tfdt, bytes) in segs {
                     let t0 = offset + tfdt as f64 / ts;
+                    if self.duplicate(t0, t0 + dur) {
+                        continue;
+                    }
                     run.append_proxy(video, PSeg { n, t0, t1: t0 + dur, bytes });
                     if video {
                         self.video_t1 = Some(self.video_t1.map_or(t0 + dur, |v| v.max(t0 + dur)));
@@ -880,6 +896,9 @@ impl Scanner {
                 t0 = start_time(ffmpeg, &file).unwrap_or(t1 - SEGMENT as f64);
             }
             if t1 <= t0 {
+                continue;
+            }
+            if self.last_t1.is_none() && self.duplicate(t0, t1) {
                 continue;
             }
             // The source's clock jumped back or far ahead: the times no longer follow the
