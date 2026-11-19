@@ -141,6 +141,17 @@ impl Clips {
         self.dir.lock().unwrap().clone()
     }
 
+    /// The clips of each recorder (by its id): how many, and their bytes.
+    pub fn by_recorder(&self) -> std::collections::HashMap<String, (u64, u64)> {
+        let mut out: std::collections::HashMap<String, (u64, u64)> = Default::default();
+        for c in self.clips.lock().unwrap().iter() {
+            let e = out.entry(c.recorder.clone()).or_default();
+            e.0 += 1;
+            e.1 += c.size;
+        }
+        out
+    }
+
     pub fn jobs_json(&self) -> Value {
         serde_json::to_value(&*self.jobs.lock().unwrap()).unwrap_or_default()
     }

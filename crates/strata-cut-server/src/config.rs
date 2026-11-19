@@ -23,10 +23,11 @@ pub struct ServerConfig {
     /// Where the clips are written (empty = `<data>/clips`).
     #[serde(default)]
     pub clips_dir: String,
-    /// The loops take at most this many GB (0 = no limit but the disk).
+    /// No longer used (always 0): the loops and the clips share their disk, the oldest recordings
+    /// going first when it is full. Kept so that older settings files read.
     #[serde(default)]
     pub loops_max_gb: f64,
-    /// The clips take at most this many GB (0 = no limit but the disk).
+    /// No longer used (always 0), as `loops_max_gb`.
     #[serde(default)]
     pub clips_max_gb: f64,
     /// Clips older than this many days (since made) are deleted (0 = kept until deleted by hand).
@@ -95,8 +96,9 @@ impl ServerConfig {
         self.trusted_origins = self.trusted_origins.iter().map(|o| o.trim().trim_end_matches('/').to_string()).filter(|o| !o.is_empty()).collect();
         self.recordings_dir = self.recordings_dir.trim().to_string();
         self.clips_dir = self.clips_dir.trim().to_string();
-        self.loops_max_gb = if self.loops_max_gb.is_finite() { self.loops_max_gb.max(0.0) } else { 0.0 };
-        self.clips_max_gb = if self.clips_max_gb.is_finite() { self.clips_max_gb.max(0.0) } else { 0.0 };
+        // No fixed share of the disk any more (System › Storage no longer sets one).
+        self.loops_max_gb = 0.0;
+        self.clips_max_gb = 0.0;
         self.keep_free_percent = self.keep_free_percent.clamp(1, 50);
         self.clips_keep_days = self.clips_keep_days.min(3650);
         let mut ntp: Vec<String> = Vec::new();

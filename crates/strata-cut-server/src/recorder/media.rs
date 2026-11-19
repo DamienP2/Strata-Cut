@@ -563,6 +563,7 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
     require(me.is_admin())?;
     let m = s.recorders.clone();
     let clips_dir = s.clips.dir();
+    let clips_of = s.clips.by_recorder();
     let v = tokio::task::spawn_blocking(move || {
         let rec_dir = m.recordings_dir();
         let recorders: Vec<Value> = m
@@ -576,13 +577,18 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
                     "expected": c.bitrate, "bitrate": st.bitrate, "bytes": st.bytes,
                     "need": m.need_of(&c, st.measured), "oldest": st.oldest, "newest": st.newest,
                     "spaceLimited": st.space_limited,
+                    // Its clips: how many, and their bytes.
+                    "clips": clips_of.get(&r.id).map_or(0, |c| c.0), "clipBytes": clips_of.get(&r.id).map_or(0, |c| c.1),
                 })
             })
             .collect();
         let clips_bytes = super::dir_size(&clips_dir);
+        // The clips of recorders deleted since.
+        let known: std::collections::HashSet<String> = m.recs().iter().map(|r| r.id.clone()).collect();
+        let orphans: (u64, u64) = clips_of.iter().filter(|(id, _)| !known.contains(*id)).fold((0, 0), |a, (_, c)| (a.0 + c.0, a.1 + c.1));
         json!({
             "recordings": {"dir": rec_dir, "disk": disk(&rec_dir), "bytes": m.loops_bytes()},
-            "clips": {"dir": clips_dir, "disk": disk(&clips_dir), "bytes": clips_bytes, "sameDisk": super::same_disk(&rec_dir, &clips_dir)},
+            "clips": {"dir": clips_dir, "disk": disk(&clips_dir), "bytes": clips_bytes, "sameDisk": super::same_disk(&rec_dir, &clips_dir), "count": clips_of.values().map(|c| c.0).sum::<u64>(), "orphans": orphans.0, "orphanBytes": orphans.1},
             "capacity": m.loops_capacity(),
             "reserved": m.reserved(),
             "disks": crate::storage::disks(),
