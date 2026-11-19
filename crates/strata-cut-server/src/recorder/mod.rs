@@ -337,20 +337,13 @@ impl Rec {
         self.cfg.borrow().clone()
     }
 
-    /// Counts a reception problem; the log says how many once a minute at most.
+    /// Counts a reception problem (the journal tells them every 10 minutes: Manager::report_glitches).
     pub fn glitch(&self, kind: Glitch) {
         let now = now_ms();
         let mut g = self.glitches.lock().unwrap();
         g.0.push_back((now, kind));
         while g.0.front().is_some_and(|(t, _)| now - t > 600_000) {
             g.0.pop_front();
-        }
-        if now - g.1 >= 60_000 {
-            let minute: Vec<_> = g.0.iter().filter(|(t, _)| now - t < 60_000).collect();
-            let lost = minute.iter().filter(|(_, k)| *k == Glitch::Lost).count();
-            let damaged = minute.len() - lost;
-            g.1 = now;
-            tracing::warn!("{}: reception problems in the last minute: {lost} packet losses, {damaged} damaged stream", self.config().name);
         }
     }
 
@@ -541,6 +534,8 @@ pub struct Manager {
     pub ffmpeg: String,
     /// Limits the frame grabs running at once.
     pub grabs: tokio::sync::Semaphore,
+    /// The UDP datagrams the system dropped so far (its receive buffers full), at the last report.
+    udp_dropped: Mutex<Option<u64>>,
     /// The programmed slots of the recorders in schedule mode.
     pub schedules: schedule::Schedules,
     /// The server's time zone (the slots' hours are in it).
@@ -552,6 +547,7 @@ pub struct Manager {
 impl Manager {
     pub fn start(data_dir: &Path, cfg: &ServerConfig, events: Events) -> Arc<Self> {
         let m = Arc::new(Manager {
+            udp_dropped: Mutex::new(udp_dropped()),
             data_dir: data_dir.to_path_buf(),
             recordings_dir: Mutex::new(cfg.recordings_dir(data_dir)),
             dirs: Mutex::new({
@@ -611,6 +607,10 @@ impl Manager {
                     st.next_slot = next;
                 }
                 tick += 1;
+                // The reception problems, every 10 minutes.
+                if tick.is_multiple_of(300) {
+                    m.report_glitches();
+                }
                 let now = m.status_json();
                 if now != last {
                     m.events.send(Audience::All, json!({"type": "status", "status": now}));
@@ -619,6 +619,32 @@ impl Manager {
             }
         });
         m
+    }
+
+    /// The reception problems of the last 10 minutes, in the journal: recorders damaged at the
+    /// same moments on one line (the stream arrives so: the source or the network), the others
+    /// one each; and the datagrams the system itself dropped (its buffers full: this server).
+    fn report_glitches(&self) {
+        let now = now_ms();
+        let dropped = {
+            let mut last = self.udp_dropped.lock().unwrap();
+            let n = udp_dropped();
+            let d = match (*last, n) {
+                (Some(a), Some(b)) => b.saturating_sub(a),
+                _ => 0,
+            };
+            *last = n;
+            d
+        };
+        let recs: Vec<(String, Vec<(i64, Glitch)>)> = self
+            .recs()
+            .iter()
+            .map(|r| (r.config().name, r.glitches.lock().unwrap().0.iter().filter(|(t, _)| now - t < 600_000).copied().collect::<Vec<_>>()))
+            .filter(|(_, e)| !e.is_empty())
+            .collect();
+        for line in glitch_lines(&recs, dropped) {
+            tracing::warn!("{line}");
+        }
     }
 
     fn config_path(&self) -> PathBuf {
@@ -1153,5 +1179,66 @@ mod tests {
         assert_eq!(system_reserve(Path::new("/"), 1_000_000_000_000), 50_000_000_000);
         assert_eq!(system_reserve(Path::new("/"), 100_000_000_000), 10 << 30);
         assert_eq!(system_reserve(Path::new("/"), 16_000_000_000), 4_000_000_000);
+    }
+}
+
+/// The UDP datagrams the system dropped since it started (its receive buffers full), from
+/// /proc/net/snmp ("RcvbufErrors"); None elsewhere.
+fn udp_dropped() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/net/snmp").ok()?;
+    let mut udp = text.lines().filter(|l| l.starts_with("Udp:"));
+    let (names, values) = (udp.next()?, udp.next()?);
+    let i = names.split_whitespace().position(|n| n == "RcvbufErrors")?;
+    values.split_whitespace().nth(i)?.parse().ok()
+}
+
+/// The journal's lines for the reception problems of the last 10 minutes (by recorder: when and
+/// what). Recorders whose problems fall at the same moments (within 2 s, for most of them) are
+/// one line: the stream arrives so. `dropped`: the datagrams the system dropped meanwhile.
+fn glitch_lines(recs: &[(String, Vec<(i64, Glitch)>)], dropped: u64) -> Vec<String> {
+    let shared = |i: usize| {
+        let mine = &recs[i].1;
+        let common = mine.iter().filter(|(t, _)| recs.iter().enumerate().any(|(j, (_, o))| j != i && o.iter().any(|(u, _)| (t - u).abs() <= 2000))).count();
+        common * 10 >= mine.len() * 6
+    };
+    let together: Vec<usize> = (0..recs.len()).filter(|&i| shared(i)).collect();
+    let mut out = Vec::new();
+    let count = |e: &[(i64, Glitch)]| {
+        let lost = e.iter().filter(|(_, k)| *k == Glitch::Lost).count();
+        (lost, e.len() - lost)
+    };
+    if together.len() >= 2 {
+        let names: Vec<String> = together.iter().map(|&i| format!("{} ({})", recs[i].0, recs[i].1.len())).collect();
+        let why = if dropped > 0 { "the system's network buffers were full: this server" } else { "the stream arrives so: the source or the network, not this server" };
+        out.push(format!("reception problems at the same moments in the last 10 minutes on {}: {why}", names.join(", ")));
+    }
+    for (i, (name, e)) in recs.iter().enumerate() {
+        if together.len() >= 2 && together.contains(&i) {
+            continue;
+        }
+        let (lost, damaged) = count(e);
+        out.push(format!("{name}: reception problems in the last 10 minutes: {lost} packets lost by this server, {damaged} damaged on arrival"));
+    }
+    if dropped > 0 {
+        out.push(format!("the system dropped {dropped} UDP packets in the last 10 minutes (its network buffers full: the server short of processor, or the buffers too small)"));
+    }
+    out
+}
+
+#[cfg(test)]
+mod glitch_tests {
+    use super::*;
+
+    #[test]
+    fn together_or_not() {
+        let at = |ts: &[i64]| ts.iter().map(|t| (*t, Glitch::Damaged)).collect::<Vec<_>>();
+        let recs = vec![("TF1".to_string(), at(&[1000, 60_000, 120_500])), ("TMC".to_string(), at(&[1500, 60_800])), ("TFX".to_string(), at(&[120_000])), ("France 2".to_string(), at(&[300_000]))];
+        let l = glitch_lines(&recs, 0);
+        assert_eq!(l.len(), 2, "{l:?}");
+        assert!(l[0].contains("TF1 (3), TMC (2), TFX (1)") && l[0].contains("not this server"), "{l:?}");
+        assert!(l[1].starts_with("France 2:"), "{l:?}");
+        let l = glitch_lines(&recs, 40);
+        assert!(l[0].contains("this server") && !l[0].contains("not this server") && l.last().unwrap().contains("dropped 40"), "{l:?}");
+        assert!(glitch_lines(&[], 0).is_empty());
     }
 }
