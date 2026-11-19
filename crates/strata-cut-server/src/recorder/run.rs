@@ -286,6 +286,9 @@ pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Op
 
 /// The preview's FFmpeg: from the receiver's copy, the browser proxy (video and audio apart,
 /// the same timestamps) and the card's still.
+/// The preview making nothing this long (ms) while the recording goes on: it is stuck.
+const PREVIEW_STUCK_MS: i64 = 60_000;
+
 pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
@@ -552,6 +555,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     let mut scan = Scanner { dup_end: *rec.last_end.lock().unwrap(), ..Default::default() };
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let mut lag_logged = 0i64;
+    // The preview's pictures: how far they went, and since when they have not gone further; when
+    // the recording last went further (by the clock of the server: the source's may go back).
+    let mut video_seen: (Option<u32>, i64) = (None, now_ms());
+    let mut audio_seen: (Option<u32>, i64) = (None, now_ms());
+    let mut master_seen: (Option<f64>, i64) = (None, now_ms());
     let outcome = loop {
         tokio::select! {
             status = child.wait() => {
@@ -658,6 +666,33 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 if lag >= 20.0 && now_ms() - lag_logged > 600_000 {
                     lag_logged = now_ms();
                     tracing::warn!("{}: the server is too busy, the preview is {lag:.0} s behind the recording (the recording is whole)", cfg.name);
+                }
+                // The preview stuck: alive, but making nothing while the recording goes on (seen on
+                // web lives: a stream it can no longer follow). Without it no live, no search, until
+                // the recorder is restarted by hand: a new recording starts by itself.
+                if scan.last_t1 != master_seen.0 {
+                    master_seen = (scan.last_t1, now_ms());
+                }
+                // Its pictures and its sound, each (the sound alone may stop: no live either).
+                if scan.last_video != video_seen.0 {
+                    video_seen = (scan.last_video, now_ms());
+                }
+                if scan.last_audio != audio_seen.0 {
+                    audio_seen = (scan.last_audio, now_ms());
+                }
+                let stuck = |seen: &(Option<u32>, i64)| seen.0.is_some() && now_ms() - seen.1 > PREVIEW_STUCK_MS;
+                let sound = !rec.no_audio.load(Ordering::Relaxed);
+                if (stuck(&video_seen) || (sound && stuck(&audio_seen))) && now_ms() - master_seen.1 < 15_000 {
+                    let (what, since) = if stuck(&video_seen) { ("pictures", video_seen.1) } else { ("sound", audio_seen.1) };
+                    let lines: Vec<String> = plog.lock().unwrap().iter().cloned().collect();
+                    // Its last error, if it said one (not its mere warnings).
+                    let why = best_line(&lines);
+                    let lower = why.to_ascii_lowercase();
+                    let why = if ["error", "invalid", "non monoton", "corrupt", "fail", "discontinu"].iter().any(|k| lower.contains(k)) { why } else { String::new() };
+                    tracing::warn!("{}: the preview has made no {what} for {} s while the recording goes on{}: a new recording starts", cfg.name, (now_ms() - since) / 1000, if why.is_empty() { String::new() } else { format!(" ({why})") });
+                    stop_child(&mut child).await;
+                    tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                    break Outcome::Restart;
                 }
                 if let Some((from, to)) = scan.jumped {
                     tracing::warn!("{}: the source's clock jumped ({from:.1} s → {to:.1} s): a new recording starts", cfg.name);
