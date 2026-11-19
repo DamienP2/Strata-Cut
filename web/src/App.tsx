@@ -64,11 +64,12 @@ function HelpButton({ on }: { on: boolean }) {
   );
 }
 
-function Tab({ on, icon, label, path, dot }: { on: boolean; icon: React.ReactNode; label: string; path: string; dot?: boolean }) {
+function Tab({ on, icon, label, path, dot, count }: { on: boolean; icon: React.ReactNode; label: string; path: string; dot?: boolean; count?: number }) {
   return (
     <button type="button" className={on ? 'on' : ''} aria-current={on ? 'page' : undefined} onClick={() => void navigate(path)}>
       {icon} <span className="tab-label">{label}</span>
       {dot && <span className="nav-dot warn" />}
+      {!!count && <span className="tab-count">{count}</span>}
     </button>
   );
 }
@@ -78,6 +79,8 @@ function Shell({ route }: { route: Route }) {
   const admin = can.admin(user);
   const health = useHealth((s) => s.health);
   const system = visibleSystem(user).length > 0;
+  // The extractions under way, on the Clips tab (seen from every page).
+  const extracting = useApp((s) => s.jobs.filter((j) => j.state === 'queued' || j.state === 'running').length);
 
   useEffect(() => {
     if (admin) return watchHealth();
@@ -117,7 +120,7 @@ function Shell({ route }: { route: Route }) {
           <Tab on={route.page === 'recorders'} icon={<RadioTower size={14} />} label={t('Recorders')} path="/" />
           <Tab on={route.page === 'schedule'} icon={<CalendarClock size={14} />} label={t('Schedule')} path="/schedule" />
           <Tab on={route.page === 'extract'} icon={<Scissors size={14} />} label={t('Extraction')} path="/extract" />
-          <Tab on={route.page === 'clips'} icon={<Clapperboard size={14} />} label={t('Clips')} path="/clips" />
+          <Tab on={route.page === 'clips'} icon={<Clapperboard size={14} />} label={t('Clips')} path="/clips" count={extracting} />
           {system && <Tab on={route.page === 'system'} icon={<Server size={14} />} label={t('System')} path="/system" dot={admin && needsLook(health)} />}
         </div>
         <div className="spacer" />

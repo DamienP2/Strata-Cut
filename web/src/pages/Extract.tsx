@@ -488,11 +488,12 @@ function Editor({ rec }: { rec: Recorder }) {
             </button>
           )}
         </div>
+        <JobStrip jobs={myJobs} recId={rec.id} />
       </div>
       {/* The timeline takes the whole width, under the panels. */}
       <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
 
-      <GuidePanel recId={rec.id} programmes={programmes} jobs={myJobs} timezone={timezone} canExtract={can.extract(user)} admin={admin} act={act} />
+      <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={admin} act={act} />
     </>
   );
 }
@@ -563,12 +564,11 @@ interface GuideActs {
 }
 type Listed = Programme & { share: number };
 
-/** The jobs and the programme guide: drawn again when they change, not at each frame shown. */
-const GuidePanel = memo(function GuidePanel({ recId, programmes, jobs, timezone, canExtract, admin, act }: { recId: string; programmes: Listed[]; jobs: Job[]; timezone: string; canExtract: boolean; admin: boolean; act: { current: GuideActs } }) {
+/** The programme guide: drawn again when it changes, not at each frame shown. */
+const GuidePanel = memo(function GuidePanel({ recId, programmes, timezone, canExtract, admin, act }: { recId: string; programmes: Listed[]; timezone: string; canExtract: boolean; admin: boolean; act: { current: GuideActs } }) {
   const now = useNow(30_000);
   return (
     <aside className="panel right sc-guide-panel">
-      {jobs.length > 0 && <Jobs jobs={jobs} />}
       <section className="insp-section sc-guide-sec">
         <header>
           <span>{t('Programme guide')}</span>
@@ -670,51 +670,86 @@ function MarkTag({ kind, mark, fps, timezone, onType, onClear }: { kind: 'in' | 
   );
 }
 
-function Jobs({ jobs }: { jobs: Job[] }) {
+/**
+ * The extractions, under the clip bar where they are started: a wide bar each (name, %, time
+ * left, cancel); a clip ready stays (play it in Clips, download it) until it is put away.
+ */
+function JobStrip({ jobs, recId }: { jobs: Job[]; recId: string }) {
   const { user, toast } = useApp(useShallow((s) => ({ user: s.auth?.user, toast: s.toast })));
-  const running = jobs.filter((j) => j.state === 'queued' || j.state === 'running').length;
-  const cancel = async (j: Job) => {
+  // When each job was first seen running and how far: the time left from its pace.
+  const seen = useRef(new Map<string, { at: number; p: number }>());
+  const remove = async (j: Job) => {
     try {
       await api('DELETE', `/api/jobs/${j.id}`);
     } catch (e) {
       toast(t((e as Error).message), 'error');
     }
   };
+  const mine = jobs.filter((j) => j.recorder === recId || j.state === 'queued' || j.state === 'running');
+  if (mine.length === 0) return null;
+  const now = Date.now();
   return (
-    <section className="insp-section" style={{ borderBottom: 'none' }}>
-      <header>
-        <span>{t('Extractions')}</span>
-        {running > 0 && <span className="count">{running}</span>}
-      </header>
-      <div className="insp-body">
-        {jobs.map((j) => (
-          <div key={j.id} className="sc-job">
-            <div className="sc-job-top">
-              <strong title={j.name}>{j.name}</strong>
-              {j.state === 'running' && <span className="muted">{Math.round(j.progress * 100)} %</span>}
-              {j.state === 'queued' && <span className="muted">{t('Waiting')}</span>}
-              {j.state === 'done' && j.clip && (
-                <a className="icon-btn ghost" title={t('Download')} href={`/api/clips/${j.clip}/download`}>
-                  <Download size={14} />
-                </a>
-              )}
-              {j.state === 'done' && <span className="ok"><Check size={14} /></span>}
-              {(j.state === 'queued' || j.state === 'running') && can.extract(user) && (
-                <button className="icon-btn ghost" title={t('Cancel')} onClick={() => void cancel(j)}>
-                  <X size={14} />
+    <div className="sc-jobstrip">
+      {mine.map((j) => {
+        let left = '';
+        if (j.state === 'running') {
+          const s0 = seen.current.get(j.id);
+          if (!s0) seen.current.set(j.id, { at: now, p: j.progress });
+          else if (j.progress > s0.p + 0.02) {
+            const secs = ((now - s0.at) / 1000 / (j.progress - s0.p)) * (1 - j.progress);
+            left = secs < 60 ? t('{n} s left', { n: Math.max(1, Math.round(secs)) }) : t('{n} min left', { n: Math.round(secs / 60) });
+          }
+        }
+        return (
+          <div key={j.id} className={`sc-jobline ${j.state}`}>
+            <Scissors size={15} className="sc-jobline-ic" />
+            <strong className="sc-jobline-name" title={j.name}>
+              {j.name}
+            </strong>
+            {j.state === 'running' || j.state === 'queued' ? (
+              <>
+                <span className="sc-jobline-bar">
+                  <span style={{ transform: `translateX(${(j.state === 'queued' ? 0 : j.progress) * 100 - 100}%)` }} />
+                </span>
+                <span className="sc-jobline-pct">{j.state === 'queued' ? t('Waiting') : `${Math.round(j.progress * 100)} %`}</span>
+                <span className="sc-jobline-left muted">{left}</span>
+                {can.extract(user) && (
+                  <button className="ctl" data-tip={t('Cancel')} onClick={() => void remove(j)}>
+                    <X size={16} />
+                  </button>
+                )}
+              </>
+            ) : j.state === 'done' ? (
+              <>
+                <span className="sc-jobline-done">
+                  <Check size={15} /> {t('Clip ready')}
+                </span>
+                <div className="spacer" />
+                <button className="btn small" onClick={() => void navigate('/clips')}>
+                  {t('See it in Clips')}
                 </button>
-              )}
-            </div>
-            {j.state === 'running' && (
-              <span className="perf-bar tone-accent">
-                <span className="perf-bar-fill" style={{ transform: `translateX(${j.progress * 100 - 100}%)` }} />
-              </span>
+                {j.clip && (
+                  <a className="btn small" href={`/api/clips/${j.clip}/download`}>
+                    <Download size={13} /> {t('Download')}
+                  </a>
+                )}
+                <button className="ctl" data-tip={t('Put away')} onClick={() => void remove(j)}>
+                  <X size={16} />
+                </button>
+              </>
+            ) : (
+              <>
+                <span className="sc-jobline-err">{t(j.message)}</span>
+                <div className="spacer" />
+                <button className="ctl" data-tip={t('Put away')} onClick={() => void remove(j)}>
+                  <X size={16} />
+                </button>
+              </>
             )}
-            {j.state === 'error' && <span className="sc-job-err">{t(j.message)}</span>}
           </div>
-        ))}
-      </div>
-    </section>
+        );
+      })}
+    </div>
   );
 }
 

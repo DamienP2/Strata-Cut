@@ -262,6 +262,11 @@ export const business: Record<string, string> = {
   'Finished recordings': 'Enregistrements terminés',
   'The slots of the last 7 days. What is still in the loop can be extracted.': 'Les créneaux des 7 derniers jours. Ce qui est encore dans la boucle peut être extrait.',
   'No longer in the loop': 'Sorti de la boucle',
+  '{n} s left': 'encore {n} s',
+  '{n} min left': 'encore {n} min',
+  'Clip ready': 'Extrait prêt',
+  'See it in Clips': 'Voir dans Extraits',
+  'Put away': 'Ranger',
   // Web lives
   'Only YouTube lives are recorded.': 'Seuls les directs YouTube sont enregistrés.',
   'only youtube lives are recorded': 'Seuls les directs YouTube sont enregistrés.',
