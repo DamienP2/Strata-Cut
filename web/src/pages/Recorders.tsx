@@ -791,6 +791,46 @@ function RecorderThumb({ id }: { id: string }) {
   );
 }
 
+/** What a source carries, tried before its recorder is made (the server reads it a few seconds). */
+interface Probe {
+  still: string | null;
+  video: { codec: string; width: number; height: number; fps: number; interlaced: boolean } | null;
+  audio: number;
+  epg: boolean;
+  services: string[];
+}
+
+/** The source as written can be tried: an address of its kind, a caller (a listening one waits for its source). */
+function triable(c: Recorder): boolean {
+  if (c.protocol === 'decklink') return false;
+  if ((c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener') return false;
+  if (c.protocol === 'web') return /^https?:\/\/\S+\.\S+/.test(c.url) && platformOf(c.url) === 'youtube';
+  return new RegExp(`^${c.protocol}://\\S+`).test(c.url) && /[:.]/.test(c.url.slice(c.protocol.length + 3));
+}
+
+/** Tries the source a moment after it is written (and again when asked). */
+function useProbe(c: Recorder, on: boolean) {
+  const [state, setState] = useState<{ busy: boolean; result: Probe | null; error: string }>({ busy: false, result: null, error: '' });
+  const [again, setAgain] = useState(0);
+  const key = on ? JSON.stringify([c.protocol, c.url, c.mode, c.iface, c.latency, c.passphrase, (c.cookies ?? '').length, again]) : '';
+  useEffect(() => {
+    if (!key) return setState({ busy: false, result: null, error: '' });
+    let dead = false;
+    const timer = setTimeout(() => {
+      setState((s) => ({ ...s, busy: true, error: '' }));
+      api<Probe>('POST', '/api/recorders/probe', c).then(
+        (result) => !dead && setState({ busy: false, result, error: '' }),
+        (e) => !dead && setState({ busy: false, result: null, error: (e as Error).message }),
+      );
+    }, again ? 0 : 1200);
+    return () => {
+      dead = true;
+      clearTimeout(timer);
+    };
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  return { ...state, retry: () => setAgain((n) => n + 1) };
+}
+
 /** The right side of the recorder's window: what it receives, its technical details, its programme guide. */
 function RecorderSide({ c, rec, st, dl, detected, onFormat }: { c: Recorder; rec: Recorder | null; st?: RecorderStatus; dl: DecklinkInfo | null; detected: string; onFormat: (f: string) => void }) {
   const timezone = useApp((s) => s.timezone);
@@ -799,7 +839,12 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat }: { c: Recorder; rec
   const device = c.device ?? 0;
   const input = card ? dl?.devices.find((d) => d.number === device) : undefined;
   // The settings being edited are what it records: its state only while they are unchanged.
-  const media = st && rec && rec.protocol === c.protocol && (!card || rec.device === c.device) ? st.media : null;
+  const unchanged = !!rec && rec.protocol === c.protocol && (card ? rec.device === c.device : rec.url === c.url && rec.mode === c.mode && rec.port === c.port && rec.iface === c.iface);
+  const media = st && unchanged ? st.media : null;
+  // Another source (or a new recorder): tried before it is saved.
+  const listening = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
+  const probe = useProbe(c, !card && !unchanged && triable(c));
+  const tried = probe.result;
   const rows: [string, string][] = [];
   if (card) {
     rows.push([t('Input'), input ? inputLabel(input) : t('Input {n}', { n: device + 1 })]);
@@ -813,6 +858,16 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat }: { c: Recorder; rec
   if (media) {
     rows.push([t('Video'), [CODECS[media.codec] ?? media.codec.toUpperCase(), `${media.width}×${media.height}`, formatName(scanFormat(media), fr)].filter(Boolean).join(' · ')]);
     if (!card) rows.push([t('Audio'), tn(media.audioTracks, '{n} track', '{n} tracks')]);
+  } else if (tried) {
+    const v = tried.video;
+    if (v) {
+      // As the formats are named elsewhere ("1080i50", "720p5994").
+      const r = v.interlaced ? v.fps * 2 : v.fps;
+      const name = v.fps && v.height ? `${v.height}${v.interlaced ? 'i' : 'p'}${Math.abs(r - Math.round(r)) < 0.01 ? Math.round(r) : Math.round(r * 100)}` : '';
+      rows.push([t('Video'), [CODECS[v.codec] ?? v.codec.toUpperCase(), v.width ? `${v.width}×${v.height}` : '', name ? formatName(name, fr) : ''].filter(Boolean).join(' · ')]);
+    } else rows.push([t('Video'), t('None')]);
+    rows.push([t('Audio'), tn(tried.audio, '{n} track', '{n} tracks')]);
+    if (tried.services.length) rows.push([t('Service'), tried.services.join(', ')]);
   }
   if (st && rec) {
     rows.push([t('State'), t(STATE_LABEL[st.state] ?? 'Stopped')]);
@@ -827,13 +882,38 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat }: { c: Recorder; rec
         <h3>{t('Preview')}</h3>
         {card ? (
           <InputPreview device={device} connection={c.connection ?? 'auto'} mode={c.videoMode ?? 'auto'} onFormat={onFormat} />
-        ) : rec ? (
+        ) : unchanged && rec ? (
           <RecorderThumb id={rec.id} />
         ) : (
           <div className="sc-dlprev">
             <div className="sc-dlprev-pic">
-              <span className="muted sc-rm-note">{t('The picture shows once the recorder is created and receives its source.')}</span>
+              {tried?.still ? (
+                <img src={tried.still} alt="" />
+              ) : (
+                <span className={`sc-rm-note ${probe.error ? 'sc-warn-text' : 'muted'}`}>
+                  {listening
+                    ? t('The source connects to this server: its picture shows as soon as it does, once the recorder is created.')
+                    : probe.busy
+                      ? c.protocol === 'web'
+                        ? t('Reading the page and the live…')
+                        : t('Trying the source…')
+                      : probe.error
+                        ? t(probe.error)
+                        : tried
+                          ? t('This source has no picture.')
+                          : t('Write the address of the source: it is tried at once.')}
+                </span>
+              )}
+              {tried?.still && <span className="sc-dlprev-live">{t('Preview')}</span>}
             </div>
+            {!listening && triable(c) && (
+              <span className={`sc-dlprev-state ${tried ? 'on' : ''}`}>
+                {probe.busy ? t('Trying the source…') : tried ? t('The source answers') : probe.error ? t('The source does not answer') : ''}
+                <button type="button" className="linklike" disabled={probe.busy} onClick={probe.retry} style={{ marginLeft: 8 }}>
+                  {t('Try again')}
+                </button>
+              </span>
+            )}
           </div>
         )}
       </section>
@@ -862,7 +942,17 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat }: { c: Recorder; rec
             )}
           </dl>
         ) : (
-          <p className="muted sc-rm-note">{!ts ? t('This kind of source carries no programme guide.') : rec ? t('This source sends no programme guide (yet).') : t('Read from the stream once it is recorded (MPEG-TS: UDP, RTP, SRT).')}</p>
+          <p className="muted sc-rm-note">
+            {!ts
+              ? t('This kind of source carries no programme guide.')
+              : tried
+                ? tried.epg
+                  ? t('The stream carries a programme guide: it is read once recording.')
+                  : t('The stream carries no programme guide.')
+                : rec
+                  ? t('This source sends no programme guide (yet).')
+                  : t('Read from the stream once it is recorded (MPEG-TS: UDP, RTP, SRT).')}
+          </p>
         )}
       </section>
     </>

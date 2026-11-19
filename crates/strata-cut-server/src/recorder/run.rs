@@ -143,7 +143,7 @@ fn same_source(a: &RecorderConfig, b: &RecorderConfig) -> bool {
 }
 
 /// The most telling line of FFmpeg's last words (not the generic "Error opening input files").
-fn best_line(lines: &[String]) -> String {
+pub(super) fn best_line(lines: &[String]) -> String {
     let generic = |raw: &str| {
         let l = clean_message(raw);
         // The input's description and the files opened are not errors.

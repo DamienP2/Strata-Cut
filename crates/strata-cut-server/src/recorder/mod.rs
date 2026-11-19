@@ -9,6 +9,7 @@ pub mod epg;
 pub mod schedule;
 pub mod decklink;
 pub mod sdk;
+pub mod probe;
 pub mod logo;
 
 use serde::{Deserialize, Serialize};

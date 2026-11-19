@@ -32,6 +32,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/system/hardware/forget", axum::routing::post(hardware_forget))
         .route("/api/decklink/{n}/preview.jpg", get(decklink_preview))
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
+        .route("/api/recorders/probe", post(probe))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
         .route("/api/recorders/{id}/clear", post(clear))
         .route("/api/recorders/{id}/logo", get(logo_get).put(logo_put).delete(logo_delete).layer(axum::extract::DefaultBodyLimit::max(super::logo::MAX + 4096)))
@@ -186,6 +187,12 @@ async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q):
         c.cookies = q.copy_of.as_ref().and_then(|id| s.recorders.get(id)).map(|r| r.config().cookies).unwrap_or_default();
     }
     s.recorders.create(c).map(Json).map_err(bad)
+}
+
+/// The recorder's window: a source tried before its recorder is made (a still, what it carries).
+async fn probe(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(c): Json<RecorderConfig>) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    super::probe::probe(&s.recorders, c).await.map(Json).map_err(bad)
 }
 
 async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(c): Json<RecorderConfig>) -> ApiResult<Json<Value>> {
