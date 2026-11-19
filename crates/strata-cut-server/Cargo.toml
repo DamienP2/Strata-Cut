@@ -42,3 +42,5 @@ libc = "0.2"
 
 [build-dependencies]
 flate2 = "1"
+# The DeckLink shim (C++, Blackmagic's SDK): see build.rs.
+cc = "1"

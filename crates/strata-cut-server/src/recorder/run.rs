@@ -345,39 +345,47 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     rec.runs.write().unwrap().push(run);
 
     let audio = !rec.no_audio.load(Ordering::Relaxed);
-    // A DeckLink card: GStreamer captures and encodes it into a named pipe the receiver reads.
-    let mut capture: Option<tokio::process::Child> = None;
+    // A DeckLink card: its frames (Blackmagic's SDK) go to FFmpeg, which encodes them into a
+    // named pipe the receiver reads.
+    let mut capture: Option<CardCapture> = None;
     let clog: Arc<Mutex<VecDeque<String>>> = Default::default();
     let input = match &source {
         Some(s) => super::web::input_args(s),
         None if cfg.protocol == Protocol::Decklink => {
-            let fifo = match super::decklink::fifo(m.data_dir(), &rec.id) {
-                Ok(p) => p,
+            let opened = {
+                let c = cfg.clone();
+                tokio::task::spawn_blocking(move || super::decklink::open_recording(&c)).await.unwrap_or_else(|e| Err(e.to_string()))
+            };
+            let r = match opened {
+                Ok(r) => r,
                 Err(e) => {
                     finish_run(rec, &run_id);
                     return Outcome::Exited { had_data: false, message: format!("decklink: {e}") };
                 }
             };
-            let gst = Command::new(super::decklink::GST_LAUNCH).args(super::decklink::pipeline(cfg, &fifo)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
-            match gst {
-                Ok(mut c) => {
-                    rec.no_signal.store(false, Ordering::Relaxed);
-                    // Its messages: on its output (warnings, the signal) and its errors.
-                    let outs: Vec<Box<dyn tokio::io::AsyncRead + Unpin + Send>> = [c.stdout.take().map(|o| Box::new(o) as _), c.stderr.take().map(|e| Box::new(e) as _)].into_iter().flatten().collect();
-                    for out in outs {
-                        let (clog, rec2, name) = (clog.clone(), rec.clone(), cfg.name.clone());
+            let pipes = ["ts", "uyvy", "pcm"].map(|ext| super::decklink::fifo(m.data_dir(), &rec.id, ext));
+            let [Ok(ts), Ok(video), Ok(sound)] = pipes else {
+                finish_run(rec, &run_id);
+                let e = pipes.into_iter().find_map(|p| p.err()).map(|e| e.to_string()).unwrap_or_default();
+                return Outcome::Exited { had_data: false, message: format!("decklink: {e}") };
+            };
+            rec.no_signal.store(!r.signal, Ordering::Relaxed);
+            if r.signal {
+                tracing::info!("{}: capturing {} from the card", cfg.name, r.mode.format());
+            } else {
+                tracing::warn!("{}: no signal on the card's input (waiting for it in {})", cfg.name, r.mode.format());
+            }
+            let args = super::decklink::encoder_args(cfg, &r.mode, &video, &sound, &ts);
+            tracing::debug!("{}: encoder: ffmpeg {}", cfg.name, args.join(" "));
+            let spawned = Command::new(&m.ffmpeg).args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
+            match spawned {
+                Ok(mut encoder) => {
+                    if let Some(err) = encoder.stderr.take() {
+                        let (clog, name) = (clog.clone(), cfg.name.clone());
                         tokio::spawn(async move {
-                            let mut lines = tokio::io::BufReader::new(out).lines();
+                            let mut lines = tokio::io::BufReader::new(err).lines();
                             while let Ok(Some(l)) = lines.next_line().await {
-                                match super::decklink::signal(&l) {
-                                    Some(false) => tracing::warn!("{name}: no signal on the card's input"),
-                                    Some(true) => tracing::info!("{name}: the card's input has a signal again"),
-                                    None => {}
-                                }
-                                if let Some(on) = super::decklink::signal(&l) {
-                                    rec2.no_signal.store(!on, Ordering::Relaxed);
-                                }
-                                tracing::debug!("{name}: capture: {l}");
+                                tracing::debug!("{name}: encoder: {l}");
                                 let mut q = clog.lock().unwrap();
                                 q.push_back(l);
                                 if q.len() > 30 {
@@ -386,15 +394,28 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                             }
                         });
                     }
-                    capture = Some(c);
+                    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let (tx, done) = tokio::sync::oneshot::channel();
+                    let (stop2, rec2, name, channels) = (stop.clone(), rec.clone(), cfg.name.clone(), cfg.audio_channels);
+                    std::thread::spawn(move || {
+                        let end = super::decklink::pump(r, video, sound, channels, stop2, |on| {
+                            rec2.no_signal.store(!on, Ordering::Relaxed);
+                            if on {
+                                tracing::info!("{name}: the card's input has a signal again");
+                            } else {
+                                tracing::warn!("{name}: no signal on the card's input");
+                            }
+                        });
+                        let _ = tx.send(end);
+                    });
+                    capture = Some(CardCapture { encoder, stop, done });
                 }
                 Err(e) => {
                     finish_run(rec, &run_id);
-                    let message = if e.kind() == std::io::ErrorKind::NotFound { "decklink: GStreamer is not installed (gstreamer1.0-tools)".to_string() } else { format!("decklink: cannot start GStreamer: {e}") };
-                    return Outcome::Exited { had_data: false, message };
+                    return Outcome::Exited { had_data: false, message: format!("decklink: cannot start the encoder (FFmpeg): {e}") };
                 }
             }
-            vec!["-f".into(), "mpegts".into(), "-i".into(), fifo.to_string_lossy().into_owned()]
+            vec!["-f".into(), "mpegts".into(), "-i".into(), ts.to_string_lossy().into_owned()]
         }
         None => input_args(cfg),
     };
@@ -566,14 +587,22 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 }
                 break Outcome::Exited { had_data: scan.had_data, message: clean_message(&message) };
             }
-            status = async { match capture.as_mut() { Some(c) => c.wait().await, None => std::future::pending().await } } => {
-                // The capture ended: the card is gone, refused the settings, or GStreamer is missing something.
-                let lines: Vec<String> = clog.lock().unwrap().iter().cloned().collect();
+            end = async { match capture.as_mut() { Some(c) => c.ended().await, None => std::future::pending().await } } => {
+                // The capture ended: the signal changed format, the card is gone, or the encoder stopped.
                 stop_child(&mut child).await;
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
-                let why = super::decklink::reason(&lines);
-                tracing::warn!("{}: the capture stopped ({}): {why}", cfg.name, status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string()));
-                break Outcome::Exited { had_data: scan.had_data, message: if why.is_empty() { "decklink: the capture stopped".into() } else { why } };
+                match end {
+                    super::decklink::End::FormatChanged(f) => {
+                        tracing::info!("{}: the card's input is now {f}: the capture starts again in it", cfg.name);
+                        break Outcome::Restart;
+                    }
+                    super::decklink::End::Failed(why) => {
+                        let detail = clog.lock().unwrap().iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
+                        tracing::warn!("{}: the capture stopped: {why}{}", cfg.name, if detail.is_empty() { String::new() } else { format!(" ({detail})") });
+                        break Outcome::Exited { had_data: scan.had_data, message: format!("decklink: {why}") };
+                    }
+                    super::decklink::End::Stopped => break Outcome::Exited { had_data: scan.had_data, message: "decklink: the capture stopped".into() },
+                }
             }
             status = preview.wait() => {
                 // The preview ended on its own: it cannot go on without the receiver, nor this run without it.
@@ -656,8 +685,8 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     if let Some(end) = scan.last_t1 {
         *rec.last_end.lock().unwrap() = Some(end);
     }
-    if let Some(mut c) = capture {
-        stop_child(&mut c).await;
+    if let Some(c) = capture {
+        c.finish().await;
         rec.no_signal.store(false, Ordering::Relaxed);
     }
     if let Some(mut f) = feeder {
@@ -752,6 +781,31 @@ fn clean_message(l: &str) -> String {
 /// SIGINT first, so FFmpeg closes its segments and lists; kill after 5 s.
 async fn stop_child(child: &mut tokio::process::Child) {
     stop_within(child, Duration::from_secs(5)).await
+}
+
+/// A DeckLink card's capture: the thread moving the card's frames into the encoder's pipes, and
+/// the encoder (FFmpeg) writing the MPEG-TS the receiver reads.
+struct CardCapture {
+    encoder: tokio::process::Child,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    done: tokio::sync::oneshot::Receiver<super::decklink::End>,
+}
+
+impl CardCapture {
+    /// How it ended (the capture thread, or the encoder on its own).
+    async fn ended(&mut self) -> super::decklink::End {
+        tokio::select! {
+            end = &mut self.done => end.unwrap_or_else(|_| super::decklink::End::Failed("the capture stopped".into())),
+            status = self.encoder.wait() => super::decklink::End::Failed(format!("the encoder stopped ({})", status.map(|s| s.to_string()).unwrap_or_else(|e| e.to_string()))),
+        }
+    }
+
+    /// Stops the capture (the card is released), then the encoder (it ends with its input).
+    async fn finish(mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = tokio::time::timeout(Duration::from_secs(2), &mut self.done).await;
+        stop_within(&mut self.encoder, Duration::from_secs(2)).await;
+    }
 }
 
 /// Asks a child to end (SIGINT: FFmpeg closes its files), killed after `grace`.

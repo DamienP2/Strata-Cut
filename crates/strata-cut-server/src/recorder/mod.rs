@@ -8,6 +8,7 @@ pub mod web;
 pub mod epg;
 pub mod schedule;
 pub mod decklink;
+pub mod sdk;
 pub mod logo;
 
 use serde::{Deserialize, Serialize};
@@ -69,7 +70,7 @@ pub enum Protocol {
     Srt,
     /// A YouTube live, read with yt-dlp.
     Web,
-    /// An input of a Blackmagic DeckLink card (SDI, HDMI…), captured with GStreamer.
+    /// An input of a Blackmagic DeckLink card (SDI, HDMI…), captured with Blackmagic's SDK.
     Decklink,
 }
 
@@ -977,7 +978,7 @@ impl Manager {
         let _ = std::fs::remove_file(self.data_dir.join("cookies").join(format!("{id}.txt")));
         let _ = std::fs::remove_file(epg::path(&self.data_dir, id));
         let _ = std::fs::remove_file(epg::found_path(&self.data_dir, id));
-        let _ = std::fs::remove_file(self.data_dir.join("capture").join(format!("{id}.ts")));
+        decklink::remove_fifos(&self.data_dir, id);
         logo::remove(&self.data_dir, id);
         self.schedules.delete_recorder(id);
         let name = rec.config().name;

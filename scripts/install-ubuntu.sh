@@ -186,7 +186,7 @@ if [ "$NO_SERVICE" -eq 0 ] && ! has_systemd; then die "systemd ne tourne pas sur
 
 # ---------------------------------------------------------------- pilote Blackmagic
 # Desktop Video : le pilote des cartes DeckLink, UltraStudio et Intensity (module du noyau et
-# bibliothèque que GStreamer ouvre). Blackmagic le distribue après un formulaire et l'accord de
+# bibliothèque libDeckLinkAPI que le serveur ouvre, comme le SDK de Blackmagic le prévoit). Blackmagic le distribue après un formulaire et l'accord de
 # sa licence : depuis une archive déjà téléchargée, ou téléchargé ici avec vos coordonnées.
 dv_installed() { dpkg -s desktopvideo >/dev/null 2>&1; }
 dv_pci() { command -v lspci >/dev/null && lspci -mm -d bdbd: 2>/dev/null | head -1 | cut -d'"' -f6; }
@@ -330,7 +330,7 @@ apt_progress() {
   done
   printf '\r%-78s\r' ''
 }
-# APT_LIGHT=1 : sans les paquets seulement « recommandés » (GStreamer en tire beaucoup).
+# APT_LIGHT=1 : sans les paquets seulement « recommandés ».
 apt_install() {
   local missing=() light=()
   for p in "$@"; do dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p"); done
@@ -350,10 +350,9 @@ else
   apt_install ca-certificates curl ffmpeg python3 cloud-guest-utils
   if [ -z "$PACKAGE" ]; then apt_install git openssh-client build-essential pkg-config; fi
   ok "ffmpeg, python3 et outils de base en place"
-  # Cartes DeckLink (Blackmagic) : GStreamer les capture (module DeckLink dans « bad »,
-  # H.264 dans « ugly », AAC dans libav) ; gst-device-monitor liste les cartes.
-  APT_LIGHT=1 apt_install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav pciutils
-  ok "GStreamer en place (cartes DeckLink)"
+  # Cartes DeckLink (Blackmagic) : le serveur les capture lui-même avec le SDK de Blackmagic
+  # (Desktop Video) et FFmpeg encode leurs images ; lspci les montre même sans pilote.
+  APT_LIGHT=1 apt_install pciutils
   desktop_video
 fi
 

@@ -583,7 +583,8 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
 
 /** What the server has for DeckLink cards. */
 interface DecklinkInfo {
-  gstreamer: boolean;
+  /** The server was built with Blackmagic's SDK. */
+  sdk: boolean;
   driver: boolean;
   nodes: number;
   /** Each input: its number, the driver's name, its card (the name given to it, else its model) and its rank on it. */
@@ -605,10 +606,10 @@ function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder
   const devices = info?.devices ?? [];
   return (
     <>
-      {info && (!info.gstreamer || !info.driver) && (
+      {info && (!info.sdk || !info.driver) && (
         <div className="sc-space bad span2">
-          <strong>{!info.driver ? t('Blackmagic’s Desktop Video driver is not installed on the server.') : t('GStreamer’s DeckLink module is missing on the server.')}</strong>
-          <span>{!info.driver ? t('Download Desktop Video for Linux from Blackmagic’s site on your computer, copy it to the server (scp … :~/) and run the install script again: it installs it, step by step. In a virtual machine, the card must first be passed through to it (PCI passthrough).') : t('Run the install script again: it installs GStreamer and its modules.')}</span>
+          <strong>{t('Blackmagic’s Desktop Video driver is not installed on the server.')}</strong>
+          <span>{!info.driver ? t('Download Desktop Video for Linux from Blackmagic’s site on your computer, copy it to the server (scp … :~/) and run the install script again: it installs it, step by step. In a virtual machine, the card must first be passed through to it (PCI passthrough).') : t('This server was built without DeckLink support: install a release of Strata Cut.')}</span>
         </div>
       )}
       <Field label={t('Card')} hint={devices.length === 0 ? t('Cards are numbered from 1 in the order the driver sees them.') : undefined}>

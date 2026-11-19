@@ -136,7 +136,7 @@ async fn decklink_preview(State(s): State<Shared>, CurrentUser(_): CurrentUser, 
             Err(_) => (StatusCode::NO_CONTENT, no_store).into_response(),
         });
     }
-    Ok(match super::decklink::preview(n, &connection, &mode).await {
+    Ok(match super::decklink::preview(&s.recorders.ffmpeg, n, &connection, &mode).await {
         Some((jpeg, format)) => (no_store, [(header::CONTENT_TYPE, "image/jpeg")], [("x-format", format)], jpeg).into_response(),
         None => (StatusCode::NO_CONTENT, no_store).into_response(),
     })

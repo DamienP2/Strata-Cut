@@ -181,7 +181,7 @@ ffmpeg -re -f lavfi -i testsrc2=size=1920x1080:rate=25 -f lavfi -i sine -c:v lib
 
 ### Carte Blackmagic DeckLink (SDI, HDMI)
 
-Dans une machine virtuelle (Proxmox…), attribuez d'abord la carte à la VM (*passthrough PCI*). Le script installe GStreamer et ses modules (capture DeckLink, H.264, AAC). Le pilote **Desktop Video** de Blackmagic, lui, se télécharge sur le site de Blackmagic : pas à pas pour l'installer.
+Dans une machine virtuelle (Proxmox…), attribuez d'abord la carte à la VM (*passthrough PCI*). Le serveur capture les cartes lui-même avec le SDK de Blackmagic (comme CG) et FFmpeg encode leurs images (H.264, AAC) : GStreamer n'est plus utilisé (les paquets `gstreamer1.0-*` installés par une version précédente peuvent être retirés). Le pilote **Desktop Video** de Blackmagic, lui, se télécharge sur le site de Blackmagic : pas à pas pour l'installer.
 
 1. **Sur votre ordinateur**, ouvrez la page Support de Blackmagic (https://www.blackmagicdesign.com/fr/support/family/capture-and-playback) et téléchargez **Desktop Video** pour **Linux** (Blackmagic demande ses coordonnées et l'accord de sa licence). Vous obtenez une archive `Blackmagic_Desktop_Video_Linux_<version>.tar.gz`.
 2. **Copiez-la sur le serveur par SSH**, depuis un terminal de votre ordinateur (`<compte>` : le compte avec lequel vous vous connectez au serveur, `<serveur>` : son adresse) :
@@ -206,10 +206,10 @@ Dans une machine virtuelle (Proxmox…), attribuez d'abord la carte à la VM (*p
 
 Ensuite :
 
-1. Dans **Système › Matériel**, chaque carte apparaît dessinée avec ses connecteurs, et chaque entrée indique son signal et son format. Les cartes sont recherchées une fois au démarrage du serveur, puis seulement avec **Rechercher des cartes**. Une carte trouvée est **adoptée** : elle reste affichée (« Non détectée ») même si le pilote ne la liste plus un moment, jusqu'à ce qu'on l'**oublie**. Le signal des entrées utilisées par un enregistreur est affiché en direct ; celui des entrées libres est vérifié environ toutes les 10 secondes tant que la page est ouverte.
+1. Dans **Système › Matériel**, chaque carte apparaît dessinée avec ses connecteurs, et chaque entrée indique son signal et son format. Les cartes sont recherchées une fois au démarrage du serveur, puis seulement avec **Rechercher des cartes**. Une carte trouvée est **adoptée** : elle reste affichée (« Non détectée ») même si le pilote ne la liste plus un moment, jusqu'à ce qu'on l'**oublie**. Le signal des entrées utilisées par un enregistreur est affiché en direct ; celui des entrées libres est vérifié en une seconde environ, toutes les quelques secondes tant que la page est ouverte (l'entrée est ouverte un instant, la carte détecte le format). L'entrée **REF** montre si la carte est verrouillée sur une référence (black burst ou tri-level). Une carte en *full duplex* (Duo 2, Quad 2…) est passée en *half duplex* à la recherche : chaque connecteur devient une entrée.
 2. Créez un enregistreur de type **DeckLink** (ou depuis une entrée de **Matériel**) : la carte, l'entrée vidéo (SDI, HDMI…), le format (*Automatique* si la carte détecte celui de son entrée ; tous les formats des cartes sont proposés, du PAL au 8K), l'entrée audio et le nombre de canaux (2, 8 ou 16, enregistrés en 1, 4 ou 8 pistes stéréo), le débit d'enregistrement (conseillé selon le format). L'aperçu montre ce que reçoit l'entrée choisie.
 
-La carte fournit des images brutes : le serveur les encode en H.264 (entrelacé conservé), ce qui demande environ 1 à 2 cœurs de processeur par entrée HD. Sans signal sur l'entrée, la carte affiche **Sans signal** et l'enregistrement continue (image noire) jusqu'au retour du signal. Une entrée ne sert qu'à un enregistreur.
+La carte fournit des images brutes, lues avec le SDK de Blackmagic : FFmpeg les encode en H.264 (entrelacé conservé), ce qui demande environ 1 à 2 cœurs de processeur par entrée HD. Sans signal sur l'entrée, la carte affiche **Sans signal** et l'enregistrement continue (image noire) jusqu'au retour du signal. Une entrée ne sert qu'à un enregistreur.
 
 Une seule source par enregistreur, et un port par enregistreur en écoute.
 

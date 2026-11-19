@@ -32,11 +32,14 @@ interface CaptureCard {
   connector: 'sdi' | 'hdmi';
   /** Listed by the driver at the last search (an adopted card stays shown when it is not). */
   present: boolean;
+  /** Its reference input (genlock), when it has one: locked to a signal, which one. */
+  reference: { locked: boolean | null; kind: 'blackBurst' | 'triLevel' | null; format: string | null } | null;
   inputs: Port[];
 }
 
 interface Hardware {
-  gstreamer: boolean;
+  /** The server was built with Blackmagic's SDK. */
+  sdk: boolean;
   driver: boolean;
   driverVersion: string;
   cards: CaptureCard[];
@@ -114,15 +117,15 @@ export function Hardware() {
       </PageHead>
       {!hw && !failed && <p className="muted">{t('Looking for the cards and the signal of their inputs…')}</p>}
       {failed && !hw && <p className="muted">{t('The server did not answer.')}</p>}
-      {hw && (!hw.gstreamer || !hw.driver) && (
+      {hw && (!hw.sdk || !hw.driver) && (
         <Card icon={<Cpu size={16} />} title={t('Blackmagic DeckLink cards')}>
           <div className="sc-space bad">
-            <strong>{!hw.driver ? t('Blackmagic’s Desktop Video driver is not installed on the server.') : t('GStreamer’s DeckLink module is missing on the server.')}</strong>
-            <span>{!hw.driver ? t('Download Desktop Video for Linux from Blackmagic’s site on your computer, copy it to the server (scp … :~/) and run the install script again: it installs it, step by step. In a virtual machine, the card must first be passed through to it (PCI passthrough).') : t('Run the install script again: it installs GStreamer and its modules.')}</span>
+            <strong>{t('Blackmagic’s Desktop Video driver is not installed on the server.')}</strong>
+            <span>{!hw.driver ? t('Download Desktop Video for Linux from Blackmagic’s site on your computer, copy it to the server (scp … :~/) and run the install script again: it installs it, step by step. In a virtual machine, the card must first be passed through to it (PCI passthrough).') : t('This server was built without DeckLink support: install a release of Strata Cut.')}</span>
           </div>
         </Card>
       )}
-      {hw && hw.gstreamer && hw.driver && hw.cards.length === 0 && (
+      {hw && hw.sdk && hw.driver && hw.cards.length === 0 && (
         <Card icon={<Cpu size={16} />} title={t('Blackmagic DeckLink cards')}>
           <p className="muted">{t('The driver sees no card. Is it in place, and in a virtual machine passed through to it? After installing the driver, the server must be restarted.')} {t('Then use “Search for cards”.')}</p>
         </Card>
@@ -145,7 +148,7 @@ export function Hardware() {
                   </button>
                 </>
               )}
-              <span className="muted mono">{[c.serial && t('Serial {s}', { s: c.serial }), hw.driverVersion && `Desktop Video ${hw.driverVersion}`].filter(Boolean).join(' · ')}</span>
+              <span className="muted mono">{[c.serial && t('ID {s}', { s: c.serial.toUpperCase() }), hw.driverVersion && `Desktop Video ${hw.driverVersion}`].filter(Boolean).join(' · ')}</span>
             </>
           }
         >
@@ -303,13 +306,27 @@ function CardPicture({ card }: { card: CaptureCard }) {
         const active = !!port && (perInput(c.input!) === 1 || !chosen || chosen === 'auto' || chosen === c.kind);
         const state = port ? (active ? port.state : 'idle') : 'other';
         const silk = c.input !== undefined && c.kind === 'sdi' ? `SDI ${c.input + 1}` : SILK[c.kind];
+        // The reference input: locked to a signal (black burst or tri-level) or not.
+        const ref = c.kind === 'ref' ? card.reference : null;
+        const refState = ref ? (ref.locked ? 'signal' : 'nosignal') : null;
         return (
-          <g key={k} className={`hw-in ${state}`}>
+          <g key={k} className={`hw-in ${refState ?? state}`}>
             <text className={`hw-silk ${box ? 'on-dark' : ''}`} x={cx} y={plateY + 14} textAnchor="middle">
               {silk}
             </text>
             <Conn c={c} x={cx} y={cy} />
-            {port && <circle className="hw-led" cx={cx} cy={plateH + plateY + 18} r={3.5} />}
+            {(port || ref) && <circle className="hw-led" cx={cx} cy={plateH + plateY + 18} r={3.5} />}
+            {ref && (
+              <>
+                <text className="hw-cap" x={cx} y={plateH + plateY + 38} textAnchor="middle">
+                  {t('Reference')}
+                </text>
+                <text className={`hw-cap2 ${refState}`} x={cx} y={plateH + plateY + 54} textAnchor="middle">
+                  <title>{ref.locked ? (ref.kind === 'blackBurst' ? t('Locked to a black burst') : t('Locked to a tri-level sync')) : t('No reference signal')}</title>
+                  {ref.locked ? formatName(ref.format ?? '', lang() === 'fr') || t('Locked') : '—'}
+                </text>
+              </>
+            )}
             {/* One caption per input, under its connector (between them when it has an SDI and an HDMI). */}
             {port && first(c.input!) === k && (
               <>
