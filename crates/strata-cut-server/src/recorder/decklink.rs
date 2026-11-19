@@ -801,12 +801,12 @@ mod tests {
         let adopted = adopt(&quad, &quad[..3]);
         assert_eq!(adopted.len(), 8);
         let moved = Input { number: 9, ..quad[7].clone() };
-        let again = adopt(&adopted, &[moved.clone()]);
+        let again = adopt(&adopted, std::slice::from_ref(&moved));
         assert_eq!(again.len(), 8);
         assert!(again.contains(&moved) && !again.iter().any(|i| i.number == 7));
         // Another card on the number of an absent one: the absent one goes.
         let other = Input { number: 0, name: "DeckLink Mini Recorder".into(), serial: String::new(), persistent_id: None };
-        let mixed = adopt(&again, &[other.clone()]);
+        let mixed = adopt(&again, std::slice::from_ref(&other));
         assert!(mixed.contains(&other) && mixed.iter().filter(|i| i.number == 0).count() == 1);
         assert_eq!(signal_property("/GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: signal = true"), Some(true));
         assert_eq!(signal_property("/GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: signal = false"), Some(false));
