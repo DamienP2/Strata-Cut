@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
 import { CalendarClock, Copy, Eraser, ImagePlus, MoreHorizontal, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
@@ -21,7 +21,7 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'rtmp', label: 'RTMP', detail: 'rtmp://' },
   { value: 'srt', label: 'SRT', detail: 'srt://' },
   { value: 'web', label: 'YouTube', detail: 'youtube.com' },
-  { value: 'decklink', label: 'DeckLink', detail: 'SDI · HDMI' },
+  { value: 'decklink', label: 'Hardware inputs', detail: 'SDI · HDMI' },
 ];
 
 /** DeckLink: the card's inputs, the formats and the audio inputs, as the server knows them. */
@@ -58,7 +58,7 @@ export function sourceAddress(r: Recorder): string {
   const host = location.hostname;
   if (r.protocol === 'rtmp' && r.mode === 'listener') return `rtmp://${host}:${r.port}/${r.path}`;
   if (r.protocol === 'srt' && r.mode === 'listener') return `srt://${host}:${r.port}`;
-  if (r.protocol === 'decklink') return `DeckLink ${(r.device ?? 0) + 1} · ${dlConnection(r.connection ?? 'auto')} · ${dlMode(r.videoMode ?? 'auto')}`;
+  if (r.protocol === 'decklink') return `${t('Input {n}', { n: (r.device ?? 0) + 1 })} · ${dlConnection(r.connection ?? 'auto')} · ${dlMode(r.videoMode ?? 'auto')}`;
   return r.url + (r.iface && (r.protocol === 'udp' || r.protocol === 'rtp') ? ` · ${r.iface}` : '');
 }
 
@@ -402,6 +402,22 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
   });
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<Recorder>) => setC((x) => ({ ...x, ...patch }));
+  // The cards' inputs and what each receives (asked again while the window is open), and the
+  // format the chosen input receives (from its preview).
+  const [dl, setDl] = useState<DecklinkInfo | null>(null);
+  const [detected, setDetected] = useState('');
+  const isCard = c.protocol === 'decklink';
+  useEffect(() => {
+    if (!isCard) return;
+    let dead = false;
+    const load = () => api<DecklinkInfo>('GET', '/api/decklink').then((i) => !dead && setDl(i), () => !dead && setDl(null));
+    void load();
+    const i = setInterval(() => void load(), 3000);
+    return () => {
+      dead = true;
+      clearInterval(i);
+    };
+  }, [isCard]);
   const listens = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
   const placeholder = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', web: 'https://www.youtube.com/watch?v=…', decklink: '' }[c.protocol];
   const web = c.protocol === 'web';
@@ -449,19 +465,20 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
 
   return (
     <div className="modal-back" onPointerDown={onClose}>
-      <form className="modal wide" onPointerDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); void save(); }}>
+      <form className="modal xwide sc-rm" onPointerDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); void save(); }}>
         <header>
           <h2>{rec ? t('Edit {name}', { name: rec.name }) : from ? t('Duplicate {name}', { name: from.name }) : t('New recorder')}</h2>
           <button type="button" className="icon-btn ghost" title={t('Close')} onClick={onClose}>
             <X size={16} />
           </button>
         </header>
-        <div className="set-grid two">
+        <div className="sc-rm-body">
+        <div className="sc-rm-form set-grid two">
           <Field label={t('Name')}>
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label={t('Source')} group>
-            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: p.label, detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}) })} />
+            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}) })} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
             <Field label={t('Mode')} group>
@@ -469,7 +486,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
             </Field>
           )}
           {card ? (
-            <DecklinkFields c={c} set={set} />
+            <DecklinkFields c={c} set={set} info={dl} detected={detected} rec={rec} />
           ) : listens ? (
             <>
               <Field label={t('Port')}>
@@ -550,18 +567,22 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
               </div>
             </div>
           </Field>
-          {c.enabled && (
-            <div className={`sc-space span2 ${tooBig ? 'bad' : ''}`}>
-              <span>{t('Reserved for the loop: {need}', { need: gb(need) })}</span>
-              {left !== null && <span>{t('available for the loops: {left}', { left: gb(left) })}</span>}
-              {tooBig && <strong>{t('Not enough space: a shorter loop or more disk.')}</strong>}
-            </div>
-          )}
           <Field label={t('State')} group>
             <label className="check">
               <input type="checkbox" checked={c.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> {t('Record')}
             </label>
           </Field>
+        </div>
+        <aside className="sc-rm-side">
+          <RecorderSide c={c} rec={rec} st={rec ? status[rec.id] : undefined} dl={dl} detected={detected} onFormat={setDetected} />
+          {c.enabled && (
+            <div className={`sc-space ${tooBig ? 'bad' : ''}`}>
+              <span>{t('Reserved for the loop: {need}', { need: gb(need) })}</span>
+              {left !== null && <span>{t('available for the loops: {left}', { left: gb(left) })}</span>}
+              {tooBig && <strong>{t('Not enough space: a shorter loop or more disk.')}</strong>}
+            </div>
+          )}
+        </aside>
         </div>
         <footer>
           <button type="button" className="btn" onClick={onClose}>
@@ -588,23 +609,44 @@ interface DecklinkInfo {
   sdk: boolean;
   driver: boolean;
   nodes: number;
-  /** Each input: its number, the driver's name, its card (the name given to it, else its model) and its rank on it. */
-  devices: { number: number; name: string; card?: string; input?: number; present?: boolean }[];
+  devices: DecklinkDevice[];
 }
 
-/** A DeckLink input: the card, its inputs, the format, the sound and the recording's bitrate. */
-function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder>) => void }) {
-  const [info, setInfo] = useState<DecklinkInfo | null>(null);
-  useEffect(() => {
-    void api<DecklinkInfo>('GET', '/api/decklink').then(setInfo, () => setInfo(null));
-  }, []);
+/** A card's input: its number, the driver's name, its card (the name given to it, else its model), its rank on it, and what it receives now. */
+interface DecklinkDevice {
+  number: number;
+  name: string;
+  card?: string;
+  input?: number;
+  present?: boolean;
+  state?: 'signal' | 'nosignal' | 'busy' | 'unknown' | 'absent' | 'checking';
+  format?: string;
+  /** The recorder using it. */
+  recorder?: string | null;
+}
+
+/** The label of a card's input: its card (its name, else its model) and its rank on it. */
+function inputLabel(d: DecklinkDevice): string {
+  return d.card ? `${d.card} · ${t('Input {n}', { n: d.input ?? 1 })}` : d.name || t('Card {n}', { n: d.number + 1 });
+}
+
+/** A hardware input: the card's input (only those receiving a signal, free), the format, the sound and the recording's bitrate. */
+function DecklinkFields({ c, set, info, detected, rec }: { c: Recorder; set: (patch: Partial<Recorder>) => void; info: DecklinkInfo | null; detected: string; rec: Recorder | null }) {
   const device = c.device ?? 0;
   const channels = c.audioChannels ?? 2;
-  // The format the input receives (from the preview), and the bitrate advised for the format recorded.
-  const [detected, setDetected] = useState('');
+  // The bitrate advised for the format recorded.
   const format = c.videoMode && c.videoMode !== 'auto' ? c.videoMode : detected;
   const advised = format ? advisedBitrate(format) : 0;
-  const devices = info?.devices ?? [];
+  // The inputs receiving a signal that no other recorder uses (and the one chosen, whatever it receives).
+  const all = info?.devices ?? [];
+  const devices = all.filter((d) => d.number === device || (d.state === 'signal' && (!d.recorder || d.recorder === rec?.id)));
+  const checking = all.some((d) => d.state === 'checking');
+  // A new recorder starts on an input that has a signal.
+  const firstLive = all.find((d) => d.state === 'signal' && !d.recorder);
+  const chosen = all.find((d) => d.number === device);
+  useEffect(() => {
+    if (!rec && firstLive && (!chosen || chosen.state !== 'signal' || chosen.recorder)) set({ device: firstLive.number });
+  }, [firstLive?.number, chosen?.state, chosen?.recorder]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <>
       {info && (!info.sdk || !info.driver) && (
@@ -613,9 +655,29 @@ function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder
           <span>{!info.driver ? t('Download Desktop Video for Linux from Blackmagic’s site on your computer, copy it to the server (scp … :~/) and run the install script again: it installs it, step by step. In a virtual machine, the card must first be passed through to it (PCI passthrough).') : t('This server was built without DeckLink support: install a release of Strata Cut.')}</span>
         </div>
       )}
-      <Field label={t('Card')} hint={devices.length === 0 ? t('Cards are numbered from 1 in the order the driver sees them.') : undefined}>
-        {devices.length > 0 ? (
-          <Dropdown value={String(device)} options={devices.map((d) => ({ value: String(d.number), label: (d.card ? `${d.card} · ${t('Input {n}', { n: d.input ?? 1 })}` : d.name || t('Card {n}', { n: d.number + 1 })) + (d.present === false ? ` · ${t('not detected')}` : ''), detail: d.name }))} onChange={(v) => set({ device: Number(v) })} />
+      <Field
+        className="span2"
+        label={t('Input')}
+        hint={
+          all.length === 0
+            ? t('Cards are numbered from 1 in the order the driver sees them.')
+            : !all.some((d) => d.state === 'signal' && !d.recorder)
+              ? checking
+                ? t('Looking at the inputs…')
+                : t('No free input receives a signal now: plug a source in (Système › Matériel shows each input).')
+              : t('Only the inputs receiving a signal, and no other recorder uses, are listed.')
+        }
+      >
+        {all.length > 0 ? (
+          <Dropdown
+            value={String(device)}
+            options={devices.map((d) => ({
+              value: String(d.number),
+              label: inputLabel(d) + (d.present === false ? ` · ${t('not detected')}` : ''),
+              detail: d.state === 'signal' ? (d.format ? formatName(d.format, lang() === 'fr') : t('Signal')) : d.state === 'busy' ? t('Busy') : t('No signal'),
+            }))}
+            onChange={(v) => set({ device: Number(v) })}
+          />
         ) : (
           <NumberField value={device + 1} min={1} max={64} onChange={(v) => set({ device: Math.max(0, v - 1) })} />
         )}
@@ -623,7 +685,6 @@ function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder
       <Field label={t('Video input')}>
         <Dropdown value={c.connection ?? 'auto'} options={DL_CONNECTIONS.map((v) => ({ value: v, label: dlConnection(v) }))} onChange={(v) => set({ connection: v })} />
       </Field>
-      <InputPreview device={device} connection={c.connection ?? 'auto'} mode={c.videoMode ?? 'auto'} onFormat={setDetected} />
       <Field
         label={<>{t('Format')}<InfoTip text={t('Automatic works with the cards that detect the format of their input. Otherwise choose it: a wrong format gives no picture.')} /></>}
         hint={
@@ -701,7 +762,7 @@ function InputPreview({ device, connection, mode, onFormat }: { device: number; 
     };
   }, [device, connection, mode]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="sc-dlprev span2">
+    <div className="sc-dlprev">
       <div className="sc-dlprev-pic">
         {shot?.src ? <img src={shot.src} alt="" /> : <span className="muted">{shot ? t('No signal on this input') : t('Looking at the input…')}</span>}
         {shot?.src && <span className="sc-dlprev-live">{t('Preview')}</span>}
@@ -710,6 +771,101 @@ function InputPreview({ device, connection, mode, onFormat }: { device: number; 
         {shot?.src ? (shot.format ? t('Signal: {f}', { f: formatName(shot.format, lang() === 'fr') }) : t('Signal')) : shot ? t('No signal') : ''}
       </span>
     </div>
+  );
+}
+
+/** A recorder's still, every 3 s. */
+function RecorderThumb({ id }: { id: string }) {
+  const [n, setN] = useState(0);
+  const [ok, setOk] = useState(true);
+  useEffect(() => {
+    const i = setInterval(() => setN((x) => x + 1), 3000);
+    return () => clearInterval(i);
+  }, []);
+  return (
+    <div className="sc-dlprev">
+      <div className="sc-dlprev-pic">
+        {ok ? <img src={`/api/recorders/${id}/thumb.jpg?n=${n}`} alt="" onError={() => setOk(false)} onLoad={() => setOk(true)} /> : <span className="muted">{t('No picture yet')}</span>}
+      </div>
+    </div>
+  );
+}
+
+/** The right side of the recorder's window: what it receives, its technical details, its programme guide. */
+function RecorderSide({ c, rec, st, dl, detected, onFormat }: { c: Recorder; rec: Recorder | null; st?: RecorderStatus; dl: DecklinkInfo | null; detected: string; onFormat: (f: string) => void }) {
+  const timezone = useApp((s) => s.timezone);
+  const fr = lang() === 'fr';
+  const card = c.protocol === 'decklink';
+  const device = c.device ?? 0;
+  const input = card ? dl?.devices.find((d) => d.number === device) : undefined;
+  // The settings being edited are what it records: its state only while they are unchanged.
+  const media = st && rec && rec.protocol === c.protocol && (!card || rec.device === c.device) ? st.media : null;
+  const rows: [string, string][] = [];
+  if (card) {
+    rows.push([t('Input'), input ? inputLabel(input) : t('Input {n}', { n: device + 1 })]);
+    rows.push([t('Format'), detected ? formatName(detected, fr) : dlMode(c.videoMode ?? 'auto')]);
+    rows.push([t('Audio'), `${dlAudioInput(c.audioInput ?? 'auto')} · ${tn((c.audioChannels ?? 2) / 2, '{n} stereo track', '{n} stereo tracks')}`]);
+    rows.push([t('Recording bitrate'), `${c.bitrate} Mb/s · H.264 / AAC`]);
+  } else {
+    rows.push([t('Source'), sourceAddress(c) || '—']);
+    if (c.protocol === 'srt') rows.push([t('Latency'), `${c.latency} ms`]);
+  }
+  if (media) {
+    rows.push([t('Video'), [CODECS[media.codec] ?? media.codec.toUpperCase(), `${media.width}×${media.height}`, formatName(scanFormat(media), fr)].filter(Boolean).join(' · ')]);
+    if (!card) rows.push([t('Audio'), tn(media.audioTracks, '{n} track', '{n} tracks')]);
+  }
+  if (st && rec) {
+    rows.push([t('State'), t(STATE_LABEL[st.state] ?? 'Stopped')]);
+    if (st.state === 'recording' && st.bitrate) rows.push([t('Bitrate received'), bitrate(st.bitrate, locale())]);
+  }
+  rows.push([t('Loop'), `${c.loopHours} h`]);
+  const ts = c.protocol === 'udp' || c.protocol === 'rtp' || c.protocol === 'srt';
+  const prog = (p: { name: string; start: number; end: number }) => `${clock(p.start, timezone).slice(0, 5)}–${clock(p.end, timezone).slice(0, 5)} ${p.name}`;
+  return (
+    <>
+      <section className="sc-rm-sec">
+        <h3>{t('Preview')}</h3>
+        {card ? (
+          <InputPreview device={device} connection={c.connection ?? 'auto'} mode={c.videoMode ?? 'auto'} onFormat={onFormat} />
+        ) : rec ? (
+          <RecorderThumb id={rec.id} />
+        ) : (
+          <div className="sc-dlprev">
+            <div className="sc-dlprev-pic">
+              <span className="muted sc-rm-note">{t('The picture shows once the recorder is created and receives its source.')}</span>
+            </div>
+          </div>
+        )}
+      </section>
+      <section className="sc-rm-sec">
+        <h3>{t('Technical')}</h3>
+        <dl className="sc-rm-info">
+          {rows.map(([k, v]) => (
+            <Fragment key={k}>
+              <dt>{k}</dt>
+              <dd>{v}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      </section>
+      <section className="sc-rm-sec">
+        <h3>{t('Programme guide (EPG)')}</h3>
+        {st?.onAir ? (
+          <dl className="sc-rm-info">
+            <dt>{t('On air')}</dt>
+            <dd>{prog(st.onAir)}</dd>
+            {st.next && (
+              <>
+                <dt>{t('Next')}</dt>
+                <dd>{prog(st.next)}</dd>
+              </>
+            )}
+          </dl>
+        ) : (
+          <p className="muted sc-rm-note">{!ts ? t('This kind of source carries no programme guide.') : rec ? t('This source sends no programme guide (yet).') : t('Read from the stream once it is recorded (MPEG-TS: UDP, RTP, SRT).')}</p>
+        )}
+      </section>
+    </>
   );
 }
 

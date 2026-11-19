@@ -108,11 +108,22 @@ pub fn driver_installed() -> bool {
     sdk::runtime()
 }
 
-/// What the server can do with DeckLink cards: the driver, the inputs adopted.
-pub async fn status(data_dir: &Path) -> Value {
+/// What the server can do with DeckLink cards: the driver, the inputs adopted, each with what it
+/// receives now (as Système › Matériel last saw it) and the recorder using it.
+pub async fn status(m: &Arc<super::Manager>) -> Value {
+    let data_dir = m.data_dir();
     let driver = tokio::task::spawn_blocking(driver_installed).await.unwrap_or(false);
     let nodes = std::fs::read_dir("/dev/blackmagic").map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("io")).count()).unwrap_or(0);
-    let devices = list(data_dir).await;
+    let mut devices = list(data_dir).await;
+    let hw = hardware(m, false).await;
+    let ports: Vec<&Value> = hw["cards"].as_array().into_iter().flatten().flat_map(|c| c["inputs"].as_array().into_iter().flatten()).collect();
+    for d in &mut devices {
+        if let Some(p) = ports.iter().find(|p| p["number"] == d["number"]) {
+            d["state"] = p["state"].clone();
+            d["format"] = p["format"].clone();
+            d["recorder"] = p["recorder"].get("id").cloned().unwrap_or(Value::Null);
+        }
+    }
     json!({ "sdk": cfg!(decklink_shim) || std::env::var_os("STRATA_FAKE_DECKLINK").is_some(), "driver": driver, "nodes": nodes, "devices": devices })
 }
 

@@ -51,7 +51,7 @@ pub fn routes() -> Router<Shared> {
 
 /// DeckLink cards: what the server has (GStreamer's module, Blackmagic's driver) and the cards seen.
 async fn decklink(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Value> {
-    Json(super::decklink::status(s.recorders.data_dir()).await)
+    Json(super::decklink::status(&s.recorders).await)
 }
 
 #[derive(Deserialize)]

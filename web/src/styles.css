@@ -940,8 +940,12 @@ a.btn { color: inherit; }
 .sc-selbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin-bottom: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--panel); }
 
 /* Recorders' logos. */
-.sc-logo { height: 16px; max-width: 40px; object-fit: contain; flex: none; border-radius: 2px; }
-.sc-logo.sm { height: 12px; max-width: 28px; }
+/* Horizontal: low and wide; square (or tall): a square box a little higher. */
+.sc-logo { object-fit: contain; flex: none; border-radius: 2px; }
+.sc-logo.md.wide { height: 14px; max-width: 46px; }
+.sc-logo.md.square { height: 20px; width: 20px; }
+.sc-logo.sm.wide { height: 11px; max-width: 34px; }
+.sc-logo.sm.square { height: 16px; width: 16px; }
 .sc-logo-field { display: grid; grid-template-columns: 220px 1fr; gap: 12px; align-items: start; }
 .sc-logo-drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 96px; padding: 10px; border: 1px dashed var(--line-2); border-radius: var(--radius); color: var(--text-3); font-size: var(--fs-12); text-align: center; cursor: pointer; background: var(--panel-2); }
 .sc-logo-drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
@@ -997,3 +1001,20 @@ a.btn { color: inherit; }
 .sc-hole strong { font-size: clamp(15px, 2.4vw, 24px); letter-spacing: 0.02em; }
 .sc-hole span { font-family: var(--mono, ui-monospace, monospace); font-size: var(--fs-12, 12px); color: #aab0bb; }
 .sc-hole .sc-hole-hint { font-family: inherit; color: #7d8592; }
+/* The recorder's window: the settings on the left; its picture, details and guide on the right. */
+.modal.xwide { width: min(1120px, 100%); }
+.sc-rm-body { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, 1fr); gap: 22px; align-items: start; }
+.sc-rm-form { align-content: start; }
+.sc-rm-side { display: flex; flex-direction: column; gap: 16px; border-left: 1px solid var(--line); padding-left: 22px; min-width: 0; }
+.sc-rm-sec h3 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
+.sc-rm-info { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; margin: 0; font-size: 13px; }
+.sc-rm-info dt { color: var(--text-3); }
+.sc-rm-info dd { margin: 0; overflow-wrap: anywhere; }
+.sc-rm-note { font-size: 12.5px; margin: 0; padding: 0 16px; text-align: center; }
+.sc-rm-sec p.sc-rm-note { text-align: left; padding: 0; }
+.sc-rm .sc-dlprev-pic { max-height: none; }
+@media (max-width: 900px) {
+  .sc-rm-body { grid-template-columns: 1fr; }
+  .sc-rm-side { border-left: 0; padding-left: 0; border-top: 1px solid var(--line); padding-top: 16px; }
+}
+.sc-rm .sc-logo-drop { min-height: 64px; padding: 8px; }
