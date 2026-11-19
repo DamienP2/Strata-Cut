@@ -265,6 +265,8 @@ export const business: Record<string, string> = {
   '{n} s left': 'encore {n} s',
   '{n} min left': 'encore {n} min',
   'Clip ready': 'Extrait prêt',
+  Ready: 'Prêt',
+  Failed: 'Échec',
   'See it in Clips': 'Voir dans Extraits',
   'Put away': 'Ranger',
   // Web lives
