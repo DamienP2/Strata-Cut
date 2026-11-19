@@ -62,6 +62,12 @@ pub fn background_std(cmd: &mut std::process::Command) {
 /// MPEG timestamps (33 bits at 90 kHz) start again from 0 every 26 h 30 or so.
 pub const PTS_WRAP: f64 = 8_589_934_592.0 / 90_000.0;
 
+/// A time read in an MPEG-TS file (its clock starts again from 0 every 26 h 30) put on the turn
+/// of `near`, a time kept whole (an RTMP encoder up for days gives large ones).
+pub fn same_turn(t: f64, near: f64) -> f64 {
+    t + ((near - t) / PTS_WRAP).round() * PTS_WRAP
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Protocol {

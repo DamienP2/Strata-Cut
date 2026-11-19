@@ -419,7 +419,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
     };
   }, [isCard]);
   const listens = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
-  const placeholder = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', web: 'https://www.youtube.com/watch?v=…', decklink: '' }[c.protocol];
+  const placeholder = PLACEHOLDERS[c.protocol];
   const web = c.protocol === 'web';
   const card = c.protocol === 'decklink';
   const importCookies = (file: File | undefined) => {
@@ -443,8 +443,9 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
     setBusy(true);
     try {
       let id = rec?.id ?? '';
-      if (rec) await api('PUT', `/api/recorders/${rec.id}`, c);
-      else id = (await api<{ id: string }>('POST', from ? `/api/recorders?copyOf=${encodeURIComponent(from.id)}` : '/api/recorders', c)).id;
+      const sent = cleaned(c);
+      if (rec) await api('PUT', `/api/recorders/${rec.id}`, sent);
+      else id = (await api<{ id: string }>('POST', from ? `/api/recorders?copyOf=${encodeURIComponent(from.id)}` : '/api/recorders', sent)).id;
       if (logo && id) {
         try {
           if (logo.file) await api('PUT', `/api/recorders/${id}/logo`, logo.file);
@@ -801,6 +802,20 @@ interface Probe {
 }
 
 /** The source as written can be tried: an address of its kind, a caller (a listening one waits for its source). */
+/** How each source's address is written (shown in its field). */
+const PLACEHOLDERS: Record<Protocol, string> = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', web: 'https://www.youtube.com/watch?v=…', decklink: '' };
+
+/** The address as written, made usable: no spaces around it, the scheme added when left out
+ * ("1.2.3.4:9000" → "srt://1.2.3.4:9000") or written in capitals. */
+export function cleaned(c: Recorder): Recorder {
+  // Spaces and invisible characters (pasted with it) are no part of an address.
+  const url = c.url.replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, '');
+  if (c.protocol === 'decklink' || c.protocol === 'web') return { ...c, url };
+  if (!url) return c;
+  const m = /^([a-z0-9]+):\/\//i.exec(url);
+  return { ...c, url: m ? m[1].toLowerCase() + url.slice(m[1].length) : `${c.protocol}://${url}` };
+}
+
 function triable(c: Recorder): boolean {
   if (c.protocol === 'decklink') return false;
   if ((c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener') return false;
@@ -820,7 +835,7 @@ function useProbe(c: Recorder, on: boolean) {
       setState((s) => ({ ...s, busy: true, error: '' }));
       api<Probe>('POST', '/api/recorders/probe', c).then(
         (result) => !dead && setState({ busy: false, result, error: '' }),
-        (e) => !dead && setState({ busy: false, result: null, error: (e as Error).message }),
+        (e) => !dead && setState({ busy: false, result: null, error: (e as Error).message || 'nothing received from this source' }),
       );
     }, again ? 0 : 1200);
     return () => {
@@ -843,7 +858,7 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat }: { c: Recorder; rec
   const media = st && unchanged ? st.media : null;
   // Another source (or a new recorder): tried before it is saved.
   const listening = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
-  const probe = useProbe(c, !card && !unchanged && triable(c));
+  const probe = useProbe(cleaned(c), !card && !unchanged && triable(cleaned(c)));
   const tried = probe.result;
   const rows: [string, string][] = [];
   if (card) {
@@ -901,12 +916,14 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat }: { c: Recorder; rec
                         ? t(probe.error)
                         : tried
                           ? t('This source has no picture.')
-                          : t('Write the address of the source: it is tried at once.')}
+                          : c.url.trim() && !triable(cleaned(c))
+                            ? t('Incomplete address: it is written as {example}.', { example: PLACEHOLDERS[c.protocol] })
+                            : t('Write the address of the source: it is tried at once.')}
                 </span>
               )}
               {tried?.still && <span className="sc-dlprev-live">{t('Preview')}</span>}
             </div>
-            {!listening && triable(c) && (
+            {!listening && triable(cleaned(c)) && (
               <span className={`sc-dlprev-state ${tried ? 'on' : ''}`}>
                 {probe.busy ? t('Trying the source…') : tried ? t('The source answers') : probe.error ? t('The source does not answer') : ''}
                 <button type="button" className="linklike" disabled={probe.busy} onClick={probe.retry} style={{ marginLeft: 8 }}>

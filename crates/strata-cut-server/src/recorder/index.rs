@@ -188,10 +188,22 @@ impl Run {
             let segs: VecDeque<PSeg> = read_lines::<PSeg>(&dir.join(if video { "video.jsonl" } else { "audio.jsonl" })).into_iter().filter(|s| run.proxy_path(video, s.n).exists()).collect();
             if let Ok(init) = std::fs::read(run.track_dir(video).join("init.mp4")) {
                 if let Some((offset, ts)) = mp4::track_offset(&init) {
+                    // On the recording's turn of 26 h 30 (see `same_turn`), its fragments too.
+                    let near = run.master.front().map(|s| s.t0);
+                    let shift = near.map_or(0.0, |near| super::same_turn(offset, near) - offset);
                     let t = run.track_mut(video);
-                    t.offset = Some(offset);
+                    t.offset = Some(offset + shift);
                     t.timescale = ts;
-                    t.segs = segs;
+                    t.segs = segs
+                        .into_iter()
+                        .map(|mut s| {
+                            if shift != 0.0 && (s.t0 - offset).abs() < super::PTS_WRAP / 2.0 {
+                                s.t0 += shift;
+                                s.t1 += shift;
+                            }
+                            s
+                        })
+                        .collect();
                 }
             }
         }

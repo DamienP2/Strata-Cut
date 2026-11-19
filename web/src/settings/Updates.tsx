@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { CloudDownload, History, RefreshCw, RotateCcw, Upload } from 'lucide-react';
 import { t } from '../i18n';
 import { api, useApp } from '../store';
-import { PageHead } from '../pages/SidePage';
 import { confirmDialog } from '../ui/dialogs';
 import { TextInput } from '../ui/fields';
 import { formatBytes, formatDate, timeAgo } from '../ui/format';
@@ -134,7 +133,6 @@ export function Updates() {
   if (!info) {
     return (
       <>
-        <PageHead title={t('Updates')} />
         <div className="loading">{t('Loading…')}</div>
       </>
     );
@@ -211,7 +209,6 @@ export function Updates() {
 
   return (
     <>
-      <PageHead title={t('Updates')} />
       <Card
         icon={<CloudDownload size={16} />}
         title={t('Updates')}

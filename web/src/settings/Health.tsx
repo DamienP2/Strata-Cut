@@ -5,6 +5,7 @@ import { Download, Eraser, HeartPulse, Pause, Play, ScrollText, Search, Triangle
 import { locale, t, tn } from '../i18n';
 import { api, useApp } from '../store';
 import { PageHead, SubTabs } from '../pages/SidePage';
+import { Performance } from './Performance';
 import { useDisplayPref } from '../displayPrefs';
 import { Dropdown } from '../ui/Dropdown';
 import { Empty } from '../ui/Empty';
@@ -54,6 +55,7 @@ export function Health() {
           <Download size={14} /> {t('Export')}
         </a>
       </PageHead>
+      <Performance />
       <SubTabs<Tab>
         value={tab}
         onChange={setTab}

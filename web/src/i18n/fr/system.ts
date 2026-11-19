@@ -132,8 +132,6 @@ export const system: Record<string, string> = {
   'the proxy starts with http://, https:// or socks5://': 'L’adresse du proxy commence par http://, https:// ou socks5://.',
   'a youtube setting holds spaces or is too long': 'Un réglage YouTube contient des espaces ou est trop long.',
   'the cookies are 1 MB at most': 'Les cookies font 1 Mo au plus.',
-  'Health and performance': 'Santé et performances',
-  'Updates and maintenance': 'Mises à jour et maintenance',
   'Delete the group “{name}”?': 'Supprimer le groupe «\u00a0{name}\u00a0»\u00a0?',
   'The clips shared with it are no longer shared with its members.': 'Les extraits partagés avec lui ne le sont plus avec ses membres.',
   Groups: 'Groupes',

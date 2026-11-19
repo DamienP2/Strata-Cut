@@ -90,7 +90,7 @@ export function StatusPill() {
   const cls = `ux1-pill ${state === 'ok' ? '' : state}`;
   if (can.admin(user))
     return (
-      <button type="button" className={cls} title={tip} onClick={() => navigate('/system/performance')}>
+      <button type="button" className={cls} title={tip} onClick={() => navigate('/system/health')}>
         {body}
       </button>
     );

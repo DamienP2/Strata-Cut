@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
@@ -950,7 +950,8 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
     (s: number, sp: number) => {
       const now = serverNow();
       const lo = now - rec.loopHours * 3_600_000 - sp * 0.05;
-      const hi = now + sp * 0.05 - sp;
+      // Room after the live for the playhead to stay at 3/4 of the view.
+      const hi = now + sp * 0.3 - sp;
       return Math.min(Math.max(s, lo), Math.max(lo, hi));
     },
     [rec.loopHours],
@@ -971,15 +972,17 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
   // The view follows the playhead when it moves, unless the view was moved by hand during playback.
   const follow = useRef(true);
   const lastWall = useRef<number | null>(null);
-  useEffect(() => {
+  // Before the frame is painted: the playhead held at 3/4 never shows a step aside.
+  useLayoutEffect(() => {
     if (!pos || scrubbing.current) return;
     const moved = lastWall.current !== pos.wall;
     lastWall.current = pos.wall;
     if (!moved) return;
     if (!follow.current && !playing) follow.current = true; // a frame moved by hand
     if (!follow.current) return;
-    // Going right (the live): once at 3/4 of the view, the view moves to put it at 1/4 again.
-    if (pos.wall > start + span * 0.75) setStart(clampStart(pos.wall - span * 0.25, span));
+    // Playing, going right (the live): once at 3/4 of the view, the playhead stays there and the
+    // timeline goes by under it. Moved by hand past 3/4: the view puts it at 1/4.
+    if (pos.wall > start + span * 0.75) setStart(clampStart(pos.wall - span * (playing ? 0.75 : 0.25), span));
     else if (pos.wall < start + span * 0.02) setStart(clampStart(pos.wall - span * 0.2, span));
   }, [pos, start, span, playing, clampStart]);
   /** Moves the view by hand (the playhead stays). */
@@ -1044,14 +1047,18 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
 
   // The sound level under the stills (one channel), for the window.
   const [wave, setWave] = useState<{ from: number; to: number; levels: number[] } | null>(null);
-  const waveKey = useSettled(`${Math.round(start)}|${Math.round(span)}|${width}`, 150);
+  // Asked for a little wider than the view, on a grid of quarter views: the view going by under
+  // the playhead (the live) asks again only once it has moved a quarter.
+  const waveStep = span / 4;
+  const waveFrom = Math.floor(start / waveStep) * waveStep - waveStep;
+  const waveKey = useSettled(`${Math.round(waveFrom)}|${Math.round(span * 1.75)}|${width}`, 150);
   const liveWindow = end > now - 10_000;
   useEffect(() => {
     let dead = false;
     const [a, sp] = waveKey.split('|').map(Number);
     const load = async () => {
       try {
-        const w = await api<{ from: number; to: number; levels: number[] }>('GET', `/api/recorders/${rec.id}/wave?from=${a}&to=${a + sp}&n=${Math.max(50, Math.round(width / 2))}`);
+        const w = await api<{ from: number; to: number; levels: number[] }>('GET', `/api/recorders/${rec.id}/wave?from=${a}&to=${a + sp}&n=${Math.max(50, Math.round((width / 2) * 1.75))}`);
         if (!dead) setWave(w);
       } catch {
         /* the next try */

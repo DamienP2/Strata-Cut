@@ -1,4 +1,4 @@
-/* Système › Serveur › Maintenance. */
+/* Système › Serveur › Maintenance: the updates, the restart, the system. */
 import { useState } from 'react';
 import { Cpu, RotateCcw } from 'lucide-react';
 import { t } from '../i18n';
@@ -8,6 +8,7 @@ import { formatDuration } from '../ui/format';
 import { showError } from '../ui/serverError';
 import { Card } from './ui';
 import { useServerConfig } from './serverConfig';
+import { Updates } from './Updates';
 
 export function Maintenance() {
   const { info, reload } = useServerConfig();
@@ -35,6 +36,7 @@ export function Maintenance() {
           <RotateCcw size={14} className={busy ? 'spin' : undefined} /> {t('Restart')}
         </button>
       </PageHead>
+      <Updates />
       {!info ? (
         <div className="loading">{t('Loading…')}</div>
       ) : (

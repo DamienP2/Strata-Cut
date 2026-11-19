@@ -382,6 +382,7 @@ export const business: Record<string, string> = {
   'Trying the source…': 'Test de la source…',
   'This source has no picture.': 'Cette source n’a pas d’image.',
   'Write the address of the source: it is tried at once.': 'Saisissez l’adresse de la source\u00a0: elle est testée aussitôt.',
+  'Incomplete address: it is written as {example}.': 'Adresse incomplète\u00a0: elle s’écrit {example}.',
   'The source answers': 'La source répond',
   'The source does not answer': 'La source ne répond pas',
   'Try again': 'Tester à nouveau',

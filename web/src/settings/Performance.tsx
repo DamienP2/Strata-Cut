@@ -1,8 +1,7 @@
-/* Système › Supervision › Performances: the machine's load. */
+/* Système › Supervision › Santé: the machine's load (at the top of the page). */
 import { useEffect } from 'react';
 import { Cpu } from 'lucide-react';
 import { t } from '../i18n';
-import { PageHead } from '../pages/SidePage';
 import { formatBytes, tone } from '../ui/format';
 import { useMetrics, watchMetrics } from '../ui/metrics';
 import { Card } from './ui';
@@ -39,11 +38,10 @@ export function Performance() {
   const mem = m && m.memTotal ? (m.memUsed / m.memTotal) * 100 : null;
   return (
     <>
-      <PageHead title={t('Performance')} sub={m?.hostname} />
       {!m ? (
         <div className="loading">{t('Loading…')}</div>
       ) : (
-        <Card icon={<Cpu size={16} />} title={t('Machine')} actions={<span className="muted">{m.cpuName}</span>}>
+        <Card icon={<Cpu size={16} />} title={t('Machine')} actions={<span className="muted">{[m.hostname, m.cpuName].filter(Boolean).join(' · ')}</span>}>
           <div className="perf-rows">
             <Row label={t('CPU')} pct={m.cpu} value={`${t('{n}%', { n: Math.round(m.cpu) })} ·${t('{n} cores', { n: m.cores })}`} title={m.cpuName} />
             <Row label={t('Memory')} pct={mem} value={t('{used} of {total}', { used: formatBytes(m.memUsed), total: formatBytes(m.memTotal) })} />

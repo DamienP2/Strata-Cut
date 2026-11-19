@@ -919,8 +919,11 @@ impl Scanner {
         let now = now_ms() as f64;
         let new_master = self.read_csv(&m.ffmpeg, &dir, now);
         let new_segments = !new_master.is_empty();
-        let new_video = self.read_proxy(&dir, true);
-        let new_audio = if rec.no_audio.load(Ordering::Relaxed) { Vec::new() } else { self.read_proxy(&dir, false) };
+        // The preview's fragments are read once the recording has its first segment: their times
+        // are put on its turn of 26 h 30 (see `same_turn`).
+        let ready = self.first_t0.is_some();
+        let new_video = if ready { self.read_proxy(&dir, true) } else { Vec::new() };
+        let new_audio = if !ready || rec.no_audio.load(Ordering::Relaxed) { Vec::new() } else { self.read_proxy(&dir, false) };
         let mut media = None;
         if !self.probed {
             if let Some(first) = new_master.first() {
@@ -935,11 +938,15 @@ impl Scanner {
                 run.append_master(s);
             }
             for (video, segs) in [(true, new_video), (false, new_audio)] {
-                if run.track(video).offset.is_none() {
+                // Once the recording has a segment: the preview reads the source through MPEG-TS,
+                // its times may be whole turns of 26 h 30 below the recording's (an RTMP encoder
+                // up for days); they are put on its turn.
+                let near = run.master.front().map(|s| s.t0).or(self.first_t0);
+                if let (None, Some(near)) = (run.track(video).offset, near) {
                     if let Ok(init) = std::fs::read(run.track_dir(video).join("init.mp4")) {
                         if let Some((offset, ts)) = mp4::track_offset(&init) {
                             let t = run.track_mut(video);
-                            t.offset = Some(offset);
+                            t.offset = Some(super::same_turn(offset, near));
                             t.timescale = ts;
                         }
                     }
@@ -1010,7 +1017,7 @@ impl Scanner {
             if self.anchor.is_none() || t1 - t0 > (SEGMENT * 4) as f64 {
                 // The file's clock starts again from 0 every 26 h 30 (MPEG-TS), the list's goes on:
                 // the start read in the file, on the list's turn of the clock.
-                t0 = start_time(ffmpeg, &file).map(|t| same_turn(t, t1)).unwrap_or(t1 - SEGMENT as f64);
+                t0 = start_time(ffmpeg, &file).map(|t| super::same_turn(t, t1)).unwrap_or(t1 - SEGMENT as f64);
             }
             if t1 <= t0 {
                 continue;
@@ -1072,13 +1079,6 @@ impl Scanner {
         }
         out
     }
-}
-
-/// A time read in an MPEG-TS file (its clock starts again from 0 every 26 h 30) put on the turn
-/// of `near`, a time kept whole (an RTMP encoder up for days gives large ones).
-fn same_turn(t: f64, near: f64) -> f64 {
-    let wrap = super::PTS_WRAP;
-    t + ((near - t) / wrap).round() * wrap
 }
 
 /// How far the preview is behind the recording (s), from their times. The recording keeps a
@@ -1164,10 +1164,10 @@ mod tests {
     fn a_file_start_on_the_right_turn() {
         let wrap = crate::recorder::PTS_WRAP;
         // Ten turns: the file says 500 s, the list ends the segment 6 s later on the tenth turn.
-        assert!((same_turn(500.0, 10.0 * wrap + 506.0) - (10.0 * wrap + 500.0)).abs() < 1e-6);
-        assert_eq!(same_turn(500.0, 506.0), 500.0);
+        assert!((crate::recorder::same_turn(500.0, 10.0 * wrap + 506.0) - (10.0 * wrap + 500.0)).abs() < 1e-6);
+        assert_eq!(crate::recorder::same_turn(500.0, 506.0), 500.0);
         // Just after a turn: the file says near the end of the turn, the list a little past it.
-        assert!((same_turn(wrap - 2.0, wrap + 4.0) - (wrap - 2.0)).abs() < 1e-6);
+        assert!((crate::recorder::same_turn(wrap - 2.0, wrap + 4.0) - (wrap - 2.0)).abs() < 1e-6);
     }
 
     #[test]
