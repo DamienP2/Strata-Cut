@@ -647,8 +647,10 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         }
     };
     // The preview ends with the receiver: what it still holds is written, then the last fragments read.
+    // Once the receiver has stopped, the preview waits for a stream that no longer comes and
+    // does not end on its own: 1 s, then it is killed (each restart waited 5 s per recorder).
     tokio::time::sleep(Duration::from_millis(300)).await;
-    stop_child(&mut preview).await;
+    stop_within(&mut preview, Duration::from_secs(1)).await;
     tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
     rec.preview_lag.store(0, Ordering::Relaxed);
     if let Some(end) = scan.last_t1 {
@@ -749,13 +751,21 @@ fn clean_message(l: &str) -> String {
 
 /// SIGINT first, so FFmpeg closes its segments and lists; kill after 5 s.
 async fn stop_child(child: &mut tokio::process::Child) {
+    stop_within(child, Duration::from_secs(5)).await
+}
+
+/// Asks a child to end (SIGINT: FFmpeg closes its files), killed after `grace`.
+async fn stop_within(child: &mut tokio::process::Child, grace: Duration) {
     if let Some(pid) = child.id() {
+        let t = std::time::Instant::now();
         unsafe {
             libc::kill(pid as i32, libc::SIGINT);
         }
-        if tokio::time::timeout(Duration::from_secs(5), child.wait()).await.is_ok() {
+        if tokio::time::timeout(grace, child.wait()).await.is_ok() {
+            tracing::debug!("pid {pid} stopped in {} ms", t.elapsed().as_millis());
             return;
         }
+        tracing::debug!("pid {pid} did not stop in {} ms: killed", grace.as_millis());
     }
     let _ = child.kill().await;
 }

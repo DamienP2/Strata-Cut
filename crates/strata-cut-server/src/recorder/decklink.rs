@@ -139,7 +139,10 @@ pub fn reason(lines: &[String]) -> String {
 
 /// Blackmagic's Desktop Video: the library GStreamer opens to reach the cards.
 pub fn driver_installed() -> bool {
-    ["/usr/lib/libDeckLinkAPI.so", "/usr/lib64/libDeckLinkAPI.so", "/usr/lib/x86_64-linux-gnu/libDeckLinkAPI.so"].iter().any(|p| Path::new(p).exists())
+    let known = ["/usr/lib/libDeckLinkAPI.so", "/usr/lib64/libDeckLinkAPI.so", "/usr/local/lib/libDeckLinkAPI.so"].iter().any(|p| Path::new(p).exists());
+    // Wherever the package put it (/usr/lib/<arch>/…), or the cards' device files the driver makes.
+    let in_arch = std::fs::read_dir("/usr/lib").into_iter().flatten().flatten().any(|e| e.path().join("libDeckLinkAPI.so").exists());
+    known || in_arch || Path::new("/dev/blackmagic").is_dir()
 }
 
 /// What the server can do with DeckLink cards: GStreamer and its module, the driver, the cards.

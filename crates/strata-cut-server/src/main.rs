@@ -96,14 +96,21 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
     let data_dir = data_dir.canonicalize()?;
     init_logging(&data_dir);
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    rt.block_on(async move {
+    let done = rt.block_on(async move {
         let (stop_tx, stop_rx) = watch::channel(false);
         tokio::spawn(async move {
             shutdown_signal().await;
+            tracing::info!("stopping");
             let _ = stop_tx.send(true);
         });
         serve(RunArgs { data_dir: Some(data_dir), ..args }, stop_rx).await
-    })
+    });
+    // The recorders are stopped and their files closed: a task still running in the
+    // background (a still being made, a probe, a check asleep) no longer holds the exit
+    // back (it made each restart, after an update, wait several seconds).
+    rt.shutdown_timeout(Duration::from_millis(500));
+    tracing::info!("stopped");
+    done
 }
 
 fn init_logging(data_dir: &std::path::Path) {
@@ -297,7 +304,9 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
         }
         tracing::info!("settings changed: restarting the web server");
     }
+    tracing::info!("stopping: web server closed, the recorders stop");
     recorders.shutdown().await;
+    tracing::info!("stopping: recorders stopped");
     health::stopped();
     Ok(())
 }
