@@ -148,24 +148,201 @@ pub async fn status() -> Value {
     json!({ "gstreamer": module, "driver": driver, "nodes": nodes, "devices": devices })
 }
 
-/// The cards GStreamer sees (its device monitor), with their number.
-async fn list() -> Vec<Value> {
+/// One input of a card, as the driver shows it (a GStreamer device).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Input {
+    /// GStreamer's device number (the recorder's `device`).
+    pub number: u32,
+    /// "DeckLink Duo (2)".
+    pub name: String,
+    /// The card's serial number, when the driver gives it (the inputs of a card share it).
+    pub serial: String,
+    pub persistent_id: Option<i64>,
+}
+
+/// The cards GStreamer sees (its device monitor).
+async fn list_inputs() -> Vec<Input> {
     let run = tokio::process::Command::new("gst-device-monitor-1.0").args(["-f", "Video/Source"]).kill_on_drop(true).output();
     let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(8), run).await else { return Vec::new() };
     parse_monitor(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// Reads gst-device-monitor's report: each "Device found" block, its name and its launch line.
-fn parse_monitor(text: &str) -> Vec<Value> {
+async fn list() -> Vec<Value> {
+    list_inputs().await.into_iter().map(|i| json!({ "number": i.number, "name": i.name })).collect()
+}
+
+/// Reads gst-device-monitor's report: each "Device found" block, its name, its properties
+/// ("key = value") and its launch line.
+fn parse_monitor(text: &str) -> Vec<Input> {
     let mut out = Vec::new();
     for block in text.split("Device found:").skip(1) {
         let Some(launch) = block.lines().find(|l| l.contains("decklinkvideosrc")) else { continue };
         let name = block.lines().find_map(|l| l.trim().strip_prefix("name").map(|r| r.trim_start_matches([' ', ':']).trim().to_string())).unwrap_or_default();
+        let prop = |key: &str| {
+            block.lines().find_map(|l| {
+                let (k, v) = l.trim().split_once(" = ")?;
+                (k.trim() == key).then(|| v.trim().trim_matches('"').to_string())
+            })
+        };
         // The number is left out of the launch line when it is the default, 0.
-        let number = launch.split_whitespace().find_map(|w| w.strip_prefix("device-number=")?.parse::<u32>().ok()).unwrap_or(0);
-        out.push(json!({ "number": number, "name": name }));
+        let number = launch
+            .split_whitespace()
+            .find_map(|w| w.strip_prefix("device-number=")?.parse::<u32>().ok())
+            .or_else(|| prop("device-number").and_then(|v| v.parse().ok()))
+            .unwrap_or(0);
+        let persistent_id = launch.split_whitespace().find_map(|w| w.strip_prefix("persistent-id=")?.parse::<i64>().ok()).or_else(|| prop("persistent-id").and_then(|v| v.parse().ok()));
+        let serial = prop("hw-serial-number").filter(|v| v != "NULL" && v != "(null)").unwrap_or_default();
+        out.push(Input { number, name, serial, persistent_id });
     }
     out
+}
+
+/// "DeckLink Duo (2)" → "DeckLink Duo": the card's model, its inputs numbered by the driver.
+fn model_of(name: &str) -> String {
+    let n = name.trim();
+    match n.rfind(" (") {
+        Some(i) if n.ends_with(')') && n[i + 2..n.len() - 1].chars().all(|c| c.is_ascii_digit()) => n[..i].to_string(),
+        _ => n.to_string(),
+    }
+}
+
+/// The connector of a model's inputs, for the picture: HDMI on the Intensity cards and the
+/// HDMI models, SDI (BNC) on the others.
+fn connector_of(model: &str) -> &'static str {
+    let m = model.to_ascii_lowercase();
+    if m.contains("hdmi") || m.contains("intensity") {
+        "hdmi"
+    } else {
+        "sdi"
+    }
+}
+
+/// A video format as the recorders name it ("1080i50", "1080p2997", "pal"), from GStreamer's caps.
+fn mode_of(height: u32, interlaced: bool, num: u32, den: u32) -> String {
+    if den == 0 || num == 0 {
+        return String::new();
+    }
+    let fps = num as f64 / den as f64;
+    let rate = if interlaced { fps * 2.0 } else { fps };
+    if interlaced && height == 576 {
+        return "pal".into();
+    }
+    if interlaced && (height == 486 || height == 480) {
+        return "ntsc".into();
+    }
+    let r = if (rate - rate.round()).abs() < 0.01 { format!("{}", rate.round() as u32) } else { format!("{}", (rate * 100.0).round() as u32) };
+    format!("{height}{}{r}", if interlaced { 'i' } else { 'p' })
+}
+
+/// What a free input receives now: (signal, format). A short capture with the format detected
+/// by the card: no picture within a few seconds is no signal. `None`: busy (another program).
+async fn probe(number: u32) -> Option<(bool, String)> {
+    let args = [GST_LAUNCH, "-v", "decklinkvideosrc", &format!("device-number={number}"), "mode=auto", "num-buffers=1", "!", "fakesink", "sync=false"];
+    let run = tokio::process::Command::new(args[0]).args(&args[1..]).stdin(std::process::Stdio::null()).kill_on_drop(true).output();
+    let out = match tokio::time::timeout(Duration::from_secs(4), run).await {
+        Ok(Ok(o)) => o,
+        // Still waiting for a picture: no signal.
+        _ => return Some((false, String::new())),
+    };
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if text.contains("Failed to acquire input") || text.contains("has no input") {
+        return None;
+    }
+    Some(caps_mode(&text).map_or((false, String::new()), |m| (true, m)))
+}
+
+/// The format in the caps GStreamer prints (`-v`): "video/x-raw, …, width=(int)1920, height=(int)1080, interlace-mode=(string)interleaved, framerate=(fraction)25/1".
+fn caps_mode(text: &str) -> Option<String> {
+    let line = text.lines().find(|l| l.contains("caps = video/x-raw") && l.contains("height=(int)"))?;
+    let field = |k: &str| line.split(&format!("{k}=")).nth(1).map(|r| r.split([',', ';']).next().unwrap_or("").trim().to_string());
+    let num = |v: Option<String>| v.and_then(|v| v.rsplit(')').next().map(str::to_string));
+    let height: u32 = num(field("height"))?.parse().ok()?;
+    let interlaced = field("interlace-mode").is_some_and(|v| v.contains("interleaved") || v.contains("mixed") || v.contains("fields"));
+    let rate = num(field("framerate"))?;
+    let (n, d) = rate.split_once('/')?;
+    let m = mode_of(height, interlaced, n.parse().ok()?, d.parse().ok()?);
+    (!m.is_empty()).then_some(m)
+}
+
+/// Blackmagic's driver package version (Desktop Video), when installed from its .deb.
+async fn driver_version() -> String {
+    let run = tokio::process::Command::new("dpkg-query").args(["-W", "-f=${Version}", "desktopvideo"]).output();
+    match tokio::time::timeout(Duration::from_secs(5), run).await {
+        Ok(Ok(o)) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => String::new(),
+    }
+}
+
+/// The last report (probing the inputs takes a few seconds: one at a time, kept 5 s).
+static HARDWARE: tokio::sync::Mutex<Option<(std::time::Instant, Value)>> = tokio::sync::Mutex::const_new(None);
+
+/// Système › Matériel: the cards, each with its inputs: signal, format, the recorder using it.
+pub async fn hardware(m: &super::Manager) -> Value {
+    let mut cache = HARDWARE.lock().await;
+    if let Some((at, v)) = cache.as_ref() {
+        if at.elapsed() < Duration::from_secs(5) {
+            return v.clone();
+        }
+    }
+    let gst = tokio::process::Command::new("gst-inspect-1.0").arg("decklinkvideosrc").output();
+    let module = matches!(tokio::time::timeout(Duration::from_secs(10), gst).await, Ok(Ok(o)) if o.status.success());
+    let driver = driver_installed();
+    let inputs = if module && driver { list_inputs().await } else { Vec::new() };
+    // The recorders on each input: a running one tells its signal and format itself.
+    let recs: Vec<_> = m.recs().into_iter().filter(|r| r.config().protocol == super::Protocol::Decklink).collect();
+    let running_of = |n: u32| {
+        recs.iter().find(|r| r.config().device == n).map(|r| r.status.lock().unwrap().clone()).filter(|s| matches!(s.state, super::State::Recording | super::State::Nosignal | super::State::Starting))
+    };
+    // The free inputs are probed all at once (a few seconds each when there is no signal).
+    let mut probes = tokio::task::JoinSet::new();
+    for input in inputs.iter().filter(|i| running_of(i.number).is_none()) {
+        let n = input.number;
+        probes.spawn(async move { (n, probe(n).await) });
+    }
+    let mut probed = std::collections::HashMap::new();
+    while let Some(Ok((n, p))) = probes.join_next().await {
+        probed.insert(n, p);
+    }
+    let mut cards: Vec<(String, String, Vec<Value>)> = Vec::new();
+    for input in &inputs {
+        let model = model_of(&input.name);
+        let key = if input.serial.is_empty() { model.clone() } else { input.serial.clone() };
+        let user = recs.iter().find(|r| r.config().device == input.number);
+        let running = running_of(input.number);
+        let (state, format) = match &running {
+            Some(s) if s.state == super::State::Recording => ("signal", s.media.as_ref().map(|md| mode_of(md.height, md.interlaced, md.fps_num, md.fps_den)).unwrap_or_default()),
+            Some(s) if s.state == super::State::Nosignal => ("nosignal", String::new()),
+            Some(_) => ("unknown", String::new()),
+            None => match probed.get(&input.number).cloned().flatten() {
+                Some((true, f)) => ("signal", f),
+                Some((false, _)) => ("nosignal", String::new()),
+                None => ("busy", String::new()),
+            },
+        };
+        let port = json!({
+            "number": input.number,
+            "name": input.name,
+            "persistentId": input.persistent_id,
+            "state": state,
+            "format": format,
+            "recorder": user.map(|r| json!({ "id": r.id, "name": r.config().name, "running": running.is_some() })),
+        });
+        match cards.iter_mut().find(|c| c.0 == key) {
+            Some(c) => c.2.push(port),
+            None => cards.push((key, model, vec![port])),
+        }
+    }
+    let cards: Vec<Value> = cards
+        .into_iter()
+        .map(|(key, model, mut ports)| {
+            ports.sort_by_key(|p| p["number"].as_u64());
+            let serial = if key == model { String::new() } else { key };
+            json!({ "model": model, "serial": serial, "connector": connector_of(&model), "inputs": ports })
+        })
+        .collect();
+    let v = json!({ "gstreamer": module, "driver": driver, "driverVersion": if driver { driver_version().await } else { String::new() }, "cards": cards });
+    *cache = Some((std::time::Instant::now(), v.clone()));
+    v
 }
 
 #[cfg(test)]
@@ -223,6 +400,14 @@ mod tests {
         assert!(if driver_installed() { card.contains("not found") } else { card.contains("Desktop Video") }, "{card}");
         let m = "Device found:\n\n\tname  : DeckLink Duo (2)\n\tclass : Video/Source\n\tgst-launch-1.0 decklinkvideosrc device-number=1 persistent-id=123 ! ...\n\nDevice found:\n\n\tname  : DeckLink Duo (1)\n\tclass : Video/Source\n\tgst-launch-1.0 decklinkvideosrc persistent-id=122 ! ...\n";
         let d = parse_monitor(m);
-        assert_eq!(d, vec![json!({"number": 1, "name": "DeckLink Duo (2)"}), json!({"number": 0, "name": "DeckLink Duo (1)"})]);
+        assert_eq!(d.iter().map(|i| (i.number, i.name.as_str(), i.persistent_id)).collect::<Vec<_>>(), vec![(1, "DeckLink Duo (2)", Some(123)), (0, "DeckLink Duo (1)", Some(122))]);
+        assert_eq!(model_of("DeckLink Duo (2)"), "DeckLink Duo");
+        assert_eq!(model_of("Intensity Pro 4K"), "Intensity Pro 4K");
+        assert_eq!(connector_of("Intensity Pro 4K"), "hdmi");
+        assert_eq!(connector_of("DeckLink Quad 2"), "sdi");
+        let caps = "/GstPipeline:pipeline0/GstFakeSink:fakesink0.GstPad:sink: caps = video/x-raw, format=(string)UYVY, width=(int)1920, height=(int)1080, interlace-mode=(string)interleaved, pixel-aspect-ratio=(fraction)1/1, framerate=(fraction)25/1";
+        assert_eq!(caps_mode(caps).as_deref(), Some("1080i50"));
+        assert_eq!(caps_mode(&caps.replace("interleaved", "progressive").replace("25/1", "30000/1001")).as_deref(), Some("1080p2997"));
+        assert_eq!(mode_of(576, true, 25, 1), "pal");
     }
 }

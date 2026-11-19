@@ -1,7 +1,7 @@
 /* /system/<section>: the list of sections on the left, the open one on the right. */
 import { useDisplayPref } from '../displayPrefs';
 import { lazy, Suspense, useEffect, type ComponentType, type LazyExoticComponent } from 'react';
-import { CloudDownload, Gauge, HardDrive, HeartPulse, Lock, RotateCcw, SlidersHorizontal, Users as UsersIcon } from 'lucide-react';
+import { CloudDownload, Cpu, Gauge, HardDrive, HeartPulse, Lock, RotateCcw, SlidersHorizontal, Users as UsersIcon } from 'lucide-react';
 import { t } from '../i18n';
 import { navigate } from '../router';
 import { can, useApp, useChanged, type PublicUser } from '../store';
@@ -45,6 +45,7 @@ export const SYSTEM: Group[] = [
     sections: [
       { id: 'general', label: 'General', icon: SlidersHorizontal, admin: true, page: page(() => import('../settings/General'), 'General') },
       { id: 'storage', label: 'Storage', icon: HardDrive, admin: true, page: page(() => import('../settings/Storage'), 'Storage') },
+      { id: 'hardware', label: 'Hardware', icon: Cpu, admin: true, page: page(() => import('../settings/Hardware'), 'Hardware') },
       { id: 'updates', label: 'Updates', icon: CloudDownload, admin: true, page: page(() => import('../settings/Updates'), 'Updates') },
       { id: 'maintenance', label: 'Maintenance', icon: RotateCcw, admin: true, page: page(() => import('../settings/Maintenance'), 'Maintenance') },
     ],

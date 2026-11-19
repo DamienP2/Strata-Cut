@@ -5,7 +5,7 @@ import { CalendarClock, Copy, Eraser, MoreHorizontal, Pencil, Plus, RadioTower, 
 import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
-import { bitrate, clock, day, scanFormat } from '../tc';
+import { bitrate, clock, day, formatName, scanFormat } from '../tc';
 import { confirmDialog } from '../ui/dialogs';
 import { Dropdown } from '../ui/Dropdown';
 import { NumberField, Segmented } from '../ui/fields';
@@ -29,15 +29,7 @@ const DL_MODES = ['auto', '1080i50', '1080i5994', '1080i60', '1080p25', '1080p29
 const DL_AUDIO_INPUTS = ['auto', 'embedded', 'aes', 'analog'];
 const dlConnection = (v: string) => ({ auto: t('Automatic'), sdi: 'SDI', hdmi: 'HDMI', 'optical-sdi': t('Optical SDI'), component: t('Component'), composite: t('Composite'), svideo: 'S-Video' })[v] ?? v;
 /** "1080i50" → "1080i 50", "1080p5994" → "1080p 59.94" (French: 59,94). */
-const dlMode = (v: string) => {
-  if (v === 'auto') return t('Automatic (detected by the card)');
-  if (v === 'pal') return 'PAL (576i 50)';
-  if (v === 'ntsc') return 'NTSC (480i 59.94)'.replace('.', lang() === 'fr' ? ',' : '.');
-  const m = /^(\d+[ip])(\d+)$/.exec(v);
-  if (!m) return v;
-  const rate = m[2].length > 2 ? `${m[2].slice(0, 2)}${lang() === 'fr' ? ',' : '.'}${m[2].slice(2)}` : m[2];
-  return `${m[1]} ${rate}`;
-};
+const dlMode = (v: string) => (v === 'auto' ? t('Automatic (detected by the card)') : formatName(v, lang() === 'fr'));
 const dlAudioInput = (v: string) => ({ auto: t('Automatic'), embedded: t('Embedded in the signal (SDI / HDMI)'), aes: 'AES/EBU', analog: t('Analogue') })[v] ?? v;
 
 /** The platform of a web page, from its address (the server says the same). */
@@ -116,7 +108,16 @@ export function Recorders() {
   const [q, setQ] = useDisplayPref('recorders.q', '');
   const [chip, setChip] = useDisplayPref<'all' | 'recording' | 'nosignal'>('recorders.filter', 'all');
   /** The modal: a new recorder (from = the one duplicated), or one to edit. */
-  const [edit, setEdit] = useState<{ rec: Recorder | null; from?: Recorder } | null>(null);
+  const [edit, setEdit] = useState<{ rec: Recorder | null; from?: Recorder; preset?: Partial<Recorder> } | null>(null);
+  // From Système › Matériel: a new recorder on a card's input (`?decklink=<number>&format=…&name=…`).
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    const device = q.get('decklink');
+    if (device === null) return;
+    const format = q.get('format') ?? '';
+    setEdit({ rec: null, preset: { name: q.get('name') ?? '', protocol: 'decklink', device: Number(device), connection: 'auto', videoMode: DL_MODES.includes(format) ? format : 'auto', audioInput: 'auto', audioChannels: 2, bitrate: 25 } });
+    void navigate('/recorders', true);
+  }, []);
   const counts = {
     all: recorders.length,
     recording: recorders.filter((r) => status[r.id]?.state === 'recording').length,
@@ -190,7 +191,7 @@ export function Recorders() {
           )}
         </div>
       </div>
-      {edit && <RecorderModal rec={edit.rec} from={edit.from} onClose={() => setEdit(null)} />}
+      {edit && <RecorderModal rec={edit.rec} from={edit.from} preset={edit.preset} onClose={() => setEdit(null)} />}
     </div>
   );
 }
@@ -404,7 +405,7 @@ interface Space {
   recorders: { id: string; enabled: boolean; need: number | null }[];
 }
 
-function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Recorder; onClose: () => void }) {
+function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; from?: Recorder; preset?: Partial<Recorder>; onClose: () => void }) {
   const { recorders, toast, status } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast, status: s.status })));
   const [space, setSpace] = useState<Space | null>(null);
   useEffect(() => {
@@ -424,7 +425,7 @@ function RecorderModal({ rec, from, onClose }: { rec: Recorder | null; from?: Re
       const measured = (status[from.id]?.measured ?? 0) / 1e6;
       return { ...from, id: '', name: t('{name} (copy)', { name: from.name }), port: listens ? firstPort : from.port, bitrate: Math.round(measured * 10) / 10 || from.bitrate };
     }
-    return { ...blank, port: firstPort };
+    return { ...blank, port: firstPort, ...preset };
   });
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<Recorder>) => setC((x) => ({ ...x, ...patch }));

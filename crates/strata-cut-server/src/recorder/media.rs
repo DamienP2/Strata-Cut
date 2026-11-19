@@ -26,6 +26,7 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/recorders", get(list).post(create))
         .route("/api/decklink", get(decklink))
+        .route("/api/system/hardware", get(hardware))
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
         .route("/api/recorders/{id}/clear", post(clear))
@@ -45,6 +46,12 @@ pub fn routes() -> Router<Shared> {
 /// DeckLink cards: what the server has (GStreamer's module, Blackmagic's driver) and the cards seen.
 async fn decklink(CurrentUser(_): CurrentUser) -> Json<Value> {
     Json(super::decklink::status().await)
+}
+
+/// Système › Matériel: the capture cards and their inputs.
+async fn hardware(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    Ok(Json(super::decklink::hardware(&s.recorders).await))
 }
 
 async fn list(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Value> {

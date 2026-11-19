@@ -121,3 +121,14 @@ export function bitrate(bps: number, locale?: string): string {
   if (bps >= 1e6) return `${(bps / 1e6).toLocaleString(locale, { maximumFractionDigits: bps < 1e7 ? 1 : 0 })} Mb/s`;
   return `${Math.round(bps / 1e3)} kb/s`;
 }
+
+/** "1080i50" → "1080i 50", "1080p2997" → "1080p 29.97" (French: 29,97), "pal" → "PAL 576i 50". */
+export function formatName(v: string, fr = true): string {
+  if (!v) return '';
+  if (v === 'pal') return 'PAL 576i 50';
+  if (v === 'ntsc') return `NTSC 480i 59${fr ? ',' : '.'}94`;
+  const m = /^(\d+[ip])(\d+)$/.exec(v);
+  if (!m) return v;
+  const rate = m[2].length > 2 ? `${m[2].slice(0, 2)}${fr ? ',' : '.'}${m[2].slice(2)}` : m[2];
+  return `${m[1]} ${rate}`;
+}
