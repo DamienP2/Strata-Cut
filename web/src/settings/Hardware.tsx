@@ -1,7 +1,7 @@
 /* Système › Serveur › Matériel: the capture cards (Blackmagic DeckLink), drawn with their inputs. */
 import { useEffect, useState } from 'react';
-import { Cpu, Plus, RefreshCw, Scissors } from 'lucide-react';
-import { api } from '../store';
+import { Check, Cpu, Pencil, Plus, RefreshCw, Scissors, X } from 'lucide-react';
+import { api, useApp } from '../store';
 import { lang, t, tn } from '../i18n';
 import { formatName } from '../tc';
 import { navigate } from '../router';
@@ -22,6 +22,10 @@ interface Port {
 }
 
 interface CaptureCard {
+  /** The card, for its name: its serial number, else its model. */
+  key: string;
+  /** The name given to it (empty: none). */
+  name: string;
   model: string;
   serial: string;
   connector: 'sdi' | 'hdmi';
@@ -89,7 +93,7 @@ export function Hardware() {
         <Card
           key={`${c.model}-${c.serial}-${i}`}
           icon={<Cpu size={16} />}
-          title={modelOf(c.model, c.inputs.length, c.connector === 'hdmi').name}
+          title={<CardName card={c} onSaved={() => void load()} />}
           actions={<span className="muted mono">{[c.serial && t('Serial {s}', { s: c.serial }), hw.driverVersion && `Desktop Video ${hw.driverVersion}`].filter(Boolean).join(' · ')}</span>}
         >
           <CardPicture card={c} />
@@ -125,6 +129,56 @@ export function Hardware() {
         </Card>
       ))}
     </>
+  );
+}
+
+/** A card's title: the name given to it (its model under it), renamed in place. */
+function CardName({ card, onSaved }: { card: CaptureCard; onSaved: () => void }) {
+  const toast = useApp((s) => s.toast);
+  const model = modelOf(card.model, card.inputs.length, card.connector === 'hdmi').name;
+  const [edit, setEdit] = useState<string | null>(null);
+  const save = async () => {
+    if (edit === null) return;
+    try {
+      await api('PUT', '/api/system/hardware/name', { key: card.key, name: edit.trim() });
+      setEdit(null);
+      onSaved();
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
+  if (edit !== null)
+    return (
+      <span className="hw-name-edit">
+        <input
+          autoFocus
+          value={edit}
+          maxLength={60}
+          placeholder={model}
+          aria-label={t('Name of the card')}
+          onChange={(e) => setEdit(e.target.value)}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') void save();
+            if (e.key === 'Escape') setEdit(null);
+          }}
+        />
+        <button type="button" className="icon-btn" data-tip={t('Save')} onClick={() => void save()}>
+          <Check size={14} />
+        </button>
+        <button type="button" className="icon-btn ghost" data-tip={t('Cancel')} onClick={() => setEdit(null)}>
+          <X size={14} />
+        </button>
+      </span>
+    );
+  return (
+    <span className="hw-name">
+      <span>{card.name || model}</span>
+      {card.name && <span className="muted hw-name-model">{model}</span>}
+      <button type="button" className="icon-btn ghost" data-tip={t('Name this card')} onClick={() => setEdit(card.name)}>
+        <Pencil size={13} />
+      </button>
+    </span>
   );
 }
 

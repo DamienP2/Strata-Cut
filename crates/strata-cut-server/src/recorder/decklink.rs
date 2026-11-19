@@ -143,13 +143,13 @@ pub fn driver_installed() -> bool {
 }
 
 /// What the server can do with DeckLink cards: GStreamer and its module, the driver, the cards.
-pub async fn status() -> Value {
+pub async fn status(data_dir: &Path) -> Value {
     let gst = tokio::process::Command::new("gst-inspect-1.0").arg("decklinkvideosrc").output();
     let module = matches!(tokio::time::timeout(Duration::from_secs(10), gst).await, Ok(Ok(o)) if o.status.success());
     // Blackmagic's Desktop Video: its library, and the cards' device files.
     let driver = driver_installed();
     let nodes = std::fs::read_dir("/dev/blackmagic").map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("io")).count()).unwrap_or(0);
-    let devices = if module && driver { list().await } else { Vec::new() };
+    let devices = if module && driver { list(data_dir).await } else { Vec::new() };
     json!({ "gstreamer": module, "driver": driver, "nodes": nodes, "devices": devices })
 }
 
@@ -172,8 +172,61 @@ async fn list_inputs() -> Vec<Input> {
     parse_monitor(&String::from_utf8_lossy(&out.stdout))
 }
 
-async fn list() -> Vec<Value> {
-    list_inputs().await.into_iter().map(|i| json!({ "number": i.number, "name": i.name })).collect()
+/// The cards' inputs for the recorder's form: each with its card (the name given to it, else
+/// its model) and its rank on that card.
+async fn list(data_dir: &Path) -> Vec<Value> {
+    let inputs = list_inputs().await;
+    let names = names(data_dir);
+    let mut rank: std::collections::HashMap<String, u32> = Default::default();
+    let mut sorted = inputs.clone();
+    sorted.sort_by_key(|i| i.number);
+    sorted
+        .iter()
+        .map(|i| {
+            let key = card_key(i);
+            let k = rank.entry(key.clone()).or_insert(0);
+            *k += 1;
+            json!({ "number": i.number, "name": i.name, "card": names.get(&key).cloned().unwrap_or_else(|| model_of(&i.name)), "input": *k })
+        })
+        .collect()
+}
+
+/// A card, for the names given to it: its serial number (its inputs share it), else its model.
+fn card_key(i: &Input) -> String {
+    if i.serial.is_empty() {
+        model_of(&i.name)
+    } else {
+        i.serial.clone()
+    }
+}
+
+/// The names given to the cards (Système › Matériel), by card.
+fn names_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("hardware-names.json")
+}
+
+pub fn names(data_dir: &Path) -> std::collections::HashMap<String, String> {
+    crate::paths::read_json(&names_path(data_dir)).unwrap_or_default()
+}
+
+/// Names a card (an empty name gives it back its model's).
+pub async fn set_name(data_dir: &Path, key: &str, name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if key.is_empty() || key.len() > 200 {
+        return Err("unknown card".into());
+    }
+    if name.chars().count() > 60 {
+        return Err("the name has 60 characters at most".into());
+    }
+    let mut all = names(data_dir);
+    if name.is_empty() {
+        all.remove(key);
+    } else {
+        all.insert(key.to_string(), name.to_string());
+    }
+    crate::paths::write_json(&names_path(data_dir), &all, false).map_err(|e| e.to_string())?;
+    *HARDWARE.lock().await = None;
+    Ok(())
 }
 
 /// Reads gst-device-monitor's report: each "Device found" block, its name, its properties
@@ -374,10 +427,11 @@ pub async fn hardware(m: &super::Manager) -> Value {
     while let Some(Ok((n, p))) = probes.join_next().await {
         probed.insert(n, p);
     }
+    let names = names(m.data_dir());
     let mut cards: Vec<(String, String, Vec<Value>)> = Vec::new();
     for input in &inputs {
         let model = model_of(&input.name);
-        let key = if input.serial.is_empty() { model.clone() } else { input.serial.clone() };
+        let key = card_key(input);
         let user = recs.iter().find(|r| r.config().device == input.number);
         let running = running_of(input.number);
         let (state, format) = match &running {
@@ -407,8 +461,8 @@ pub async fn hardware(m: &super::Manager) -> Value {
         .into_iter()
         .map(|(key, model, mut ports)| {
             ports.sort_by_key(|p| p["number"].as_u64());
-            let serial = if key == model { String::new() } else { key };
-            json!({ "model": model, "serial": serial, "connector": connector_of(&model), "inputs": ports })
+            let serial = if key == model { String::new() } else { key.clone() };
+            json!({ "key": key, "name": names.get(&key).cloned().unwrap_or_default(), "model": model, "serial": serial, "connector": connector_of(&model), "inputs": ports })
         })
         .collect();
     let v = json!({ "gstreamer": module, "driver": driver, "driverVersion": if driver { driver_version().await } else { String::new() }, "cards": cards, "pci": pci_devices().await });

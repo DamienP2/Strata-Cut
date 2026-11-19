@@ -924,3 +924,8 @@ a.btn { color: inherit; }
 .sc-dlprev-state.on { color: var(--pvw); }
 .linklike { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; }
 .sc-warn-text { color: var(--warn); }
+.hw-name { display: inline-flex; align-items: baseline; gap: 10px; }
+.hw-name-model { font-size: var(--fs-12); font-weight: 400; }
+.hw-name .icon-btn { align-self: center; }
+.hw-name-edit { display: inline-flex; align-items: center; gap: 6px; }
+.hw-name-edit input { height: 28px; width: 260px; font-size: var(--fs-13); }

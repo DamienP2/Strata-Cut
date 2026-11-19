@@ -603,7 +603,8 @@ interface DecklinkInfo {
   gstreamer: boolean;
   driver: boolean;
   nodes: number;
-  devices: { number: number; name: string }[];
+  /** Each input: its number, the driver's name, its card (the name given to it, else its model) and its rank on it. */
+  devices: { number: number; name: string; card?: string; input?: number }[];
 }
 
 /** A DeckLink input: the card, its inputs, the format, the sound and the recording's bitrate. */
@@ -629,7 +630,7 @@ function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder
       )}
       <Field label={t('Card')} hint={devices.length === 0 ? t('Cards are numbered from 1 in the order the driver sees them.') : undefined}>
         {devices.length > 0 ? (
-          <Dropdown value={String(device)} options={devices.map((d) => ({ value: String(d.number), label: d.name || t('Card {n}', { n: d.number + 1 }), detail: String(d.number + 1) }))} onChange={(v) => set({ device: Number(v) })} />
+          <Dropdown value={String(device)} options={devices.map((d) => ({ value: String(d.number), label: d.card ? `${d.card} · ${t('Input {n}', { n: d.input ?? 1 })}` : d.name || t('Card {n}', { n: d.number + 1 }), detail: d.name }))} onChange={(v) => set({ device: Number(v) })} />
         ) : (
           <NumberField value={device + 1} min={1} max={64} onChange={(v) => set({ device: Math.max(0, v - 1) })} />
         )}

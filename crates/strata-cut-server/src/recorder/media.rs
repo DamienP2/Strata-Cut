@@ -27,6 +27,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders", get(list).post(create))
         .route("/api/decklink", get(decklink))
         .route("/api/system/hardware", get(hardware))
+        .route("/api/system/hardware/name", axum::routing::put(hardware_name))
         .route("/api/decklink/{n}/preview.jpg", get(decklink_preview))
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
@@ -45,8 +46,21 @@ pub fn routes() -> Router<Shared> {
 }
 
 /// DeckLink cards: what the server has (GStreamer's module, Blackmagic's driver) and the cards seen.
-async fn decklink(CurrentUser(_): CurrentUser) -> Json<Value> {
-    Json(super::decklink::status().await)
+async fn decklink(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Value> {
+    Json(super::decklink::status(s.recorders.data_dir()).await)
+}
+
+#[derive(Deserialize)]
+struct CardName {
+    key: String,
+    name: String,
+}
+
+/// Système › Matériel: a name given to a card, to tell it from the others.
+async fn hardware_name(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<CardName>) -> ApiResult<StatusCode> {
+    require(me.is_admin())?;
+    super::decklink::set_name(s.recorders.data_dir(), &b.key, &b.name).await.map_err(bad)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Deserialize)]

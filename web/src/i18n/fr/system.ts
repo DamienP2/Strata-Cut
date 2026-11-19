@@ -103,4 +103,8 @@ export const system: Record<string, string> = {
   'Create a recorder': 'Créer un enregistreur',
   'Not used': 'Non utilisé',
   Busy: 'Occupée',
+  'Name of the card': 'Nom de la carte',
+  'Name this card': 'Nommer cette carte',
+  'the name has 60 characters at most': 'Le nom compte 60 caractères au plus.',
+  'unknown card': 'Carte inconnue.',
 };
