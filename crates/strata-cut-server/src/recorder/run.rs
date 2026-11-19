@@ -249,7 +249,10 @@ fn urlencode(s: &str) -> String {
 pub fn ffmpeg_args(input: Vec<String>, run_dir: &Path, thumb: &Path, audio: bool, describe: bool, epg: Option<&str>) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
     let level = if describe { "info" } else { "warning" };
-    let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", level, "-copyts", "-fflags", "+discardcorrupt", "-thread_queue_size", "4096"].map(String::from).to_vec();
+    // Damaged packets are kept (no +discardcorrupt): a frame with a few lost packets decodes
+    // with a small concealed patch, where a frame thrown away left every frame after it
+    // without its reference (mosaic up to the next key frame) and the clips a frame short.
+    let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", level, "-copyts", "-thread_queue_size", "4096"].map(String::from).to_vec();
     a.extend(input);
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     // 1. The stream as received, in segments.
@@ -830,6 +833,8 @@ mod tests {
         let a = ffmpeg_args(vec!["-i".into(), "x".into()], Path::new("/r"), Path::new("/t.jpg"), true, false, None);
         let i = a.iter().position(|x| x == "0:a:0").unwrap();
         assert_eq!(a[i + 2..i + 4], ["-af".to_string(), AUDIO_SYNC.to_string()]);
+        // Damaged frames kept: thrown away, they make the mosaic last to the next key frame.
+        assert!(!a.iter().any(|x| x.contains("discardcorrupt")));
     }
 
     #[test]
