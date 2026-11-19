@@ -259,6 +259,9 @@ export const business: Record<string, string> = {
   'this address is not valid': 'Cette adresse n’est pas valide.',
   'too many redirections': 'Trop de redirections.',
   'cannot fetch the logo': 'Impossible de récupérer le logo.',
+  'Finished recordings': 'Enregistrements terminés',
+  'The slots of the last 7 days. What is still in the loop can be extracted.': 'Les créneaux des 7 derniers jours. Ce qui est encore dans la boucle peut être extrait.',
+  'No longer in the loop': 'Sorti de la boucle',
   // Web lives
   'Only YouTube lives are recorded.': 'Seuls les directs YouTube sont enregistrés.',
   'only youtube lives are recorded': 'Seuls les directs YouTube sont enregistrés.',

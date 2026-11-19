@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, ChevronLeft, ChevronRight, Pencil, Plus, Search, Trash2, TriangleAlert, Tv, X } from 'lucide-react';
+import { CalendarClock, ChevronLeft, ChevronRight, Pencil, Plus, Scissors, Search, Trash2, TriangleAlert, Tv, X } from 'lucide-react';
 import { api, can, serverEvents, serverNow, useApp } from '../store';
 import { locale, t, tn } from '../i18n';
 import { navigate } from '../router';
@@ -214,11 +214,106 @@ export function Schedule() {
                 })}
               </div>
             )}
+            <Finished recorders={recorders} only={only} q={q} timezone={timezone} />
           </>
         )}
       </div>
       {edit && <SlotModal slot={edit.slot} initial={edit.initial} recorders={programmed} preset={only} names={names} timezone={timezone} admin={admin} onClose={() => setEdit(null)} />}
     </div>
+  );
+}
+
+/**
+ * The slots that ended over the last days, the newest first: what was recorded of each
+ * (from the loop), and the way to it in Extraction while the loop still has it.
+ */
+function Finished({ recorders, only, q, timezone }: { recorders: Recorder[]; only: string | null; q: string; timezone: string }) {
+  const [done, setDone] = useState<(Occurrence & { share: number; gone: boolean })[] | null>(null);
+  useEffect(() => {
+    let dead = false;
+    const load = async () => {
+      const now = serverNow();
+      try {
+        const o = await api<{ occurrences: Occurrence[] }>('GET', `/api/schedules/occurrences?from=${Math.round(now - 7 * DAY)}&to=${Math.round(now)}`);
+        const ended = o.occurrences.filter((x) => x.end <= now && x.enabled !== false);
+        // What each recorder holds now, to say what is left of each slot.
+        const ids = [...new Set(ended.map((x) => x.recorder))];
+        const spans = new Map<string, { from: number; to: number }[]>();
+        await Promise.all(
+          ids.map(async (id) => {
+            try {
+              spans.set(id, (await api<{ spans: { from: number; to: number }[] }>('GET', `/api/recorders/${id}/coverage`)).spans);
+            } catch {
+              spans.set(id, []);
+            }
+          }),
+        );
+        const list = ended.map((x) => {
+          const sp = spans.get(x.recorder) ?? [];
+          const got = sp.reduce((a, r) => a + Math.max(0, Math.min(x.end, r.to) - Math.max(x.start, r.from)), 0);
+          const oldest = sp.length ? Math.min(...sp.map((r) => r.from)) : Infinity;
+          return { ...x, share: got / (x.end - x.start), gone: oldest > x.start && got === 0 };
+        });
+        if (!dead) setDone(list.sort((a, b) => b.start - a.start));
+      } catch {
+        if (!dead) setDone([]);
+      }
+    };
+    void load();
+    const i = setInterval(() => void load(), 60_000);
+    return () => {
+      dead = true;
+      clearInterval(i);
+    };
+  }, []);
+  const nameOf = (id: string) => recorders.find((r) => r.id === id)?.name ?? '—';
+  const shown = (done ?? []).filter((x) => (!only || x.recorder === only) && (!q || `${x.name} ${nameOf(x.recorder)}`.toLowerCase().includes(q.toLowerCase()))).slice(0, 60);
+  if (!done || shown.length === 0) return null;
+  return (
+    <section className="sc-done">
+      <h2>{t('Finished recordings')}</h2>
+      <p className="muted">{t('The slots of the last 7 days. What is still in the loop can be extracted.')}</p>
+      <div className="sc-slot-list">
+        {shown.map((x) => {
+          const pct = Math.round(x.share * 100);
+          const usable = x.share > 0;
+          return (
+            <div key={`${x.slot}-${x.start}`} className="sc-slot-row done">
+              <div className="sc-slot-when">
+                <span className="sc-slot-day">{day(x.start, timezone, locale())}</span>
+                <span className="sc-slot-time">{hhmm(x.start, timezone)}</span>
+              </div>
+              <div className="sc-slot-main">
+                <strong>{x.name || t('Programmed slot')}</strong>
+                <span className="sc-slot-meta">{nameOf(x.recorder)}</span>
+              </div>
+              <div className="sc-slot-hours">
+                <span>
+                  {hhmm(x.start, timezone)} – {hhmm(x.end, timezone)}
+                </span>
+                <span className="muted">{until(x.end - x.start)}</span>
+              </div>
+              <div className="sc-slot-state">
+                {x.share >= 0.98 ? (
+                  <span className="sc-pill ok">{t('Recorded')}</span>
+                ) : usable ? (
+                  <span className="sc-pill soon">{t('Partly recorded {p} %', { p: pct })}</span>
+                ) : (
+                  <span className="sc-pill">{x.gone ? t('No longer in the loop') : t('Not recorded')}</span>
+                )}
+              </div>
+              <div className="sc-slot-actions">
+                {usable && (
+                  <button className="btn small" onClick={() => void navigate(`/extract/${x.recorder}?at=${Math.round(x.start)}`)}>
+                    <Scissors size={13} /> {t('Extract')}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

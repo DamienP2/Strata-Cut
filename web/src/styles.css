@@ -948,3 +948,10 @@ a.btn { color: inherit; }
 .sc-logo-url { display: flex; gap: 6px; flex-wrap: wrap; }
 .sc-logo-url input { flex: 1 1 200px; }
 @media (max-width: 640px) { .sc-logo-field { grid-template-columns: 1fr; } }
+
+/* Programmation: the slots that ended. */
+.sc-done { margin-top: 28px; }
+.sc-done h2 { font-size: var(--fs-15); margin: 0 0 2px; }
+.sc-done > p { margin: 0 0 10px; font-size: var(--fs-12); }
+.sc-slot-row.done .sc-slot-when { cursor: default; }
+.sc-pill.ok { color: var(--pvw); border-color: color-mix(in srgb, var(--pvw) 40%, transparent); }
