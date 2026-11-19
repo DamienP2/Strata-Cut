@@ -292,6 +292,9 @@ function Editor({ rec }: { rec: Recorder }) {
     try {
       await api('POST', '/api/clips', { recorder: rec.id, run: m.a.run, t: m.a.t, frames: Math.round((m.b.t - m.a.t) * fps) + 1, name: g.name });
       toast(t('Extraction of “{name}” started', { name: g.name }));
+      // Extraction started: the marks are cleared for the next clip.
+      setIn(null);
+      setOut(null);
       setName('');
     } catch (e) {
       toast(t((e as Error).message), 'error');
@@ -392,6 +395,9 @@ function Editor({ rec }: { rec: Recorder }) {
     if (mIn.run !== mOut.run) return toast(t('The in and out points must be in the same recording'), 'error');
     try {
       await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
+      // Extraction started: the marks are cleared for the next clip.
+      setIn(null);
+      setOut(null);
       setName('');
     } catch (e) {
       toast(t((e as Error).message), 'error');
