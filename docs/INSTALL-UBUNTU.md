@@ -206,7 +206,7 @@ Dans une machine virtuelle (Proxmox…), attribuez d'abord la carte à la VM (*p
 
 Ensuite :
 
-1. Dans **Système › Matériel**, chaque carte apparaît dessinée avec ses connecteurs, et chaque entrée indique son signal et son format.
+1. Dans **Système › Matériel**, chaque carte apparaît dessinée avec ses connecteurs, et chaque entrée indique son signal et son format. Les cartes sont recherchées une fois au démarrage du serveur, puis seulement avec **Rechercher des cartes**. Une carte trouvée est **adoptée** : elle reste affichée (« Non détectée ») même si le pilote ne la liste plus un moment, jusqu'à ce qu'on l'**oublie**. Le signal des entrées utilisées par un enregistreur est affiché en direct ; celui des entrées libres est vérifié environ toutes les 10 secondes tant que la page est ouverte.
 2. Créez un enregistreur de type **DeckLink** (ou depuis une entrée de **Matériel**) : la carte, l'entrée vidéo (SDI, HDMI…), le format (*Automatique* si la carte détecte celui de son entrée ; tous les formats des cartes sont proposés, du PAL au 8K), l'entrée audio et le nombre de canaux (2, 8 ou 16, enregistrés en 1, 4 ou 8 pistes stéréo), le débit d'enregistrement (conseillé selon le format). L'aperçu montre ce que reçoit l'entrée choisie.
 
 La carte fournit des images brutes : le serveur les encode en H.264 (entrelacé conservé), ce qui demande environ 1 à 2 cœurs de processeur par entrée HD. Sans signal sur l'entrée, la carte affiche **Sans signal** et l'enregistrement continue (image noire) jusqu'au retour du signal. Une entrée ne sert qu'à un enregistreur.

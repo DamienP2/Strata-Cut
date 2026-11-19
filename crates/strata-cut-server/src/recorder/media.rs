@@ -28,6 +28,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decklink", get(decklink))
         .route("/api/system/hardware", get(hardware))
         .route("/api/system/hardware/name", axum::routing::put(hardware_name))
+        .route("/api/system/hardware/search", axum::routing::post(hardware_search))
+        .route("/api/system/hardware/forget", axum::routing::post(hardware_forget))
         .route("/api/decklink/{n}/preview.jpg", get(decklink_preview))
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
@@ -143,7 +145,25 @@ async fn decklink_preview(State(s): State<Shared>, CurrentUser(_): CurrentUser, 
 /// Système › Matériel: the capture cards and their inputs.
 async fn hardware(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.is_admin())?;
-    Ok(Json(super::decklink::hardware(&s.recorders).await))
+    Ok(Json(super::decklink::hardware(&s.recorders, false).await))
+}
+
+/// Système › Matériel: looks for new cards (the search is made only when asked).
+async fn hardware_search(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    Ok(Json(super::decklink::hardware(&s.recorders, true).await))
+}
+
+#[derive(Deserialize)]
+struct CardKey {
+    key: String,
+}
+
+/// Système › Matériel: forgets a card adopted that is not there any more.
+async fn hardware_forget(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<CardKey>) -> ApiResult<StatusCode> {
+    require(me.is_admin())?;
+    super::decklink::forget(s.recorders.data_dir(), &b.key).await.map_err(bad)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Value> {

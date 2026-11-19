@@ -1,6 +1,6 @@
 /* Système › Serveur › Matériel: the capture cards (Blackmagic DeckLink), drawn with their inputs. */
 import { useEffect, useState } from 'react';
-import { Check, Cpu, Pencil, Plus, RefreshCw, Scissors, X } from 'lucide-react';
+import { Check, Cpu, Pencil, Plus, RefreshCw, Scissors, Search, Trash2, X } from 'lucide-react';
 import { api, useApp } from '../store';
 import { lang, t, tn } from '../i18n';
 import { formatName } from '../tc';
@@ -9,7 +9,8 @@ import { PageHead } from '../pages/SidePage';
 import { modelOf, type ConnKind, type Connector } from './decklinkModels';
 import { Card } from './ui';
 
-type PortState = 'signal' | 'nosignal' | 'busy' | 'unknown';
+/** `absent`: an adopted input the driver did not list at the last search. */
+type PortState = 'signal' | 'nosignal' | 'busy' | 'unknown' | 'absent' | 'checking';
 
 interface Port {
   number: number;
@@ -29,6 +30,8 @@ interface CaptureCard {
   model: string;
   serial: string;
   connector: 'sdi' | 'hdmi';
+  /** Listed by the driver at the last search (an adopted card stays shown when it is not). */
+  present: boolean;
   inputs: Port[];
 }
 
@@ -39,14 +42,23 @@ interface Hardware {
   cards: CaptureCard[];
 }
 
-const STATE_LABEL = (s: PortState) => ({ signal: t('Signal'), nosignal: t('No signal'), busy: t('Used by another program'), unknown: t('Starting…') })[s];
+const STATE_LABEL = (s: PortState) => ({ signal: t('Signal'), nosignal: t('No signal'), busy: t('Used by another program'), unknown: t('Starting…'), absent: t('Not detected'), checking: t('Checking…') })[s];
+
+/** The last report, kept while the application is open: the page shows it at once when it comes back. */
+let last: Hardware | null = null;
 
 export function Hardware() {
-  const [hw, setHw] = useState<Hardware | null>(null);
+  const toast = useApp((s) => s.toast);
+  const [hw, setHwState] = useState<Hardware | null>(last);
   const [loading, setLoading] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [failed, setFailed] = useState(false);
-  const load = async () => {
-    setLoading(true);
+  const setHw = (h: Hardware) => {
+    last = h;
+    setHwState(h);
+  };
+  const load = async (shown = false) => {
+    if (shown) setLoading(true);
     try {
       setHw(await api<Hardware>('GET', '/api/system/hardware'));
       setFailed(false);
@@ -56,10 +68,33 @@ export function Hardware() {
       setLoading(false);
     }
   };
-  // The inputs' signal changes: asked again every 15 s while the page is open.
+  // New cards are looked for only when asked (and once when the server starts).
+  const search = async () => {
+    setSearching(true);
+    try {
+      setHw(await api<Hardware>('POST', '/api/system/hardware/search'));
+      setFailed(false);
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    } finally {
+      setSearching(false);
+    }
+  };
+  const forget = async (c: CaptureCard) => {
+    if (!window.confirm(t('Forget the card “{name}”? It comes back if a search finds it again.', { name: c.name || c.model }))) return;
+    try {
+      await api('POST', '/api/system/hardware/forget', { key: c.key });
+      await load();
+    } catch (e) {
+      toast((e as Error).message, 'error');
+    }
+  };
+  // The inputs' signal changes: asked again every 3 s while the page is open. The server answers
+  // at once: the inputs its recorders use as they are now, the free ones as last probed (it
+  // probes them again in the background, about every 10 s: a probe holds the input a moment).
   useEffect(() => {
     void load();
-    const i = setInterval(() => void load(), 15_000);
+    const i = setInterval(() => void load(), 3_000);
     return () => clearInterval(i);
   }, []);
 
@@ -70,8 +105,11 @@ export function Hardware() {
         title={t('Hardware')}
         sub={hw ? (hw.cards.length ? `${tn(hw.cards.length, '{n} capture card', '{n} capture cards')} · ${tn(inputs, '{n} input', '{n} inputs')}` : t('No capture card')) : undefined}
       >
-        <button type="button" className="btn" disabled={loading} onClick={() => void load()}>
+        <button type="button" className="btn" disabled={loading || searching} onClick={() => void load(true)}>
           <RefreshCw size={14} className={loading ? 'spin' : ''} /> {t('Refresh')}
+        </button>
+        <button type="button" className="btn" disabled={searching} data-tip={t('Looks for cards added to the server (the cards found stay adopted)')} onClick={() => void search()}>
+          <Search size={14} className={searching ? 'spin' : ''} /> {searching ? t('Searching…') : t('Search for cards')}
         </button>
       </PageHead>
       {!hw && !failed && <p className="muted">{t('Looking for the cards and the signal of their inputs…')}</p>}
@@ -86,15 +124,30 @@ export function Hardware() {
       )}
       {hw && hw.gstreamer && hw.driver && hw.cards.length === 0 && (
         <Card icon={<Cpu size={16} />} title={t('Blackmagic DeckLink cards')}>
-          <p className="muted">{t('The driver sees no card. Is it in place, and in a virtual machine passed through to it? After installing the driver, the server must be restarted.')}</p>
+          <p className="muted">{t('The driver sees no card. Is it in place, and in a virtual machine passed through to it? After installing the driver, the server must be restarted.')} {t('Then use “Search for cards”.')}</p>
         </Card>
       )}
       {hw?.cards.map((c, i) => (
         <Card
           key={`${c.model}-${c.serial}-${i}`}
+          className={c.present === false ? 'hw-absent' : undefined}
           icon={<Cpu size={16} />}
           title={<CardName card={c} onSaved={() => void load()} />}
-          actions={<span className="muted mono">{[c.serial && t('Serial {s}', { s: c.serial }), hw.driverVersion && `Desktop Video ${hw.driverVersion}`].filter(Boolean).join(' · ')}</span>}
+          actions={
+            <>
+              {c.present === false && (
+                <>
+                  <span className="hw-badge" data-tip={t('Adopted: the driver did not list it at the last search. Its recorders wait for it.')}>
+                    {t('Not detected')}
+                  </span>
+                  <button type="button" className="btn small ghost" onClick={() => void forget(c)}>
+                    <Trash2 size={13} /> {t('Forget')}
+                  </button>
+                </>
+              )}
+              <span className="muted mono">{[c.serial && t('Serial {s}', { s: c.serial }), hw.driverVersion && `Desktop Video ${hw.driverVersion}`].filter(Boolean).join(' · ')}</span>
+            </>
+          }
         >
           <CardPicture card={c} />
           <div className="hw-ports">
@@ -264,7 +317,7 @@ function CardPicture({ card }: { card: CaptureCard }) {
                   {t('Input {n}', { n: c.input! + 1 })}
                 </text>
                 <text className={`hw-cap2 ${port.state}`} x={middle(c.input!)} y={plateH + plateY + 54} textAnchor="middle">
-                  {port.state === 'signal' ? formatName(port.format, lang() === 'fr') || t('Signal') : port.state === 'nosignal' ? '—' : port.state === 'busy' ? t('Busy') : '…'}
+                  {port.state === 'signal' ? formatName(port.format, lang() === 'fr') || t('Signal') : port.state === 'nosignal' ? '—' : port.state === 'busy' ? t('Busy') : port.state === 'absent' ? '×' : '…'}
                 </text>
               </>
             )}

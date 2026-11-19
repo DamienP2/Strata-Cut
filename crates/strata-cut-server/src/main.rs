@@ -258,6 +258,8 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     let events = Events::new(256);
     let first = config::ServerConfig::load(&data_dir);
     let recorders = recorder::Manager::start(&data_dir, &first, events.clone());
+    // The capture cards are searched once now (then only when asked, in Système › Matériel).
+    tokio::spawn(recorder::decklink::search_at_start(data_dir.clone()));
     let clips = clips::Clips::start(&data_dir, &first, events.clone(), recorders.clone());
     loop {
         let config = config::ServerConfig::load(&data_dir);

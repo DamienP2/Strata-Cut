@@ -983,3 +983,7 @@ a.btn { color: inherit; }
 .sc-transport .sc-live-go, .sc-transport .sc-live-on { flex: none; margin-left: auto; }
 .sc-xbtn.busy, .sc-xbtn.busy:hover:not(:disabled) { background: var(--panel-3); color: var(--text); border-color: var(--accent); }
 .sc-xbtn.busy:hover:not(:disabled) { background: var(--accent-soft); }
+/* Système › Matériel: an adopted card the driver did not list at the last search. */
+.hw-absent .hw-card, .hw-absent .hw-ports { opacity: 0.55; }
+.hw-badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--warn); color: var(--warn); white-space: nowrap; }
+.hw-port.absent .hw-dot { background: transparent; border: 1px solid var(--text-3); }

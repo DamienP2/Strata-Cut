@@ -157,15 +157,90 @@ pub async fn status(data_dir: &Path) -> Value {
 }
 
 /// One input of a card, as the driver shows it (a GStreamer device).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Input {
     /// GStreamer's device number (the recorder's `device`).
     pub number: u32,
     /// "DeckLink Duo (2)".
     pub name: String,
     /// The card's serial number, when the driver gives it (the inputs of a card share it).
+    #[serde(default)]
     pub serial: String,
+    #[serde(default)]
     pub persistent_id: Option<i64>,
+}
+
+/// The cards adopted: every input seen once is kept (`hardware-cards.json`), shown even when the
+/// driver does not list it for a moment, until it is forgotten (Système › Matériel).
+fn adopted_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("hardware-cards.json")
+}
+
+fn adopted(data_dir: &Path) -> Vec<Input> {
+    crate::paths::read_json(&adopted_path(data_dir)).unwrap_or_default()
+}
+
+/// The inputs the last search found (`None`: not searched yet since the server started).
+static FOUND: tokio::sync::Mutex<Option<Vec<Input>>> = tokio::sync::Mutex::const_new(None);
+
+/// Adds what a search found to the adopted inputs: a known input (same name, same serial) takes
+/// its new number; an absent one whose number another input now has is dropped.
+fn adopt(known: &[Input], found: &[Input]) -> Vec<Input> {
+    let same = |a: &Input, b: &Input| a.name == b.name && a.serial == b.serial;
+    let mut all: Vec<Input> = known.iter().filter(|a| found.iter().any(|f| same(a, f)) || !found.iter().any(|f| f.number == a.number)).cloned().collect();
+    for f in found {
+        match all.iter_mut().find(|a| same(a, f)) {
+            Some(a) => *a = f.clone(),
+            None => all.push(f.clone()),
+        }
+    }
+    all.sort_by_key(|i| i.number);
+    all
+}
+
+/// The adopted inputs and the numbers of those the driver lists. The cards are searched once
+/// after the server starts, then only when asked (`search`): not all the time.
+async fn inputs(data_dir: &Path, search: bool) -> (Vec<Input>, Vec<u32>) {
+    let mut found = FOUND.lock().await;
+    if search || found.is_none() {
+        let gst = tokio::process::Command::new("gst-inspect-1.0").arg("decklinkvideosrc").stdin(std::process::Stdio::null()).output();
+        let module = matches!(tokio::time::timeout(Duration::from_secs(10), gst).await, Ok(Ok(o)) if o.status.success());
+        let list = if module && driver_installed() { list_inputs().await } else { Vec::new() };
+        let known = adopted(data_dir);
+        let all = adopt(&known, &list);
+        if all != known {
+            if let Err(e) = crate::paths::write_json(&adopted_path(data_dir), &all, false) {
+                tracing::warn!("decklink: cannot keep the cards adopted: {e}");
+            }
+        }
+        tracing::info!("decklink: {} input(s) found, {} adopted", list.len(), all.len());
+        *found = Some(list);
+    }
+    let here = found.as_ref().map(|l| l.iter().map(|i| i.number).collect()).unwrap_or_default();
+    (adopted(data_dir), here)
+}
+
+/// The search made once after the server starts.
+pub async fn search_at_start(data_dir: PathBuf) {
+    let _ = inputs(&data_dir, false).await;
+}
+
+/// Forgets a card that is not there any more (its inputs leave the adopted ones).
+pub async fn forget(data_dir: &Path, key: &str) -> Result<(), String> {
+    let (all, here) = inputs(data_dir, false).await;
+    let keys = card_keys(&all);
+    let gone: Vec<u32> = all.iter().filter(|i| keys[&i.number] == key).map(|i| i.number).collect();
+    if gone.is_empty() {
+        return Err("unknown card".into());
+    }
+    if gone.iter().any(|n| here.contains(n)) {
+        return Err("this card is there: it cannot be forgotten".into());
+    }
+    let left: Vec<Input> = all.into_iter().filter(|i| !gone.contains(&i.number)).collect();
+    crate::paths::write_json(&adopted_path(data_dir), &left, false).map_err(|e| e.to_string())?;
+    *SNAPSHOT.lock().unwrap() = None;
+    Ok(())
 }
 
 /// The cards GStreamer sees (its device monitor).
@@ -176,10 +251,11 @@ async fn list_inputs() -> Vec<Input> {
     parse_monitor(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// The cards' inputs for the recorder's form: each with its card (the name given to it, else
-/// its model) and its rank on that card.
+/// The cards' inputs for the recorder's form (the adopted ones): each with its card (the name
+/// given to it, else its model), its rank on that card, and whether the driver lists it now.
 async fn list(data_dir: &Path) -> Vec<Value> {
-    let inputs = list_inputs().await;
+    // Every adopted input: one the driver did not list this time is still offered.
+    let (inputs, here) = inputs(data_dir, false).await;
     let names = names(data_dir);
     let keys = card_keys(&inputs);
     let mut rank: std::collections::HashMap<String, u32> = Default::default();
@@ -191,7 +267,7 @@ async fn list(data_dir: &Path) -> Vec<Value> {
             let key = keys[&i.number].clone();
             let k = rank.entry(key.clone()).or_insert(0);
             *k += 1;
-            json!({ "number": i.number, "name": i.name, "card": names.get(&key).cloned().unwrap_or_else(|| model_of(&i.name)), "input": *k })
+            json!({ "number": i.number, "name": i.name, "card": names.get(&key).cloned().unwrap_or_else(|| model_of(&i.name)), "input": *k, "present": here.contains(&i.number) })
         })
         .collect()
 }
@@ -265,9 +341,7 @@ pub async fn set_name(data_dir: &Path, key: &str, name: &str) -> Result<(), Stri
     } else {
         all.insert(key.to_string(), name.to_string());
     }
-    crate::paths::write_json(&names_path(data_dir), &all, false).map_err(|e| e.to_string())?;
-    *HARDWARE.lock().await = None;
-    Ok(())
+    crate::paths::write_json(&names_path(data_dir), &all, false).map_err(|e| e.to_string())
 }
 
 /// Reads gst-device-monitor's report: each "Device found" block, its name, its properties
@@ -381,27 +455,69 @@ pub async fn preview(number: u32, connection: &str, mode: &str) -> Option<(Vec<u
     Some((jpeg?, caps_mode(&text).unwrap_or_default()))
 }
 
-/// What a free input receives now: (signal, format). A short capture with the format detected
-/// by the card: no picture within a few seconds is no signal. `None`: busy (another program).
+/// What a free input receives now: (signal, format). A short capture: the card tells whether it
+/// has a signal (its `signal` property) and the format it detects; a frame that comes through
+/// (frames without signal are dropped) is a signal too. `None`: busy (another program).
 async fn probe(number: u32) -> Option<(bool, String)> {
+    use tokio::io::AsyncBufReadExt;
     let lock = input_lock(number);
     let _one = lock.lock().await;
-    // Frames without signal (black, in a default format) are dropped: only a real picture counts.
-    let args = [GST_LAUNCH, "-v", "decklinkvideosrc", &format!("device-number={number}"), "mode=auto", "drop-no-signal-frames=true", "num-buffers=1", "!", "fakesink", "sync=false"];
-    let run = tokio::process::Command::new(args[0]).args(&args[1..]).stdin(std::process::Stdio::null()).kill_on_drop(true).output();
-    let out = match tokio::time::timeout(Duration::from_secs(4), run).await {
-        Ok(Ok(o)) => o,
-        // Still waiting for a picture: no signal.
-        _ => return Some((false, String::new())),
-    };
-    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-    if text.contains("Failed to acquire input") || text.contains("has no input") {
+    let args = ["-v", "decklinkvideosrc", &format!("device-number={number}"), "mode=auto", "drop-no-signal-frames=true", "num-buffers=1", "!", "fakesink", "sync=false"];
+    let spawn = tokio::process::Command::new(GST_LAUNCH)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn();
+    let Ok(mut child) = spawn else { return Some((false, String::new())) };
+    let mut out = tokio::io::BufReader::new(child.stdout.take()?).lines();
+    let mut err = tokio::io::BufReader::new(child.stderr.take()?).lines();
+    let (mut out_done, mut err_done) = (false, false);
+    let (mut signal, mut format) = (None::<bool>, String::new());
+    // The card takes a few seconds to start and detect the format.
+    let deadline = tokio::time::sleep(Duration::from_secs(8));
+    tokio::pin!(deadline);
+    let mut ended = false;
+    while !(out_done && err_done) {
+        let line = tokio::select! {
+            l = out.next_line(), if !out_done => match l { Ok(Some(l)) => l, _ => { out_done = true; continue } },
+            l = err.next_line(), if !err_done => match l { Ok(Some(l)) => l, _ => { err_done = true; continue } },
+            _ = &mut deadline => break,
+        };
+        if line.contains("Failed to acquire input") || line.contains("has no input") {
+            return None;
+        }
+        if let Some(on) = signal_property(&line).or_else(|| self::signal(&line)) {
+            signal = Some(on);
+        }
+        if let Some(f) = caps_mode(&line) {
+            format = f;
+        }
+        if line.contains("Got EOS") {
+            ended = true;
+        }
+    }
+    if out_done && err_done {
+        // The frame asked for came through: a real picture.
+        ended |= matches!(tokio::time::timeout(Duration::from_secs(1), child.wait()).await, Ok(Ok(s)) if s.success());
+    }
+    let on = signal.unwrap_or(false) || (ended && signal != Some(false));
+    Some((on, if on { format } else { String::new() }))
+}
+
+/// The card's `signal` property, as `gst-launch -v` prints its changes:
+/// "/GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: signal = true".
+fn signal_property(line: &str) -> Option<bool> {
+    let (who, what) = line.trim().rsplit_once(": ")?;
+    if !who.contains("ecklinkVideoSrc") && !who.contains("decklinkvideosrc") {
         return None;
     }
-    if text.contains("Signal lost") {
-        return Some((false, String::new()));
+    match what.trim() {
+        "signal = true" => Some(true),
+        "signal = false" => Some(false),
+        _ => None,
     }
-    Some(caps_mode(&text).map_or((false, String::new()), |m| (true, m)))
 }
 
 /// The format in the caps GStreamer prints (`-v`): "video/x-raw, …, width=(int)1920, height=(int)1080, interlace-mode=(string)interleaved, framerate=(fraction)25/1".
@@ -443,37 +559,127 @@ async fn driver_version() -> String {
     }
 }
 
-/// The last report (probing the inputs takes a few seconds: one at a time, kept 5 s).
-static HARDWARE: tokio::sync::Mutex<Option<(std::time::Instant, Value)>> = tokio::sync::Mutex::const_new(None);
+/// The last report on the cards and their inputs, and when it was made: Système › Matériel shows
+/// it at once; a newer one is made in the background (probing the free inputs takes seconds).
+static SNAPSHOT: std::sync::Mutex<Option<(std::time::Instant, Value)>> = std::sync::Mutex::new(None);
+static REFRESHING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Système › Matériel: the cards, each with its inputs: signal, format, the recorder using it.
-pub async fn hardware(m: &super::Manager) -> Value {
-    let mut cache = HARDWARE.lock().await;
-    if let Some((at, v)) = cache.as_ref() {
-        if at.elapsed() < Duration::from_secs(5) {
-            return v.clone();
+/// Système › Matériel: the cards adopted, each with its inputs: signal, format, the recorder
+/// using it. `search`: look for new cards (else, only once after the server starts).
+pub async fn hardware(m: &std::sync::Arc<super::Manager>, search: bool) -> Value {
+    let last = SNAPSHOT.lock().unwrap().clone();
+    let v = match last {
+        // The first time: the cards at once, their free inputs being checked.
+        None if !search => {
+            let v = report(m, false, false).await;
+            if !REFRESHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let m = m.clone();
+                tokio::spawn(async move {
+                    refresh(&m, false).await;
+                    REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
+                });
+            }
+            v
+        }
+        Some((at, v)) if !search => {
+            if at.elapsed() > Duration::from_secs(10) && !REFRESHING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let m = m.clone();
+                tokio::spawn(async move {
+                    refresh(&m, false).await;
+                    REFRESHING.store(false, std::sync::atomic::Ordering::SeqCst);
+                });
+            }
+            v
+        }
+        _ => refresh(m, search).await,
+    };
+    live(with_names(v, m.data_dir()), m)
+}
+
+/// The signal of an input a recorder uses: the recorder knows it at once (the card tells it when
+/// the signal goes and comes back). `None`: no recorder running on it.
+fn running_state(m: &super::Manager, number: u32) -> Option<(&'static str, String)> {
+    let r = m.recs().into_iter().find(|r| r.config().protocol == super::Protocol::Decklink && r.config().device == number)?;
+    let s = r.status.lock().unwrap().clone();
+    match s.state {
+        super::State::Recording => Some(("signal", s.media.as_ref().map(|md| mode_of(md.width, md.height, md.interlaced, md.fps_num, md.fps_den)).unwrap_or_default())),
+        super::State::Nosignal => Some(("nosignal", String::new())),
+        super::State::Starting => Some(("unknown", String::new())),
+        _ => None,
+    }
+}
+
+/// The inputs recorders use, as they are now (the report may be a few seconds old).
+fn live(mut v: Value, m: &super::Manager) -> Value {
+    if let Some(cards) = v.get_mut("cards").and_then(|c| c.as_array_mut()) {
+        for port in cards.iter_mut().filter_map(|c| c.get_mut("inputs").and_then(|i| i.as_array_mut())).flatten() {
+            let Some(n) = port["number"].as_u64() else { continue };
+            if port["state"] == "absent" {
+                continue;
+            }
+            if let Some((state, format)) = running_state(m, n as u32) {
+                port["state"] = json!(state);
+                port["format"] = json!(format);
+                if let Some(r) = port.get_mut("recorder").filter(|r| r.is_object()) {
+                    r["running"] = json!(true);
+                }
+            }
         }
     }
-    let gst = tokio::process::Command::new("gst-inspect-1.0").arg("decklinkvideosrc").output();
+    v
+}
+
+/// The names given to the cards, at the time of asking (a new name shows at once).
+fn with_names(mut v: Value, data_dir: &Path) -> Value {
+    let names = names(data_dir);
+    if let Some(cards) = v.get_mut("cards").and_then(|c| c.as_array_mut()) {
+        for c in cards {
+            let name = c["key"].as_str().and_then(|k| names.get(k)).cloned().unwrap_or_default();
+            c["name"] = json!(name);
+        }
+    }
+    v
+}
+
+async fn refresh(m: &super::Manager, search: bool) -> Value {
+    let _one = REFRESH.lock().await;
+    // Made while this one waited.
+    if !search {
+        if let Some((at, v)) = SNAPSHOT.lock().unwrap().as_ref() {
+            if at.elapsed() < Duration::from_secs(3) {
+                return v.clone();
+            }
+        }
+    }
+    let v = report(m, search, true).await;
+    *SNAPSHOT.lock().unwrap() = Some((std::time::Instant::now(), v.clone()));
+    v
+}
+
+/// `probe`: probe the free inputs (else they are "checking").
+async fn report(m: &super::Manager, search: bool, probe_them: bool) -> Value {
+    let gst = tokio::process::Command::new("gst-inspect-1.0").arg("decklinkvideosrc").stdin(std::process::Stdio::null()).output();
     let module = matches!(tokio::time::timeout(Duration::from_secs(10), gst).await, Ok(Ok(o)) if o.status.success());
     let driver = driver_installed();
-    let inputs = if module && driver { list_inputs().await } else { Vec::new() };
+    let (inputs, here) = inputs(m.data_dir(), search).await;
     // The recorders on each input: a running one tells its signal and format itself.
     let recs: Vec<_> = m.recs().into_iter().filter(|r| r.config().protocol == super::Protocol::Decklink).collect();
     let running_of = |n: u32| {
         recs.iter().find(|r| r.config().device == n).map(|r| r.status.lock().unwrap().clone()).filter(|s| matches!(s.state, super::State::Recording | super::State::Nosignal | super::State::Starting))
     };
-    // The free inputs are probed all at once (a few seconds each when there is no signal).
+    // The free inputs that are there are probed all at once (a few seconds without signal).
     let mut probes = tokio::task::JoinSet::new();
-    for input in inputs.iter().filter(|i| running_of(i.number).is_none()) {
-        let n = input.number;
-        probes.spawn(async move { (n, probe(n).await) });
+    if module && driver && probe_them {
+        for input in inputs.iter().filter(|i| here.contains(&i.number) && running_of(i.number).is_none()) {
+            let n = input.number;
+            probes.spawn(async move { (n, probe(n).await) });
+        }
     }
     let mut probed = std::collections::HashMap::new();
     while let Some(Ok((n, p))) = probes.join_next().await {
         probed.insert(n, p);
     }
-    let names = names(m.data_dir());
     let keys = card_keys(&inputs);
     let mut ordered: Vec<&Input> = inputs.iter().collect();
     ordered.sort_by(|a, b| connector_order(a, b));
@@ -487,6 +693,8 @@ pub async fn hardware(m: &super::Manager) -> Value {
             Some(s) if s.state == super::State::Recording => ("signal", s.media.as_ref().map(|md| mode_of(md.width, md.height, md.interlaced, md.fps_num, md.fps_den)).unwrap_or_default()),
             Some(s) if s.state == super::State::Nosignal => ("nosignal", String::new()),
             Some(_) => ("unknown", String::new()),
+            None if !here.contains(&input.number) => ("absent", String::new()),
+            None if !probe_them => ("checking", String::new()),
             None => match probed.get(&input.number).cloned().flatten() {
                 Some((true, f)) => ("signal", f),
                 Some((false, _)) => ("nosignal", String::new()),
@@ -511,12 +719,11 @@ pub async fn hardware(m: &super::Manager) -> Value {
         .map(|(key, model, ports)| {
             // Already in the order of the connectors.
             let serial = key.strip_prefix(&model).map(|s| s.trim()).filter(|s| !s.is_empty()).map(|s| format!("{s}x")).unwrap_or_default();
-            json!({ "key": key, "name": names.get(&key).cloned().unwrap_or_default(), "model": model, "serial": serial, "connector": connector_of(&model), "inputs": ports })
+            let present = ports.iter().any(|p| p["state"] != "absent");
+            json!({ "key": key, "name": "", "model": model, "serial": serial, "connector": connector_of(&model), "present": present, "inputs": ports })
         })
         .collect();
-    let v = json!({ "gstreamer": module, "driver": driver, "driverVersion": if driver { driver_version().await } else { String::new() }, "cards": cards, "pci": pci_devices().await });
-    *cache = Some((std::time::Instant::now(), v.clone()));
-    v
+    json!({ "gstreamer": module, "driver": driver, "driverVersion": if driver { driver_version().await } else { String::new() }, "cards": cards, "pci": pci_devices().await, "at": super::now_ms() })
 }
 
 #[cfg(test)]
@@ -590,6 +797,20 @@ mod tests {
         // Numbers that share nothing: still one card of that model.
         let odd: Vec<Input> = (0..4).map(|k| Input { number: k, name: format!("DeckLink Duo ({})", k + 1), serial: format!("{}ab", k * 7), persistent_id: None }).collect();
         assert!(card_keys(&odd).values().all(|k| k == "DeckLink Duo"));
+        // Adopted: an input not listed this time stays; one that moved takes its new number.
+        let adopted = adopt(&quad, &quad[..3]);
+        assert_eq!(adopted.len(), 8);
+        let moved = Input { number: 9, ..quad[7].clone() };
+        let again = adopt(&adopted, &[moved.clone()]);
+        assert_eq!(again.len(), 8);
+        assert!(again.contains(&moved) && !again.iter().any(|i| i.number == 7));
+        // Another card on the number of an absent one: the absent one goes.
+        let other = Input { number: 0, name: "DeckLink Mini Recorder".into(), serial: String::new(), persistent_id: None };
+        let mixed = adopt(&again, &[other.clone()]);
+        assert!(mixed.contains(&other) && mixed.iter().filter(|i| i.number == 0).count() == 1);
+        assert_eq!(signal_property("/GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: signal = true"), Some(true));
+        assert_eq!(signal_property("/GstPipeline:pipeline0/GstDecklinkVideoSrc:decklinkvideosrc0: signal = false"), Some(false));
+        assert_eq!(signal_property("/GstPipeline:pipeline0/GstFakeSink:fakesink0: signal = true"), None);
         assert_eq!(model_of("Intensity Pro 4K"), "Intensity Pro 4K");
         assert_eq!(connector_of("Intensity Pro 4K"), "hdmi");
         assert_eq!(connector_of("DeckLink Quad 2"), "sdi");
