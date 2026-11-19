@@ -1,7 +1,7 @@
 // The app's own data, as the server sends it.
 
-export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'web' | 'decklink';
-export const PROTOCOLS: Protocol[] = ['udp', 'rtp', 'rtmp', 'srt', 'web'];
+export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'hls' | 'web' | 'decklink';
+export const PROTOCOLS: Protocol[] = ['udp', 'rtp', 'rtmp', 'srt', 'hls', 'web'];
 
 /** A recorder's settings. */
 export interface Recorder {

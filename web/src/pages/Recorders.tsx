@@ -20,6 +20,7 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'rtp', label: 'RTP', detail: 'rtp://' },
   { value: 'rtmp', label: 'RTMP', detail: 'rtmp://' },
   { value: 'srt', label: 'SRT', detail: 'srt://' },
+  { value: 'hls', label: 'HLS stream', detail: '.m3u8' },
   { value: 'web', label: 'YouTube', detail: 'youtube.com' },
   { value: 'decklink', label: 'Hardware inputs', detail: 'SDI · HDMI' },
 ];
@@ -479,7 +480,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label={t('Source')} group>
-            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}) })} />
+            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' || v === 'hls' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}) })} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
             <Field label={t('Mode')} group>
@@ -508,7 +509,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
               </Field>
             </>
           ) : (
-            <Field label={web ? t('Address of the live') : t('Address')} hint={web && c.url.startsWith('http') && platformOf(c.url) !== 'youtube' ? <span className="sc-warn-text">{t('Only YouTube lives are recorded.')}</span> : undefined}>
+            <Field label={web ? t('Address of the live') : c.protocol === 'hls' ? t('Address of the playlist (.m3u8)') : t('Address')} hint={web && c.url.startsWith('http') && platformOf(c.url) !== 'youtube' ? <span className="sc-warn-text">{t('Only YouTube lives are recorded.')}</span> : undefined}>
               <input value={c.url} placeholder={placeholder} spellCheck={false} onChange={(e) => set({ url: e.target.value })} />
             </Field>
           )}
@@ -803,7 +804,7 @@ interface Probe {
 
 /** The source as written can be tried: an address of its kind, a caller (a listening one waits for its source). */
 /** How each source's address is written (shown in its field). */
-const PLACEHOLDERS: Record<Protocol, string> = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', web: 'https://www.youtube.com/watch?v=…', decklink: '' };
+const PLACEHOLDERS: Record<Protocol, string> = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', hls: 'https://server/live/stream.m3u8', web: 'https://www.youtube.com/watch?v=…', decklink: '' };
 
 /** The address as written, made usable: no spaces around it, the scheme added when left out
  * ("1.2.3.4:9000" → "srt://1.2.3.4:9000") or written in capitals. */
@@ -813,13 +814,14 @@ export function cleaned(c: Recorder): Recorder {
   if (c.protocol === 'decklink' || c.protocol === 'web') return { ...c, url };
   if (!url) return c;
   const m = /^([a-z0-9]+):\/\//i.exec(url);
-  return { ...c, url: m ? m[1].toLowerCase() + url.slice(m[1].length) : `${c.protocol}://${url}` };
+  return { ...c, url: m ? m[1].toLowerCase() + url.slice(m[1].length) : `${c.protocol === 'hls' ? 'https' : c.protocol}://${url}` };
 }
 
 function triable(c: Recorder): boolean {
   if (c.protocol === 'decklink') return false;
   if ((c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener') return false;
   if (c.protocol === 'web') return /^https?:\/\/\S+\.\S+/.test(c.url) && platformOf(c.url) === 'youtube';
+  if (c.protocol === 'hls') return /^https?:\/\/\S+\.\S+/.test(c.url);
   return new RegExp(`^${c.protocol}://\\S+`).test(c.url) && /[:.]/.test(c.url.slice(c.protocol.length + 3));
 }
 

@@ -105,6 +105,7 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                             Protocol::Srt if cfg.mode == Mode::Caller => diagnosis.clone(),
                             Protocol::Udp | Protocol::Rtp => udp_reason(&message),
                             Protocol::Web if message.starts_with("web: ") => message.clone(),
+                            Protocol::Hls => hls_reason(&message),
                             _ => String::new(),
                         };
                         // Why, in the journal: at the first failure, then every tenth.
@@ -244,11 +245,38 @@ pub fn input_args(c: &RecorderConfig) -> Vec<String> {
         }
         // Read from the page before each recording (super::web).
         Protocol::Web => c.url.clone(),
+        // The playlist, read again by FFmpeg as it grows; a server silent for 20 s ends the reading.
+        Protocol::Hls => {
+            a.extend(["-rw_timeout".into(), "20000000".into()]);
+            c.url.clone()
+        }
         // GStreamer's named pipe, made for each recording (record_once).
         Protocol::Decklink => String::new(),
     };
     a.extend(["-i".into(), url]);
     a
+}
+
+/// Why an HLS stream cannot be read, from FFmpeg's last words: what its server answered.
+pub(super) fn hls_reason(message: &str) -> String {
+    if let Some(i) = message.find("Server returned ") {
+        let answer = &message[i + "Server returned ".len()..];
+        return if answer.starts_with("404") {
+            "hls: no stream at this address (404)"
+        } else if answer.starts_with("401") || answer.starts_with("403") {
+            "hls: the server refuses to give the stream (access denied)"
+        } else {
+            "hls: the server answers with an error"
+        }
+        .into();
+    }
+    if ["Connection refused", "Connection timed out", "Name or service not known", "Failed to resolve", "No route to host"].iter().any(|k| message.contains(k)) {
+        return "hls: no answer from the server (address or network)".into();
+    }
+    if message.contains("Invalid data found") {
+        return "hls: this address is not an hls playlist (.m3u8)".into();
+    }
+    String::new()
 }
 
 fn urlencode(s: &str) -> String {
@@ -1196,6 +1224,19 @@ mod tests {
         let mut c = cfg(Protocol::Srt, Mode::Listener);
         c.passphrase = "secret pass&1".into();
         assert_eq!(input_args(&c).last().unwrap(), "srt://0.0.0.0:9000?mode=listener&latency=120000&passphrase=secret%20pass%261");
+        let mut c = cfg(Protocol::Hls, Mode::Caller);
+        c.url = "https://cdn.example/live/index.m3u8".into();
+        assert_eq!(input_args(&c), vec!["-rw_timeout", "20000000", "-i", "https://cdn.example/live/index.m3u8"]);
+        assert!(c.validate().is_ok());
+        c.url = "cdn.example/live/index.m3u8".into();
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn hls_reasons() {
+        assert_eq!(hls_reason("[https @ 0x1] HTTP error 404 Not Found\nError opening input files: Server returned 404 Not Found"), "hls: no stream at this address (404)");
+        assert_eq!(hls_reason("Error opening input files: Invalid data found when processing input"), "hls: this address is not an hls playlist (.m3u8)");
+        assert_eq!(hls_reason("something else"), "");
     }
 
     #[test]

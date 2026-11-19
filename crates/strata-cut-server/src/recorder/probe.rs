@@ -156,6 +156,9 @@ async fn run(m: &Manager, c: &RecorderConfig) -> Result<Value, String> {
         // Nothing came (FFmpeg only says its input could not be read): said plainly.
         let silent = ["Input/output error", "timed out", "Error opening input", "Connection timed out", "End of file"].iter().any(|k| why.contains(k));
         let why = if timed_out || silent { String::new() } else { why };
+        // HLS: what its server answered, said plainly.
+        let hls = if c.protocol == Protocol::Hls { super::run::hls_reason(&text) } else { String::new() };
+        let why = if hls.is_empty() { why } else { hls };
         return Err(if why.is_empty() { "nothing received from this source".into() } else { why });
     }
     let still = (jpeg.len() > 100).then(|| format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&jpeg)));

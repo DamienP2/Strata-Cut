@@ -77,6 +77,8 @@ pub enum Protocol {
     Srt,
     /// A YouTube live, read with yt-dlp.
     Web,
+    /// An HLS stream: its playlist's address (http(s)://….m3u8), read by FFmpeg.
+    Hls,
     /// An input of a Blackmagic DeckLink card (SDI, HDMI…), captured with Blackmagic's SDK.
     Decklink,
 }
@@ -188,10 +190,14 @@ impl RecorderConfig {
             Protocol::Rtp => "rtp://",
             Protocol::Rtmp => "rtmp://",
             Protocol::Srt => "srt://",
-            Protocol::Web => "https://",
+            Protocol::Web | Protocol::Hls => "https://",
             Protocol::Decklink => return decklink::validate(self),
         };
-        if self.protocol == Protocol::Web {
+        if self.protocol == Protocol::Hls {
+            if !self.url.starts_with("https://") && !self.url.starts_with("http://") {
+                return Err("the address of the stream starts with https://".into());
+            }
+        } else if self.protocol == Protocol::Web {
             if !self.url.starts_with("https://") && !self.url.starts_with("http://") {
                 return Err("the address of the page starts with https://".into());
             }
