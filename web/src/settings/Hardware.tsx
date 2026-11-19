@@ -6,6 +6,7 @@ import { lang, t, tn } from '../i18n';
 import { formatName } from '../tc';
 import { navigate } from '../router';
 import { PageHead } from '../pages/SidePage';
+import { modelOf, type ConnKind } from './decklinkModels';
 import { Card } from './ui';
 
 type PortState = 'signal' | 'nosignal' | 'busy' | 'unknown';
@@ -17,7 +18,7 @@ interface Port {
   state: PortState;
   /** "1080i50", "720p5994", "pal" (empty when not known). */
   format: string;
-  recorder: { id: string; name: string; running: boolean } | null;
+  recorder: { id: string; name: string; running: boolean; connection: string } | null;
 }
 
 interface CaptureCard {
@@ -88,7 +89,7 @@ export function Hardware() {
         <Card
           key={`${c.model}-${c.serial}-${i}`}
           icon={<Cpu size={16} />}
-          title={c.model}
+          title={modelOf(c.model, c.inputs.length, c.connector === 'hdmi').name}
           actions={<span className="muted mono">{[c.serial && t('Serial {s}', { s: c.serial }), hw.driverVersion && `Desktop Video ${hw.driverVersion}`].filter(Boolean).join(' · ')}</span>}
         >
           <CardPicture card={c} />
@@ -127,53 +128,107 @@ export function Hardware() {
   );
 }
 
-/** The card drawn simply: its board, its connector and its bracket, each input with its signal. */
+const CONN_LABEL: Record<ConnKind, string> = { sdi: 'SDI', 'sdi-out': 'SDI OUT', hdmi: 'HDMI', 'hdmi-out': 'HDMI OUT', ref: 'REF', optical: 'OPTICAL', sfp: 'SFP', analog: 'ANALOG' };
+
+/**
+ * The device drawn simply, as its model is made: a full-height or low-profile PCIe card (board,
+ * PCI Express connector, bracket) or an external box, with its connectors in order. Each input
+ * connector shows its sub-device's signal; outputs, reference and analogue stay grey.
+ */
 function CardPicture({ card }: { card: CaptureCard }) {
-  const n = card.inputs.length;
-  const step = 40;
-  const h = Math.max(150, 56 + n * step);
-  const boardH = h - 34;
-  const first = 12 + boardH / 2 - ((n - 1) * step) / 2;
-  const hdmi = card.connector === 'hdmi';
+  const model = modelOf(card.model, card.inputs.length, card.connector === 'hdmi');
+  const conns = model.connectors;
+  const step = 36;
+  const box = model.form === 'box';
+  const low = model.form === 'low';
+  const bodyH = Math.max(low ? 140 : 150, 40 + conns.length * step);
+  const h = bodyH + (box ? 16 : 34);
+  const first = 12 + bodyH / 2 - ((conns.length - 1) * step) / 2;
+  const boardW = low ? 250 : 340;
+  const boardX = 356 - boardW;
+  // The input connectors of a sub-device: several (SDI and HDMI of a Mini Recorder) say which one.
+  const perInput = (i: number) => conns.filter((c) => c.input === i).length;
   return (
-    <svg className="hw-card" viewBox={`0 0 640 ${h}`} role="img" aria-label={card.model}>
-      {/* The board, its chip and its PCI Express connector. */}
-      <rect className="hw-board" x={16} y={12} width={340} height={boardH} rx={8} />
-      <rect className="hw-chip" x={140} y={12 + boardH / 2 - 26} width={64} height={52} rx={4} />
-      <text className="hw-chip-t" x={172} y={12 + boardH / 2 + 4} textAnchor="middle">
-        BMD
-      </text>
-      {Array.from({ length: 20 }, (_, i) => (
-        <rect key={i} className="hw-finger" x={60 + i * 9} y={12 + boardH} width={6} height={12} rx={1} />
-      ))}
-      <text className="hw-model" x={28} y={32}>
-        {card.model}
-      </text>
-      {/* The bracket and the inputs on it. */}
-      <rect className="hw-bracket" x={356} y={4} width={18} height={boardH + 16} rx={2} />
-      {card.inputs.map((p, k) => {
+    <svg className="hw-card" viewBox={`0 0 680 ${h}`} role="img" aria-label={model.name}>
+      {box ? (
+        <>
+          <rect className="hw-box" x={boardX} y={12} width={boardW} height={bodyH} rx={14} />
+          <text className="hw-model" x={boardX + 18} y={36}>
+            {model.name}
+          </text>
+          <text className="hw-chip-t" x={boardX + 18} y={12 + bodyH - 16}>
+            Thunderbolt / USB
+          </text>
+        </>
+      ) : (
+        <>
+          <rect className="hw-board" x={boardX} y={12 + (low ? 20 : 0)} width={boardW} height={bodyH - (low ? 20 : 0)} rx={8} />
+          {/* The chip at the bottom right, under the model's name. */}
+          <rect className="hw-chip" x={boardX + boardW - 104} y={12 + bodyH - 72} width={64} height={52} rx={4} />
+          <text className="hw-chip-t" x={boardX + boardW - 72} y={12 + bodyH - 42} textAnchor="middle">
+            BMD
+          </text>
+          {Array.from({ length: low ? 12 : 20 }, (_, i) => (
+            <rect key={i} className="hw-finger" x={boardX + 40 + i * 9} y={12 + bodyH} width={6} height={12} rx={1} />
+          ))}
+          <text className="hw-model" x={boardX + 12} y={32 + (low ? 20 : 0)}>
+            {model.name}
+          </text>
+        </>
+      )}
+      {!box && <rect className="hw-bracket" x={356} y={4} width={18} height={bodyH + 16} rx={2} />}
+      {conns.map((c, k) => {
         const y = first + k * step;
+        const port = c.input !== undefined ? card.inputs[c.input] : undefined;
+        // An input used by a recorder on one of its connectors only: the other one stays grey.
+        const chosen = port?.recorder?.connection;
+        const active = port && (perInput(c.input!) === 1 || !chosen || chosen === 'auto' || chosen === c.kind);
+        const state = port ? (active ? port.state : 'idle') : 'idle';
+        const title = port ? `${t('Input {n}', { n: c.input! + 1 })}${perInput(c.input!) > 1 ? ` · ${CONN_LABEL[c.kind]}` : ''}` : CONN_LABEL[c.kind];
         return (
-          <g key={p.number} className={`hw-in ${p.state}`}>
-            {hdmi ? (
-              <path className="hw-conn" d={`M352 ${y - 7} h26 l-4 14 h-18 z`} />
-            ) : (
+          <g key={k} className={`hw-in ${state} ${port ? '' : 'other'}`}>
+            <Conn kind={c.kind} y={y} />
+            <line className="hw-lead" x1={384} y1={y} x2={398} y2={y} />
+            {port ? (
               <>
-                <circle className="hw-bnc" cx={365} cy={y} r={13} />
-                <circle className="hw-conn" cx={365} cy={y} r={8} />
-                <circle className="hw-pin" cx={365} cy={y} r={2.5} />
+                <text className="hw-label" x={404} y={y - 3}>
+                  {title}
+                </text>
+                <text className="hw-sub" x={404} y={y + 13}>
+                  {[active ? (port.state === 'signal' && port.format ? formatName(port.format, lang() === 'fr') : STATE_LABEL(port.state)) : t('Not used'), active ? port.recorder?.name : undefined].filter(Boolean).join(' · ')}
+                </text>
               </>
+            ) : (
+              <text className="hw-other" x={404} y={y + 4}>
+                {title}
+              </text>
             )}
-            <line className="hw-lead" x1={382} y1={y} x2={398} y2={y} />
-            <text className="hw-label" x={404} y={y - 3}>
-              {t('Input {n}', { n: k + 1 })}
-            </text>
-            <text className="hw-sub" x={404} y={y + 13}>
-              {[p.state === 'signal' && p.format ? formatName(p.format, lang() === 'fr') : STATE_LABEL(p.state), p.recorder?.name].filter(Boolean).join(' · ')}
-            </text>
           </g>
         );
       })}
     </svg>
+  );
+}
+
+/** One connector, as it looks: BNC (SDI, reference), HDMI, optical / SFP cage, analogue breakout. */
+function Conn({ kind, y }: { kind: ConnKind; y: number }) {
+  const x = 365;
+  if (kind === 'hdmi' || kind === 'hdmi-out') return <path className="hw-conn" d={`M${x - 13} ${y - 7} h26 l-4 14 h-18 z`} />;
+  if (kind === 'optical' || kind === 'sfp')
+    return (
+      <>
+        <rect className="hw-conn" x={x - 12} y={y - 8} width={24} height={16} rx={2} />
+        <circle className="hw-pin" cx={x - 5} cy={y} r={2.5} />
+        <circle className="hw-pin" cx={x + 5} cy={y} r={2.5} />
+      </>
+    );
+  if (kind === 'analog') return <path className="hw-conn" d={`M${x - 15} ${y - 8} h30 l-4 16 h-22 z`} />;
+  const r = kind === 'ref' ? 10 : 13;
+  return (
+    <>
+      <circle className="hw-bnc" cx={x} cy={y} r={r} />
+      <circle className="hw-conn" cx={x} cy={y} r={r - 5} />
+      <circle className="hw-pin" cx={x} cy={y} r={2.5} />
+    </>
   );
 }

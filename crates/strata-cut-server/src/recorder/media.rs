@@ -3,7 +3,7 @@ use axum::{
     body::Body,
     extract::{Path as UrlPath, Query, State},
     http::{header, HeaderValue, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -27,6 +27,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders", get(list).post(create))
         .route("/api/decklink", get(decklink))
         .route("/api/system/hardware", get(hardware))
+        .route("/api/decklink/{n}/preview.jpg", get(decklink_preview))
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
         .route("/api/recorders/{id}/clear", post(clear))
@@ -46,6 +47,39 @@ pub fn routes() -> Router<Shared> {
 /// DeckLink cards: what the server has (GStreamer's module, Blackmagic's driver) and the cards seen.
 async fn decklink(CurrentUser(_): CurrentUser) -> Json<Value> {
     Json(super::decklink::status().await)
+}
+
+#[derive(Deserialize)]
+struct PreviewQuery {
+    #[serde(default)]
+    connection: Option<String>,
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+/// A still of what a card's input receives, for the recorder's form (its format in `X-Format`).
+/// An input a recorder captures gives that recorder's still; no picture: 204.
+async fn decklink_preview(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(n): UrlPath<u32>, Query(q): Query<PreviewQuery>) -> ApiResult<Response> {
+    use super::decklink::{CONNECTIONS, MODES};
+    let connection = q.connection.filter(|c| CONNECTIONS.contains(&c.as_str())).unwrap_or_else(|| "auto".into());
+    let mode = q.mode.filter(|m| MODES.contains(&m.as_str())).unwrap_or_else(|| "auto".into());
+    let no_store = [(header::CACHE_CONTROL, "no-store")];
+    // Captured by a recorder: the card cannot be opened twice, its recorder's still says it.
+    if let Some(r) = s.recorders.recs().into_iter().find(|r| {
+        let c = r.config();
+        c.protocol == super::Protocol::Decklink && c.device == n && matches!(r.status.lock().unwrap().state, super::State::Recording | super::State::Nosignal | super::State::Starting)
+    }) {
+        let format = r.status.lock().unwrap().media.as_ref().map(|m| super::decklink::mode_of(m.width, m.height, m.interlaced, m.fps_num, m.fps_den)).unwrap_or_default();
+        let thumb = r.dir.lock().unwrap().join("thumb.jpg");
+        return Ok(match tokio::fs::read(&thumb).await {
+            Ok(b) => (no_store, [(header::CONTENT_TYPE, "image/jpeg")], [("x-format", format)], b).into_response(),
+            Err(_) => (StatusCode::NO_CONTENT, no_store).into_response(),
+        });
+    }
+    Ok(match super::decklink::preview(n, &connection, &mode).await {
+        Some((jpeg, format)) => (no_store, [(header::CONTENT_TYPE, "image/jpeg")], [("x-format", format)], jpeg).into_response(),
+        None => (StatusCode::NO_CONTENT, no_store).into_response(),
+    })
 }
 
 /// Système › Matériel: the capture cards and their inputs.

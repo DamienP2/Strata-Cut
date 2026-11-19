@@ -5,7 +5,7 @@ import { CalendarClock, Copy, Eraser, MoreHorizontal, Pencil, Plus, RadioTower, 
 import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
-import { bitrate, clock, day, formatName, scanFormat } from '../tc';
+import { advisedBitrate, bitrate, clock, day, DECKLINK_MODES, formatFamily, formatName, scanFormat } from '../tc';
 import { confirmDialog } from '../ui/dialogs';
 import { Dropdown } from '../ui/Dropdown';
 import { NumberField, Segmented } from '../ui/fields';
@@ -25,7 +25,9 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
 
 /** DeckLink: the card's inputs, the formats and the audio inputs, as the server knows them. */
 const DL_CONNECTIONS = ['auto', 'sdi', 'hdmi', 'optical-sdi', 'component', 'composite', 'svideo'];
-const DL_MODES = ['auto', '1080i50', '1080i5994', '1080i60', '1080p25', '1080p2997', '1080p30', '1080p50', '1080p5994', '1080p60', '1080p24', '1080p2398', '720p50', '720p5994', '720p60', 'pal', 'ntsc', '2160p25', '2160p2997', '2160p50', '2160p5994', '2160p60'];
+/** Every format, by family (SD, HD, 2K, UHD / 4K, 8K), "auto" first. */
+const FAMILIES = ['', 'SD', 'HD', '2K', 'UHD / 4K', '8K'];
+const DL_MODES = [...DECKLINK_MODES].sort((a, b) => FAMILIES.indexOf(formatFamily(a)) - FAMILIES.indexOf(formatFamily(b)));
 const DL_AUDIO_INPUTS = ['auto', 'embedded', 'aes', 'analog'];
 const dlConnection = (v: string) => ({ auto: t('Automatic'), sdi: 'SDI', hdmi: 'HDMI', 'optical-sdi': t('Optical SDI'), component: t('Component'), composite: t('Composite'), svideo: 'S-Video' })[v] ?? v;
 /** "1080i50" → "1080i 50", "1080p5994" → "1080p 59.94" (French: 59,94). */
@@ -115,7 +117,7 @@ export function Recorders() {
     const device = q.get('decklink');
     if (device === null) return;
     const format = q.get('format') ?? '';
-    setEdit({ rec: null, preset: { name: q.get('name') ?? '', protocol: 'decklink', device: Number(device), connection: 'auto', videoMode: DL_MODES.includes(format) ? format : 'auto', audioInput: 'auto', audioChannels: 2, bitrate: 25 } });
+    setEdit({ rec: null, preset: { name: q.get('name') ?? '', protocol: 'decklink', device: Number(device), connection: 'auto', videoMode: DL_MODES.includes(format) ? format : 'auto', audioInput: 'auto', audioChannels: 2, bitrate: DL_MODES.includes(format) && format !== 'auto' ? advisedBitrate(format) : 25 } });
     void navigate('/recorders', true);
   }, []);
   const counts = {
@@ -612,6 +614,10 @@ function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder
   }, []);
   const device = c.device ?? 0;
   const channels = c.audioChannels ?? 2;
+  // The format the input receives (from the preview), and the bitrate advised for the format recorded.
+  const [detected, setDetected] = useState('');
+  const format = c.videoMode && c.videoMode !== 'auto' ? c.videoMode : detected;
+  const advised = format ? advisedBitrate(format) : 0;
   const devices = info?.devices ?? [];
   return (
     <>
@@ -631,8 +637,21 @@ function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder
       <Field label={t('Video input')}>
         <Dropdown value={c.connection ?? 'auto'} options={DL_CONNECTIONS.map((v) => ({ value: v, label: dlConnection(v) }))} onChange={(v) => set({ connection: v })} />
       </Field>
-      <Field label={<>{t('Format')}<InfoTip text={t('Automatic works with the cards that detect the format of their input. Otherwise choose it: a wrong format gives no picture.')} /></>}>
-        <Dropdown value={c.videoMode ?? 'auto'} options={DL_MODES.map((v) => ({ value: v, label: dlMode(v) }))} onChange={(v) => set({ videoMode: v })} />
+      <InputPreview device={device} connection={c.connection ?? 'auto'} mode={c.videoMode ?? 'auto'} onFormat={setDetected} />
+      <Field
+        label={<>{t('Format')}<InfoTip text={t('Automatic works with the cards that detect the format of their input. Otherwise choose it: a wrong format gives no picture.')} /></>}
+        hint={
+          detected && c.videoMode !== 'auto' && c.videoMode !== detected ? (
+            <span className="sc-warn-text">
+              {t('The input receives {f}.', { f: dlMode(detected) })}{' '}
+              <button type="button" className="linklike" onClick={() => set({ videoMode: detected })}>
+                {t('Use it')}
+              </button>
+            </span>
+          ) : undefined
+        }
+      >
+        <Dropdown value={c.videoMode ?? 'auto'} options={DL_MODES.map((v) => ({ value: v, label: dlMode(v), detail: formatFamily(v) }))} onChange={(v) => set({ videoMode: v })} />
       </Field>
       <Field label={t('Audio input')}>
         <Dropdown value={c.audioInput ?? 'auto'} options={DL_AUDIO_INPUTS.map((v) => ({ value: v, label: dlAudioInput(v) }))} onChange={(v) => set({ audioInput: v })} />
@@ -640,9 +659,70 @@ function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder
       <Field label={t('Audio channels')} group hint={tn(channels / 2, 'Recorded as {n} stereo track', 'Recorded as {n} stereo tracks')}>
         <Segmented value={String(channels)} options={[2, 8, 16].map((n) => ({ value: String(n), label: String(n) }))} onChange={(v) => set({ audioChannels: Number(v) })} />
       </Field>
-      <Field label={<>{t('Recording bitrate')}<InfoTip text={t('The card gives raw pictures: the server encodes them in H.264 at this bitrate (about 1 to 2 processor cores per HD input). 25 Mb/s keeps the HD quality for clips; more takes more disk.')} /></>}>
+      <Field
+        label={<>{t('Recording bitrate')}<InfoTip text={t('The card gives raw pictures: the server encodes them in H.264 at this bitrate (about 1 to 2 processor cores per HD input, 4 to 8 in UHD). 25 Mb/s keeps the HD quality for clips; more takes more disk.')} /></>}
+        hint={
+          advised && advised !== c.bitrate ? (
+            <span>
+              {t('Advised for {f}: {n} Mb/s.', { f: dlMode(format), n: advised })}{' '}
+              <button type="button" className="linklike" onClick={() => set({ bitrate: advised })}>
+                {t('Use it')}
+              </button>
+            </span>
+          ) : undefined
+        }
+      >
         <NumberField value={c.bitrate} min={5} max={200} step={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
       </Field>
     </>
+  );
+}
+
+/** What a card's input receives now: a still every 2 s and its format. */
+function InputPreview({ device, connection, mode, onFormat }: { device: number; connection: string; mode: string; onFormat: (f: string) => void }) {
+  const [shot, setShot] = useState<{ src: string | null; format: string } | null>(null);
+  useEffect(() => {
+    let dead = false;
+    let timer = 0;
+    let last: string | null = null;
+    setShot(null);
+    const grab = async () => {
+      try {
+        const r = await fetch(`/api/decklink/${device}/preview.jpg?connection=${connection}&mode=${mode}&t=${Date.now()}`, { credentials: 'same-origin' });
+        if (dead) return;
+        if (r.status === 200) {
+          const src = URL.createObjectURL(await r.blob());
+          if (dead) return URL.revokeObjectURL(src);
+          const format = r.headers.get('x-format') ?? '';
+          if (last) URL.revokeObjectURL(last);
+          last = src;
+          setShot({ src, format });
+          onFormat(format);
+        } else {
+          setShot({ src: null, format: '' });
+          onFormat('');
+        }
+      } catch {
+        if (!dead) setShot({ src: null, format: '' });
+      }
+      if (!dead) timer = window.setTimeout(() => void grab(), 2000);
+    };
+    void grab();
+    return () => {
+      dead = true;
+      clearTimeout(timer);
+      if (last) URL.revokeObjectURL(last);
+    };
+  }, [device, connection, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="sc-dlprev span2">
+      <div className="sc-dlprev-pic">
+        {shot?.src ? <img src={shot.src} alt="" /> : <span className="muted">{shot ? t('No signal on this input') : t('Looking at the input…')}</span>}
+        {shot?.src && <span className="sc-dlprev-live">{t('Preview')}</span>}
+      </div>
+      <span className={`sc-dlprev-state ${shot?.src ? 'on' : ''}`}>
+        {shot?.src ? (shot.format ? t('Signal: {f}', { f: formatName(shot.format, lang() === 'fr') }) : t('Signal')) : shot ? t('No signal') : ''}
+      </span>
+    </div>
   );
 }

@@ -17,10 +17,15 @@ pub const GST_LAUNCH: &str = "gst-launch-1.0";
 
 /// The card's inputs, as GStreamer names them.
 pub const CONNECTIONS: [&str; 7] = ["auto", "sdi", "hdmi", "optical-sdi", "component", "composite", "svideo"];
-/// The video formats offered ("auto": detected by the card, when it can).
-pub const MODES: [&str; 22] = [
-    "auto", "1080i50", "1080i5994", "1080i60", "1080p25", "1080p2997", "1080p30", "1080p50", "1080p5994", "1080p60", "1080p24", "1080p2398", "720p50", "720p5994", "720p60", "pal", "ntsc",
-    "2160p25", "2160p2997", "2160p50", "2160p5994", "2160p60",
+/// Every video format the cards know, as GStreamer names them ("auto": detected by the card,
+/// when it can): SD, HD 720 and 1080, 2K, UHD and 4K DCI, 8K, at every frame rate.
+pub const MODES: [&str; 68] = [
+    "auto", "ntsc", "ntsc2398", "pal", "ntsc-p", "pal-p", "1080p2398", "1080p24", "1080p25", "1080p2997", "1080p30", "1080i50", "1080i5994",
+    "1080i60", "1080p50", "1080p5994", "1080p60", "720p50", "720p5994", "720p60", "1556p2398", "1556p24", "1556p25", "2kdcip2398", "2kdcip24",
+    "2kdcip25", "2kdcip2997", "2kdcip30", "2kdcip50", "2kdcip5994", "2kdcip60", "2160p2398", "2160p24", "2160p25", "2160p2997", "2160p30", "2160p50",
+    "2160p5994", "2160p60", "ntsc-widescreen", "ntsc2398-widescreen", "pal-widescreen", "ntsc-p-widescreen", "pal-p-widescreen", "4kdcip2398",
+    "4kdcip24", "4kdcip25", "4kdcip2997", "4kdcip30", "4kdcip50", "4kdcip5994", "4kdcip60", "8kp2398", "8kp24", "8kp25", "8kp2997", "8kp30", "8kp50",
+    "8kp5994", "8kp60", "8kdcip2398", "8kdcip24", "8kdcip25", "8kdcip2997", "8kdcip30", "8kdcip50", "8kdcip5994", "8kdcip60",
 ];
 /// Where the sound comes from.
 pub const AUDIO_INPUTS: [&str; 4] = ["auto", "embedded", "aes", "analog"];
@@ -217,26 +222,75 @@ fn connector_of(model: &str) -> &'static str {
     }
 }
 
-/// A video format as the recorders name it ("1080i50", "1080p2997", "pal"), from GStreamer's caps.
-fn mode_of(height: u32, interlaced: bool, num: u32, den: u32) -> String {
+/// A video format as the cards name it ("1080i50", "720p5994", "2160p25", "4kdcip24",
+/// "pal", "ntsc2398"…), from its size, scan and frame rate (frames per second).
+pub fn mode_of(width: u32, height: u32, interlaced: bool, num: u32, den: u32) -> String {
     if den == 0 || num == 0 {
         return String::new();
     }
     let fps = num as f64 / den as f64;
+    // The cards count fields for interlaced formats (1080i50: 25 frames, 50 fields).
     let rate = if interlaced { fps * 2.0 } else { fps };
-    if interlaced && height == 576 {
-        return "pal".into();
-    }
-    if interlaced && (height == 486 || height == 480) {
-        return "ntsc".into();
-    }
     let r = if (rate - rate.round()).abs() < 0.01 { format!("{}", rate.round() as u32) } else { format!("{}", (rate * 100.0).round() as u32) };
-    format!("{height}{}{r}", if interlaced { 'i' } else { 'p' })
+    let name = match (width, height) {
+        // SD: PAL (576 lines), NTSC (486 or 480).
+        (_, 576) => match (interlaced, r.as_str()) {
+            (true, _) => "pal".to_string(),
+            (false, _) => "pal-p".to_string(),
+        },
+        (_, 486 | 480) => match (interlaced, r.as_str()) {
+            (true, "2398") => "ntsc2398".to_string(),
+            (true, _) => "ntsc".to_string(),
+            (false, _) => "ntsc-p".to_string(),
+        },
+        (2048, 1556) => format!("1556p{r}"),
+        (2048, 1080) => format!("2kdcip{r}"),
+        (4096, 2160) => format!("4kdcip{r}"),
+        (8192, 4320) => format!("8kdcip{r}"),
+        (_, 4320) => format!("8kp{r}"),
+        _ => format!("{height}{}{r}", if interlaced { 'i' } else { 'p' }),
+    };
+    name
+}
+
+/// One capture at a time on an input (the probes of Système › Matériel and the previews).
+fn input_lock(number: u32) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::Mutex<Vec<std::sync::Arc<tokio::sync::Mutex<()>>>> = std::sync::Mutex::new(Vec::new());
+    let mut l = LOCKS.lock().unwrap();
+    while l.len() <= number as usize {
+        l.push(Default::default());
+    }
+    l[number as usize].clone()
+}
+
+/// A still of what an input receives (JPEG, 640 wide) and its format, for the recorder's form.
+/// `None`: no picture within a few seconds (no signal, or the input is busy).
+pub async fn preview(number: u32, connection: &str, mode: &str) -> Option<(Vec<u8>, String)> {
+    let lock = input_lock(number);
+    let _one = lock.lock().await;
+    let file = std::env::temp_dir().join(format!("strata-cut-preview-{}-{number}.jpg", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    let args: Vec<String> = [
+        "-v", "decklinkvideosrc", &format!("device-number={number}"), &format!("connection={connection}"), &format!("mode={mode}"), "num-buffers=4", "!",
+        "deinterlace", "!", "videoconvert", "!", "videoscale", "!", "video/x-raw,width=640,pixel-aspect-ratio=1/1", "!",
+        "jpegenc", "quality=80", "snapshot=true", "!", "filesink", &format!("location={}", file.display()),
+    ]
+    .iter()
+    .map(|x| x.to_string())
+    .collect();
+    let run = tokio::process::Command::new(GST_LAUNCH).args(&args).stdin(std::process::Stdio::null()).kill_on_drop(true).output();
+    let out = tokio::time::timeout(Duration::from_secs(5), run).await.ok()?.ok()?;
+    let jpeg = std::fs::read(&file).ok().filter(|b| b.len() > 100);
+    let _ = std::fs::remove_file(&file);
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    Some((jpeg?, caps_mode(&text).unwrap_or_default()))
 }
 
 /// What a free input receives now: (signal, format). A short capture with the format detected
 /// by the card: no picture within a few seconds is no signal. `None`: busy (another program).
 async fn probe(number: u32) -> Option<(bool, String)> {
+    let lock = input_lock(number);
+    let _one = lock.lock().await;
     let args = [GST_LAUNCH, "-v", "decklinkvideosrc", &format!("device-number={number}"), "mode=auto", "num-buffers=1", "!", "fakesink", "sync=false"];
     let run = tokio::process::Command::new(args[0]).args(&args[1..]).stdin(std::process::Stdio::null()).kill_on_drop(true).output();
     let out = match tokio::time::timeout(Duration::from_secs(4), run).await {
@@ -253,15 +307,32 @@ async fn probe(number: u32) -> Option<(bool, String)> {
 
 /// The format in the caps GStreamer prints (`-v`): "video/x-raw, …, width=(int)1920, height=(int)1080, interlace-mode=(string)interleaved, framerate=(fraction)25/1".
 fn caps_mode(text: &str) -> Option<String> {
-    let line = text.lines().find(|l| l.contains("caps = video/x-raw") && l.contains("height=(int)"))?;
+    // The card's own pad first (the caps after it are scaled for the preview).
+    let caps = |l: &&str| l.contains("caps = video/x-raw") && l.contains("height=(int)");
+    let line = text.lines().filter(caps).find(|l| l.contains("decklinkvideosrc")).or_else(|| text.lines().find(caps))?;
     let field = |k: &str| line.split(&format!("{k}=")).nth(1).map(|r| r.split([',', ';']).next().unwrap_or("").trim().to_string());
     let num = |v: Option<String>| v.and_then(|v| v.rsplit(')').next().map(str::to_string));
     let height: u32 = num(field("height"))?.parse().ok()?;
+    let width: u32 = num(field("width")).and_then(|w| w.parse().ok()).unwrap_or(0);
     let interlaced = field("interlace-mode").is_some_and(|v| v.contains("interleaved") || v.contains("mixed") || v.contains("fields"));
     let rate = num(field("framerate"))?;
     let (n, d) = rate.split_once('/')?;
-    let m = mode_of(height, interlaced, n.parse().ok()?, d.parse().ok()?);
+    let m = mode_of(width, height, interlaced, n.parse().ok()?, d.parse().ok()?);
     (!m.is_empty()).then_some(m)
+}
+
+/// Blackmagic's devices on the PCI bus (vendor 0xbdbd), seen with or without the driver.
+async fn pci_devices() -> Vec<String> {
+    let run = tokio::process::Command::new("lspci").args(["-mm", "-d", "bdbd:"]).output();
+    let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(5), run).await else { return Vec::new() };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| {
+            // 01:00.0 "Multimedia video controller" "Blackmagic Design" "DeckLink Duo 2" …
+            let quoted: Vec<&str> = l.split('"').skip(1).step_by(2).collect();
+            quoted.get(2).map(|d| d.to_string()).unwrap_or_else(|| l.to_string())
+        })
+        .collect()
 }
 
 /// Blackmagic's driver package version (Desktop Video), when installed from its .deb.
@@ -310,7 +381,7 @@ pub async fn hardware(m: &super::Manager) -> Value {
         let user = recs.iter().find(|r| r.config().device == input.number);
         let running = running_of(input.number);
         let (state, format) = match &running {
-            Some(s) if s.state == super::State::Recording => ("signal", s.media.as_ref().map(|md| mode_of(md.height, md.interlaced, md.fps_num, md.fps_den)).unwrap_or_default()),
+            Some(s) if s.state == super::State::Recording => ("signal", s.media.as_ref().map(|md| mode_of(md.width, md.height, md.interlaced, md.fps_num, md.fps_den)).unwrap_or_default()),
             Some(s) if s.state == super::State::Nosignal => ("nosignal", String::new()),
             Some(_) => ("unknown", String::new()),
             None => match probed.get(&input.number).cloned().flatten() {
@@ -325,7 +396,7 @@ pub async fn hardware(m: &super::Manager) -> Value {
             "persistentId": input.persistent_id,
             "state": state,
             "format": format,
-            "recorder": user.map(|r| json!({ "id": r.id, "name": r.config().name, "running": running.is_some() })),
+            "recorder": user.map(|r| json!({ "id": r.id, "name": r.config().name, "running": running.is_some(), "connection": r.config().connection })),
         });
         match cards.iter_mut().find(|c| c.0 == key) {
             Some(c) => c.2.push(port),
@@ -340,7 +411,7 @@ pub async fn hardware(m: &super::Manager) -> Value {
             json!({ "model": model, "serial": serial, "connector": connector_of(&model), "inputs": ports })
         })
         .collect();
-    let v = json!({ "gstreamer": module, "driver": driver, "driverVersion": if driver { driver_version().await } else { String::new() }, "cards": cards });
+    let v = json!({ "gstreamer": module, "driver": driver, "driverVersion": if driver { driver_version().await } else { String::new() }, "cards": cards, "pci": pci_devices().await });
     *cache = Some((std::time::Instant::now(), v.clone()));
     v
 }
@@ -408,6 +479,22 @@ mod tests {
         let caps = "/GstPipeline:pipeline0/GstFakeSink:fakesink0.GstPad:sink: caps = video/x-raw, format=(string)UYVY, width=(int)1920, height=(int)1080, interlace-mode=(string)interleaved, pixel-aspect-ratio=(fraction)1/1, framerate=(fraction)25/1";
         assert_eq!(caps_mode(caps).as_deref(), Some("1080i50"));
         assert_eq!(caps_mode(&caps.replace("interleaved", "progressive").replace("25/1", "30000/1001")).as_deref(), Some("1080p2997"));
-        assert_eq!(mode_of(576, true, 25, 1), "pal");
+        assert_eq!(mode_of(720, 576, true, 25, 1), "pal");
+        // Every kind of signal, not only 1080i50.
+        for (w, h, i, n, d, want) in [
+            (1280, 720, false, 60000, 1001, "720p5994"),
+            (1920, 1080, true, 30000, 1001, "1080i5994"),
+            (1920, 1080, false, 24000, 1001, "1080p2398"),
+            (1920, 1080, false, 50, 1, "1080p50"),
+            (3840, 2160, false, 25, 1, "2160p25"),
+            (4096, 2160, false, 24, 1, "4kdcip24"),
+            (2048, 1080, false, 25, 1, "2kdcip25"),
+            (7680, 4320, false, 50, 1, "8kp50"),
+            (720, 486, true, 30000, 1001, "ntsc"),
+        ] {
+            let m = mode_of(w, h, i, n, d);
+            assert_eq!(m, want);
+            assert!(MODES.contains(&m.as_str()), "{m}");
+        }
     }
 }

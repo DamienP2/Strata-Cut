@@ -122,13 +122,44 @@ export function bitrate(bps: number, locale?: string): string {
   return `${Math.round(bps / 1e3)} kb/s`;
 }
 
-/** "1080i50" → "1080i 50", "1080p2997" → "1080p 29.97" (French: 29,97), "pal" → "PAL 576i 50". */
+/** Every video format of the DeckLink cards, as the server names them (GStreamer's names). */
+export const DECKLINK_MODES = ['auto', 'ntsc', 'ntsc2398', 'pal', 'ntsc-p', 'pal-p', '1080p2398', '1080p24', '1080p25', '1080p2997', '1080p30', '1080i50', '1080i5994', '1080i60', '1080p50', '1080p5994', '1080p60', '720p50', '720p5994', '720p60', '1556p2398', '1556p24', '1556p25', '2kdcip2398', '2kdcip24', '2kdcip25', '2kdcip2997', '2kdcip30', '2kdcip50', '2kdcip5994', '2kdcip60', '2160p2398', '2160p24', '2160p25', '2160p2997', '2160p30', '2160p50', '2160p5994', '2160p60', 'ntsc-widescreen', 'ntsc2398-widescreen', 'pal-widescreen', 'ntsc-p-widescreen', 'pal-p-widescreen', '4kdcip2398', '4kdcip24', '4kdcip25', '4kdcip2997', '4kdcip30', '4kdcip50', '4kdcip5994', '4kdcip60', '8kp2398', '8kp24', '8kp25', '8kp2997', '8kp30', '8kp50', '8kp5994', '8kp60', '8kdcip2398', '8kdcip24', '8kdcip25', '8kdcip2997', '8kdcip30', '8kdcip50', '8kdcip5994', '8kdcip60'];
+
+/** The family of a format: SD, HD, 2K, UHD / 4K, 8K. */
+export function formatFamily(v: string): string {
+  if (/^(pal|ntsc)/.test(v)) return 'SD';
+  if (/^(720|1080)/.test(v)) return 'HD';
+  if (/^(1556|2kdci)/.test(v)) return '2K';
+  if (/^(2160|4kdci)/.test(v)) return 'UHD / 4K';
+  if (/^8k/.test(v)) return '8K';
+  return '';
+}
+
+/**
+ * A format's name for people: "1080i50" → "1080i 50", "720p5994" → "720p 59,94" (French),
+ * "pal" → "PAL 576i 50", "4kdcip24" → "4K DCI 2160p 24", "8kp25" → "8K 4320p 25".
+ */
 export function formatName(v: string, fr = true): string {
   if (!v) return '';
-  if (v === 'pal') return 'PAL 576i 50';
-  if (v === 'ntsc') return `NTSC 480i 59${fr ? ',' : '.'}94`;
-  const m = /^(\d+[ip])(\d+)$/.exec(v);
+  const rate = (r: string) => (r.length > 2 ? `${r.slice(0, 2)}${fr ? ',' : '.'}${r.slice(2)}` : r);
+  const wide = v.endsWith('-widescreen') ? ' 16:9' : '';
+  const base = v.replace('-widescreen', '');
+  const sd: Record<string, string> = { pal: 'PAL 576i 50', 'pal-p': 'PAL 576p 50', ntsc: `NTSC 480i ${rate('5994')}`, ntsc2398: `NTSC 480i ${rate('2398')}`, 'ntsc-p': `NTSC 480p ${rate('5994')}` };
+  if (sd[base]) return sd[base] + wide;
+  let m = /^(2k|4k|8k)dcip(\d+)$/.exec(base);
+  if (m) return `${m[1].toUpperCase()} DCI ${{ '2k': '1080p', '4k': '2160p', '8k': '4320p' }[m[1]]} ${rate(m[2])}`;
+  m = /^8kp(\d+)$/.exec(base);
+  if (m) return `8K 4320p ${rate(m[1])}`;
+  m = /^(\d+)([ip])(\d+)$/.exec(base);
   if (!m) return v;
-  const rate = m[2].length > 2 ? `${m[2].slice(0, 2)}${fr ? ',' : '.'}${m[2].slice(2)}` : m[2];
-  return `${m[1]} ${rate}`;
+  const prefix = m[1] === '2160' ? 'UHD ' : m[1] === '1556' ? '2K ' : '';
+  return `${prefix}${m[1]}${m[2]} ${rate(m[3])}`;
+}
+
+/** The recording bitrate advised for a format (Mb/s): H.264 that keeps the quality for clips (×1.5 at 50 to 60 progressive frames). */
+export function advisedBitrate(v: string): number {
+  const base = ({ SD: 10, HD: 25, '2K': 35, 'UHD / 4K': 60, '8K': 150 } as Record<string, number>)[formatFamily(v)] ?? 25;
+  const m = /p(\d+)$/.exec(v.replace('-widescreen', ''));
+  const rate = m ? Number(m[1]) / (m[1].length > 2 ? 100 : 1) : 0;
+  return Math.round(base * (rate >= 49 ? 1.5 : 1));
 }

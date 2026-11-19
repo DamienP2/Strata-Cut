@@ -23,6 +23,11 @@
 #   --no-apt              n'installe aucun paquet (dépendances déjà en place)
 #   --no-service          n'installe pas le service systemd (essai, conteneur)
 #   --no-grow             ne donne pas au volume des données tout l'espace libre du disque (LVM)
+#   --desktop-video F     installe le pilote Blackmagic Desktop Video depuis cette archive
+#                         (Blackmagic_Desktop_Video_Linux_*.tar.gz) ou ce paquet desktopvideo_*.deb ;
+#                         « download » : le télécharge chez Blackmagic (vos coordonnées et l'accord
+#                         de licence sont demandés, comme sur leur site)
+#   --no-desktop-video    ne propose pas le pilote Blackmagic
 #   --uninstall           retire le service et le programme (les données restent)
 #   --purge               avec --uninstall : supprime aussi les données et le compte de service
 #   -h, --help            cette aide
@@ -53,6 +58,9 @@ PACKAGE=""
 NO_APT=0
 NO_SERVICE=0
 NO_GROW=0
+DESKTOP_VIDEO=""
+NO_DESKTOP_VIDEO=0
+DV_CACHE="/var/cache/strata-cut"
 UNINSTALL=0
 PURGE=0
 
@@ -102,6 +110,8 @@ while [ $# -gt 0 ]; do
     --no-apt) NO_APT=1; shift ;;
     --no-service) NO_SERVICE=1; shift ;;
     --no-grow) NO_GROW=1; shift ;;
+    --desktop-video) DESKTOP_VIDEO="${2:?}"; shift 2 ;;
+    --no-desktop-video) NO_DESKTOP_VIDEO=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge) PURGE=1; shift ;;
     -h | --help) usage ;;
@@ -114,6 +124,10 @@ for d in "$DATA_DIR" "$RECORDINGS_DIR" "$CLIPS_DIR"; do
   [ -z "$d" ] || [[ "$d" = /* ]] || die "un dossier s'écrit en chemin absolu : $d"
 done
 [ -z "$PACKAGE" ] || PACKAGE="$(realpath "$PACKAGE")"
+if [ -n "$DESKTOP_VIDEO" ] && [ "$DESKTOP_VIDEO" != download ]; then
+  [ -e "$DESKTOP_VIDEO" ] || die "pilote Blackmagic introuvable : $DESKTOP_VIDEO"
+  DESKTOP_VIDEO="$(realpath "$DESKTOP_VIDEO")"
+fi
 [ "$(id -u)" -eq 0 ] || die "lancez ce script avec sudo (… | sudo bash)"
 
 # Le compte qui a lancé sudo compile (pas root).
@@ -170,6 +184,119 @@ fi
 case "$(uname -m)" in x86_64 | aarch64) ok "processeur $(uname -m)" ;; *) die "processeur $(uname -m) non pris en charge (64 bits requis)" ;; esac
 if [ "$NO_SERVICE" -eq 0 ] && ! has_systemd; then die "systemd ne tourne pas sur cette machine (utilisez --no-service pour un essai)"; fi
 
+# ---------------------------------------------------------------- pilote Blackmagic
+# Desktop Video : le pilote des cartes DeckLink, UltraStudio et Intensity (module du noyau et
+# bibliothèque que GStreamer ouvre). Blackmagic le distribue après un formulaire et l'accord de
+# sa licence : depuis une archive déjà téléchargée, ou téléchargé ici avec vos coordonnées.
+dv_installed() { dpkg -s desktopvideo >/dev/null 2>&1; }
+dv_pci() { command -v lspci >/dev/null && lspci -mm -d bdbd: 2>/dev/null | head -1 | cut -d'"' -f6; }
+
+# Une archive déjà là (dossier courant, compte qui installe, /root, /tmp, cache) : la plus récente.
+dv_find() {
+  local dirs=("$PWD" "$BUILD_HOME" /root /tmp "$DV_CACHE") f best=""
+  for d in "${dirs[@]}"; do
+    for f in "$d"/Blackmagic_Desktop_Video_Linux_*.tar* "$d"/desktopvideo_*.deb; do
+      [ -f "$f" ] || continue
+      if [ -z "$best" ] || [ "$(printf '%s\n%s\n' "$best" "$f" | sort -V | tail -1)" = "$f" ]; then best="$f"; fi
+    done
+  done
+  printf '%s' "$best"
+}
+
+ask() { # ask VARIABLE "question" [défaut]
+  local answer=""
+  read -r -p "  $2${3:+ [$3]} : " answer <"$TTY" || true
+  printf -v "$1" '%s' "${answer:-${3:-}}"
+}
+
+# Téléchargé chez Blackmagic : la dernière version pour Linux (API publique de leur site), puis le
+# formulaire de téléchargement rempli avec VOS coordonnées et votre accord de licence.
+dv_download() {
+  [ -n "$TTY" ] || { warn "pilote Blackmagic : téléchargement interactif impossible sans terminal (utilisez --desktop-video ARCHIVE)"; return 1; }
+  local api="https://www.blackmagicdesign.com/api" latest id major minor version url file
+  latest="$(curl -fsS -m 20 "$api/support/latest-version/desktop-video/linux" 2>/dev/null)" || { warn "site de Blackmagic injoignable"; return 1; }
+  id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["linux"]["downloadId"])' <<<"$latest" 2>/dev/null)" || true
+  major="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["linux"]["major"])' <<<"$latest" 2>/dev/null)" || true
+  minor="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["linux"]["minor"])' <<<"$latest" 2>/dev/null)" || true
+  [ -n "$id" ] || { warn "version de Desktop Video introuvable sur le site de Blackmagic"; return 1; }
+  version="$major.$minor"
+  echo "  Desktop Video $version pour Linux est disponible chez Blackmagic Design."
+  echo "  Comme sur leur site, Blackmagic demande vos coordonnées avant le téléchargement,"
+  echo "  et l'accord de sa licence : https://www.blackmagicdesign.com/fr/support (Desktop Video)."
+  local yes=""
+  ask yes "Télécharger Desktop Video $version maintenant ? (o/N)" "n"
+  [[ "$yes" =~ ^[oOyY] ]] || return 1
+  local first last email phone country city
+  ask first "Prénom"; ask last "Nom"; ask email "E-mail"; ask phone "Téléphone"
+  ask country "Pays (code à 2 lettres)" "fr"; ask city "Ville"
+  [ -n "$first" ] && [ -n "$last" ] && [ -n "$email" ] || { warn "coordonnées incomplètes : pilote non téléchargé"; return 1; }
+  ask yes "Acceptez-vous la licence de Blackmagic Design pour Desktop Video ? (o/N)" "n"
+  [[ "$yes" =~ ^[oOyY] ]] || { warn "licence non acceptée : pilote non téléchargé"; return 1; }
+  local body
+  body="$(FIRST="$first" LAST="$last" EMAIL="$email" PHONE="$phone" COUNTRY="${country,,}" CITY="$city" PRODUCT="Desktop Video $version" python3 -c '
+import json, os
+e = os.environ
+print(json.dumps({"firstname": e["FIRST"], "lastname": e["LAST"], "email": e["EMAIL"], "phone": e["PHONE"], "country": e["COUNTRY"], "city": e["CITY"], "state": "", "street": "",
+                  "product": e["PRODUCT"], "platform": "Linux", "policy": True, "hasAgreedToTerms": True}))')"
+  url="$(curl -fsS -m 30 -H 'Content-Type: application/json;charset=UTF-8' -H 'Referer: https://www.blackmagicdesign.com/support/' --data-binary "$body" "$api/register/${country,,}/download/$id" 2>/dev/null)" || true
+  [[ "$url" == https://* ]] || { warn "Blackmagic n'a pas donné de lien de téléchargement (formulaire refusé ?)"; return 1; }
+  mkdir -p "$DV_CACHE"
+  file="$DV_CACHE/Blackmagic_Desktop_Video_Linux_$version.tar.gz"
+  echo "  téléchargement de Desktop Video $version…"
+  curl -fL -m 1800 -o "$file.part" "$url" && mv -f "$file.part" "$file" || { rm -f "$file.part"; warn "téléchargement interrompu"; return 1; }
+  DESKTOP_VIDEO="$file"
+}
+
+# Le paquet de l'archive (desktopvideo_*.deb, sans l'interface graphique) installé ; son module
+# du noyau construit par DKMS (en-têtes du noyau en cours) et chargé.
+dv_install() {
+  local src="$1" arch deb member
+  case "$(dpkg --print-architecture)" in amd64) arch=x86_64 ;; arm64) arch=arm64 ;; *) warn "pilote Blackmagic : processeur $(dpkg --print-architecture) non pris en charge"; return 1 ;; esac
+  mkdir -p "$DV_CACHE"
+  if [[ "$src" == *.deb ]]; then
+    deb="$src"
+  else
+    member="$(tar -tf "$src" 2>/dev/null | grep -E "/deb/$arch/desktopvideo_[^/]*\.deb$" | grep -v -- -gui | sort -V | tail -1)" || true
+    [ -n "$member" ] || { warn "pilote Blackmagic : aucun paquet desktopvideo pour $arch dans $src"; return 1; }
+    deb="$DV_CACHE/$(basename "$member")"
+    tar -xOf "$src" "$member" >"$deb"
+  fi
+  apt_install dkms "linux-headers-$(uname -r)" || warn "en-têtes du noyau $(uname -r) introuvables : le module Blackmagic ne pourra pas être construit"
+  if command -v mokutil >/dev/null && mokutil --sb-state 2>/dev/null | grep -qi enabled; then
+    warn "Secure Boot est actif : le module Blackmagic devra être signé (clé MOK enrôlée au redémarrage) pour se charger"
+  fi
+  echo "  installation de $(basename "$deb")"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$deb" >/dev/null || { warn "le paquet Desktop Video ne s'est pas installé"; return 1; }
+  modprobe blackmagic 2>/dev/null || true
+  modprobe blackmagic-io 2>/dev/null || true
+  ok "pilote Blackmagic Desktop Video $(dpkg-query -W -f='${Version}' desktopvideo 2>/dev/null) installé"
+  if [ ! -e /dev/blackmagic ]; then warn "le module Blackmagic n'est pas chargé : redémarrez le serveur, puis relancez ce script"; fi
+  if command -v DesktopVideoUpdateTool >/dev/null; then echo "  firmware des cartes : « sudo DesktopVideoUpdateTool » dit si une mise à jour est nécessaire"; fi
+}
+
+desktop_video() {
+  [ "$NO_DESKTOP_VIDEO" -eq 0 ] || return 0
+  local card
+  card="$(dv_pci || true)"
+  if [ -z "$DESKTOP_VIDEO" ]; then
+    # Rien de demandé : seulement si une carte Blackmagic est là sans son pilote.
+    if dv_installed || [ -z "$card" ]; then
+      if dv_installed; then ok "pilote Blackmagic Desktop Video $(dpkg-query -W -f='${Version}' desktopvideo 2>/dev/null)"; fi
+      return 0
+    fi
+    echo "  carte Blackmagic sur le bus PCI : $card — pilote Desktop Video absent"
+    DESKTOP_VIDEO="$(dv_find)"
+    if [ -n "$DESKTOP_VIDEO" ]; then echo "  archive trouvée : $DESKTOP_VIDEO"; else DESKTOP_VIDEO=download; fi
+  fi
+  if [ "$DESKTOP_VIDEO" = download ]; then
+    if ! dv_download; then
+      warn "pilote Blackmagic non installé. Téléchargez « Desktop Video » pour Linux sur https://www.blackmagicdesign.com/fr/support puis relancez ce script avec --desktop-video /chemin/de/l/archive"
+      return 0
+    fi
+  fi
+  dv_install "$DESKTOP_VIDEO" || true
+}
+
 # ---------------------------------------------------------------- 2. paquets
 step "2/9  Paquets Ubuntu"
 apt_install() {
@@ -189,8 +316,9 @@ else
   ok "ffmpeg, python3 et outils de base en place"
   # Cartes DeckLink (Blackmagic) : GStreamer les capture (module DeckLink dans « bad »,
   # H.264 dans « ugly », AAC dans libav) ; gst-device-monitor liste les cartes.
-  apt_install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+  apt_install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav pciutils
   ok "GStreamer en place (cartes DeckLink)"
+  desktop_video
 fi
 
 # FFmpeg doit savoir recevoir et encoder ce que le serveur lui demande.

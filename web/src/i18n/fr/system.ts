@@ -101,4 +101,5 @@ export const system: Record<string, string> = {
   'Input {n}': 'Entrée {n}',
   'Open it in Extraction': 'L’ouvrir dans Extraction',
   'Create a recorder': 'Créer un enregistreur',
+  'Not used': 'Non utilisé',
 };

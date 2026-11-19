@@ -119,6 +119,8 @@ Tout ce qui suit `bash -s --` sont les options du script (tableau ci-dessous). S
 | `--no-apt` | n'installe aucun paquet | — |
 | `--no-service` | n'installe pas le service (essai) | — |
 | `--no-grow` | ne donne pas au volume des données tout l'espace libre du disque (LVM) | — |
+| `--desktop-video F` | installe le pilote Blackmagic Desktop Video depuis cette archive (ou ce `.deb`) ; `download` : le télécharge chez Blackmagic (vos coordonnées et l'accord de licence sont demandés) | proposé si une carte Blackmagic est présente sans pilote |
+| `--no-desktop-video` | ne propose pas le pilote Blackmagic | — |
 | `--uninstall` / `--purge` | désinstalle (avec `--purge` : efface aussi les données) | — |
 
 ### Sans accès à GitHub depuis le serveur
@@ -179,9 +181,13 @@ ffmpeg -re -f lavfi -i testsrc2=size=1920x1080:rate=25 -f lavfi -i sine -c:v lib
 
 ### Carte Blackmagic DeckLink (SDI, HDMI)
 
-1. Installez le pilote **Desktop Video** de Blackmagic (site de Blackmagic, page *Support*, paquet `.deb` pour Linux), puis redémarrez le serveur. Dans une machine virtuelle (Proxmox…), la carte doit d'abord être attribuée à la VM (*passthrough PCI*).
-2. Relancez le script d'installation : il installe GStreamer et ses modules (capture DeckLink, H.264, AAC) et vérifie que le service voit les entrées de la carte.
-3. Créez un enregistreur de type **DeckLink** : la carte (numérotées à partir de 1), l'entrée vidéo (SDI, HDMI…), le format (*Automatique* si la carte détecte celui de son entrée), l'entrée audio et le nombre de canaux (2, 8 ou 16, enregistrés en 1, 4 ou 8 pistes stéréo), le débit d'enregistrement.
+1. Dans une machine virtuelle (Proxmox…), attribuez d'abord la carte à la VM (*passthrough PCI*).
+2. Lancez (ou relancez) le script d'installation. Il installe GStreamer et ses modules (capture DeckLink, H.264, AAC) et, s'il voit une carte Blackmagic sans pilote, installe **Desktop Video** :
+   - depuis une archive déjà téléchargée (`Blackmagic_Desktop_Video_Linux_*.tar.gz`, cherchée dans le dossier courant, votre dossier personnel, `/root` et `/tmp`, ou indiquée par `--desktop-video`) ;
+   - sinon il propose de la télécharger chez Blackmagic : comme sur leur site, vos coordonnées et l'accord de la licence Blackmagic sont demandés.
+   Le module du pilote est construit pour le noyau en cours (DKMS) ; si le script le demande, redémarrez puis relancez-le. Avec Secure Boot, le module doit être signé (clé MOK).
+3. Dans **Système › Matériel**, chaque carte apparaît dessinée avec ses connecteurs, et chaque entrée indique son signal et son format.
+4. Créez un enregistreur de type **DeckLink** (ou depuis une entrée de **Matériel**) : la carte, l'entrée vidéo (SDI, HDMI…), le format (*Automatique* si la carte détecte celui de son entrée ; tous les formats des cartes sont proposés, du PAL au 8K), l'entrée audio et le nombre de canaux (2, 8 ou 16, enregistrés en 1, 4 ou 8 pistes stéréo), le débit d'enregistrement (conseillé selon le format). L'aperçu montre ce que reçoit l'entrée choisie.
 
 La carte fournit des images brutes : le serveur les encode en H.264 (entrelacé conservé), ce qui demande environ 1 à 2 cœurs de processeur par entrée HD. Sans signal sur l'entrée, la carte affiche **Sans signal** et l'enregistrement continue (image noire) jusqu'au retour du signal. Une entrée ne sert qu'à un enregistreur.
 
