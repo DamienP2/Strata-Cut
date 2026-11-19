@@ -1,7 +1,7 @@
 /* /system/<section>: the list of sections on the left, the open one on the right. */
 import { useDisplayPref } from '../displayPrefs';
 import { lazy, Suspense, useEffect, type ComponentType, type LazyExoticComponent } from 'react';
-import { CloudDownload, Cpu, Gauge, HardDrive, HeartPulse, Lock, RotateCcw, SlidersHorizontal, Users as UsersIcon } from 'lucide-react';
+import { CloudDownload, Cpu, Gauge, HardDrive, HeartPulse, Lock, RotateCcw, SlidersHorizontal, Users as UsersIcon, UsersRound } from 'lucide-react';
 import { t } from '../i18n';
 import { navigate } from '../router';
 import { can, useApp, useChanged, type PublicUser } from '../store';
@@ -37,6 +37,7 @@ export const SYSTEM: Group[] = [
     title: 'Access',
     sections: [
       { id: 'users', label: 'Users', icon: UsersIcon, admin: true, page: page(() => import('./Users'), 'Users') },
+      { id: 'groups', label: 'Groups', icon: UsersRound, admin: true, page: page(() => import('./Groups'), 'Groups') },
       { id: 'security', label: 'Security', icon: Lock, admin: true, page: page(() => import('../settings/Security'), 'Security') },
     ],
   },

@@ -42,8 +42,45 @@ pub struct Clip {
     pub size: u64,
     pub created_at: i64,
     pub created_by: String,
+    /// The account that made it (its id; empty for the clips made before accounts were kept).
+    #[serde(default)]
+    pub owner: String,
+    /// Who else sees it.
+    #[serde(default)]
+    pub share: Share,
     #[serde(skip_serializing, default)]
     pub file: PathBuf,
+}
+
+/// A clip shared: with everyone, or with groups of users.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Share {
+    #[serde(default)]
+    pub all: bool,
+    #[serde(default)]
+    pub groups: Vec<String>,
+}
+
+impl Clip {
+    /// Made by this account (an older clip: by its name).
+    fn mine(&self, me: &crate::auth::User) -> bool {
+        if self.owner.is_empty() {
+            self.created_by == me.name() || self.created_by == me.username
+        } else {
+            self.owner == me.id
+        }
+    }
+
+    /// Shared with this account (with everyone, or with a group it is in).
+    fn shared_with(&self, groups: &[String]) -> bool {
+        self.share.all || self.share.groups.iter().any(|g| groups.contains(g))
+    }
+
+    /// An account sees its clips, those shared with it; an admin sees them all.
+    fn visible(&self, me: &crate::auth::User, groups: &[String]) -> bool {
+        me.is_admin() || self.mine(me) || self.shared_with(groups)
+    }
 }
 
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -69,6 +106,8 @@ pub struct Job {
     req: ClipRequest,
     #[serde(skip)]
     by: String,
+    #[serde(skip)]
+    by_id: String,
     #[serde(skip)]
     ended: Option<Instant>,
 }
@@ -200,7 +239,7 @@ impl Clips {
     }
 
     /// Checks a request and queues it.
-    fn queue(&self, req: ClipRequest, by: &str) -> Result<Job, String> {
+    fn queue(&self, req: ClipRequest, by: &str, by_id: &str) -> Result<Job, String> {
         let rec = self.recorders.get(&req.recorder).ok_or("no such recorder")?;
         if req.frames == 0 {
             return Err("the clip has no frame".into());
@@ -234,7 +273,7 @@ impl Clips {
         let id = new_id();
         let name = if name.is_empty() { format!("{} {}", rec.config().name, id) } else { name };
         self.recorders.pin(Pin { id: id.clone(), recorder: req.recorder.clone(), run: req.run.clone(), from: req.t - 1.0 });
-        let job = Job { id, name, recorder: req.recorder.clone(), state: JobState::Queued, progress: 0.0, message: String::new(), clip: None, req, by: by.to_string(), ended: None };
+        let job = Job { id, name, recorder: req.recorder.clone(), state: JobState::Queued, progress: 0.0, message: String::new(), clip: None, req, by: by.to_string(), by_id: by_id.to_string(), ended: None };
         self.jobs.lock().unwrap().push(job.clone());
         self.jobs_changed();
         self.wake.notify_one();
@@ -348,6 +387,8 @@ impl Clips {
             size,
             created_at: now_ms(),
             created_by: job.by.clone(),
+            owner: job.by_id.clone(),
+            share: Share::default(),
             file: out,
         })
     }
@@ -403,25 +444,85 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/clips", get(list).post(create))
         .route("/api/clips/{id}", delete(remove))
+        .route("/api/clips/{id}/share", axum::routing::put(share))
         .route("/api/clips/{id}/download", get(download))
         .route("/api/clips/{id}/thumb.jpg", get(thumb))
         .route("/api/jobs/{id}", delete(cancel))
 }
 
-async fn list(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Value> {
-    let mut list = s.clips.clips.lock().unwrap().clone();
+/// The clips this account sees: its own, those shared with it (an admin: all), each with who
+/// made it, whether it is this account's, whether it is shared with it, and until when it is kept.
+async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<Value> {
+    let groups = crate::groups::of(&s, &me.id);
+    let users = s.auth.users();
+    let keep = s.clips.keep_days.load(std::sync::atomic::Ordering::Relaxed) as i64;
+    let mut list: Vec<Clip> = s.clips.clips.lock().unwrap().iter().filter(|c| c.visible(&me, &groups)).cloned().collect();
     list.sort_by_key(|c| std::cmp::Reverse(c.created_at));
-    Json(serde_json::to_value(list).unwrap_or_default())
+    let out: Vec<Value> = list
+        .iter()
+        .map(|c| {
+            let mut v = serde_json::to_value(c).unwrap_or_default();
+            // Its maker's name now (renamed since), else as it was written.
+            if let Some(u) = users.iter().find(|u| u.id == c.owner) {
+                v["createdBy"] = json!(u.name());
+            }
+            v["mine"] = json!(c.mine(&me));
+            v["sharedWithMe"] = json!(!c.mine(&me) && c.shared_with(&groups));
+            v["expiresAt"] = if keep > 0 { json!(c.created_at + keep * 86_400_000) } else { Value::Null };
+            v
+        })
+        .collect();
+    Json(Value::Array(out))
+}
+
+/// A clip this account may act on: its own (an admin: any).
+fn owned(s: &Shared, me: &crate::auth::User, id: &str) -> ApiResult<Clip> {
+    let clip = s.clips.clips.lock().unwrap().iter().find(|c| c.id == id).cloned().ok_or_else(|| not_found("clip"))?;
+    if me.is_admin() || clip.mine(me) {
+        Ok(clip)
+    } else if clip.visible(me, &crate::groups::of(s, &me.id)) {
+        Err((StatusCode::FORBIDDEN, "only the one who made this clip can change it".into()))
+    } else {
+        Err(not_found("clip"))
+    }
+}
+
+/// A clip this account sees.
+fn seen(s: &Shared, me: &crate::auth::User, id: &str) -> ApiResult<Clip> {
+    let clip = s.clips.clips.lock().unwrap().iter().find(|c| c.id == id).cloned().ok_or_else(|| not_found("clip"))?;
+    if clip.visible(me, &crate::groups::of(s, &me.id)) {
+        Ok(clip)
+    } else {
+        Err(not_found("clip"))
+    }
+}
+
+/// Shares a clip with everyone, or with groups (empty: with nobody).
+async fn share(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Share>) -> ApiResult<StatusCode> {
+    owned(&s, &me, &id)?;
+    let known: Vec<String> = crate::groups::list(&s).into_iter().map(|g| g.id).collect();
+    let mut groups: Vec<String> = b.groups.into_iter().filter(|g| known.contains(g)).collect();
+    groups.sort();
+    groups.dedup();
+    {
+        let mut list = s.clips.clips.lock().unwrap();
+        let c = list.iter_mut().find(|c| c.id == id).ok_or_else(|| not_found("clip"))?;
+        c.share = Share { all: b.all, groups };
+    }
+    s.clips.save();
+    s.clips.clips_changed();
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(req): Json<ClipRequest>) -> ApiResult<(StatusCode, Json<Value>)> {
     require(me.can_extract())?;
-    let job = s.clips.queue(req, me.name()).map_err(bad)?;
+    let job = s.clips.queue(req, me.name(), &me.id).map_err(bad)?;
     Ok((StatusCode::ACCEPTED, Json(serde_json::to_value(job).unwrap_or_default())))
 }
 
 async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
     require(me.can_extract())?;
+    owned(&s, &me, &id)?;
     s.clips.delete(&id).await.ok_or_else(|| not_found("clip"))?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -446,8 +547,8 @@ fn file_name(name: &str) -> String {
     format!("{}.mp4", clean.trim())
 }
 
-async fn download(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>, req: Request) -> ApiResult<Response> {
-    let clip = s.clips.clips.lock().unwrap().iter().find(|c| c.id == id).cloned().ok_or_else(|| not_found("clip"))?;
+async fn download(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, req: Request) -> ApiResult<Response> {
+    let clip = seen(&s, &me, &id)?;
     // `?inline=1`: played in the page (the clips' player), not saved.
     let inline = req.uri().query().is_some_and(|q| q.split('&').any(|p| p == "inline=1"));
     let mut res = tower_http::services::ServeFile::new(&clip.file).oneshot(req).await.map_err(internal)?.into_response();
@@ -463,7 +564,8 @@ async fn download(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(
     Ok(res)
 }
 
-async fn thumb(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
+async fn thumb(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
+    seen(&s, &me, &id)?;
     let data = tokio::fs::read(s.clips.thumb_path(&id)).await.map_err(|_| not_found("image"))?;
     let mut r = Response::new(axum::body::Body::from(data));
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
@@ -490,6 +592,25 @@ async fn purge(c: Arc<Clips>) {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn who_sees_a_clip() {
+        use crate::auth::{Role, User};
+        let ana = User::without_password("ana".into(), "Ana".into(), Role::Operator, String::new());
+        let bob = User::without_password("bob".into(), "Bob".into(), Role::Viewer, String::new());
+        let boss = User::without_password("boss".into(), String::new(), Role::Admin, String::new());
+        let mut c = Clip { id: "c".into(), name: "x".into(), recorder: "r".into(), recorder_name: "R".into(), start: 0, frames: 1, fps_num: 25, fps_den: 1, format: String::new(), size: 0, created_at: 0, created_by: "Ana".into(), owner: ana.id.clone(), share: Share::default(), file: PathBuf::new() };
+        assert!(c.visible(&ana, &[]) && !c.visible(&bob, &[]) && c.visible(&boss, &[]));
+        c.share.groups = vec!["g".into()];
+        assert!(c.visible(&bob, &["g".into()]) && !c.visible(&bob, &["h".into()]));
+        c.share = Share { all: true, groups: vec![] };
+        assert!(c.visible(&bob, &[]) && !c.mine(&bob));
+        // A clip made before the accounts were kept: by its maker's name.
+        let old = Clip { owner: String::new(), share: Share::default(), ..c };
+        assert!(old.mine(&ana) && !old.mine(&bob));
+    }
+
     #[test]
     fn file_names() {
         assert_eq!(super::file_name("Plateau 1 / 14:32"), "Plateau 1 - 14-32.mp4");

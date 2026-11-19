@@ -142,4 +142,14 @@ export interface Clip {
   size: number;
   createdAt: number;
   createdBy: string;
+  /** The account that made it (empty: made before accounts were kept). */
+  owner?: string;
+  /** Who else sees it: everyone, or groups of users. */
+  share?: { all: boolean; groups: string[] };
+  /** Made by the one asking. */
+  mine?: boolean;
+  /** Shared with the one asking (not theirs). */
+  sharedWithMe?: boolean;
+  /** Deleted by itself at this time (ms); null: kept until deleted by hand. */
+  expiresAt?: number | null;
 }

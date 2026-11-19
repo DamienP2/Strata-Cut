@@ -10,6 +10,7 @@ mod auth;
 mod cli;
 mod clips;
 mod config;
+mod groups;
 mod guard;
 mod health;
 mod logs;
