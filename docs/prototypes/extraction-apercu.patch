@@ -1,0 +1,310 @@
+diff --git a/crates/strata-cut-server/src/clips.rs b/crates/strata-cut-server/src/clips.rs
+index 1d099cb..f35c821 100644
+--- a/crates/strata-cut-server/src/clips.rs
++++ b/crates/strata-cut-server/src/clips.rs
+@@ -344,7 +344,7 @@ impl Clips {
+         let start = job.req.t - base - 0.5 / fps;
+         let dur = job.req.frames as f64 / fps;
+         let input = format!("concat:{}", segs.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join("|"));
+-        let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into(), "-i".into(), input.clone()];
++        let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into(), "-i".into(), input];
+         let sound = format!("{},atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS", crate::recorder::AUDIO_SYNC, start + dur);
+         match kind {
+             Kind::Video => {
+@@ -425,16 +425,12 @@ impl Clips {
+             Kind::Image => {
+                 thumb_cmd.arg("-i").arg(&out);
+             }
+-            // The sound alone: a picture of the recording at its middle.
+-            Kind::Audio => {
+-                let mid = start + if dur > 1.0 { dur / 2.0 } else { 0.0 };
+-                thumb_cmd.args(["-copyts", "-i", &input, "-vf", &format!("trim=start={mid:.6},setpts=PTS-STARTPTS,scale=-2:144")]);
+-            }
++            // The sound alone: no picture (the list shows its icon).
++            Kind::Audio => {}
+         }
+         if kind != Kind::Audio {
+-            thumb_cmd.args(["-vf", "scale=-2:144"]);
++            let _ = thumb_cmd.args(["-vf", "scale=-2:144", "-frames:v", "1", "-q:v", "5", "-update", "1", "-y"]).arg(&thumb).stdin(Stdio::null()).status().await;
+         }
+-        let _ = thumb_cmd.args(["-frames:v", "1", "-q:v", "5", "-update", "1", "-y"]).arg(&thumb).stdin(Stdio::null()).status().await;
+         Ok(Clip {
+             id: job.id.clone(),
+             name: job.name.clone(),
+diff --git a/web/src/i18n/fr/business.ts b/web/src/i18n/fr/business.ts
+index 520d0bb..702c8bf 100644
+--- a/web/src/i18n/fr/business.ts
++++ b/web/src/i18n/fr/business.ts
+@@ -333,6 +333,10 @@ export const business: Record<string, string> = {
+   'Not recorded': 'Non enregistré',
+   'Play or → goes on with the next recording.': 'Lecture ou → reprend à l’enregistrement suivant.',
+   'Hardware inputs': 'Entrées hardware',
++  'Stop the preview': 'Arrêter l’aperçu',
++  'Preview the clip: from IN to OUT': 'Aperçu de l’extrait\u00a0: de IN à OUT',
++  'Loop of {h} h': 'Boucle de {h} h',
++  'Back to': 'Retour possible jusqu’au',
+   'What the clip holds': 'Ce que contient l’extrait',
+   'The picture with its sound': 'L’image avec son son',
+   Sound: 'Son',
+diff --git a/web/src/pages/ClipPlayer.tsx b/web/src/pages/ClipPlayer.tsx
+index c8523ab..7adeee9 100644
+--- a/web/src/pages/ClipPlayer.tsx
++++ b/web/src/pages/ClipPlayer.tsx
+@@ -1,6 +1,6 @@
+ // Checks a clip in the page: image by image, with its sound and VU-meters.
+ import { useCallback, useEffect, useRef, useState } from 'react';
+-import { ChevronFirst, ChevronLast, Download, Pause, Play, StepBack, StepForward, X } from 'lucide-react';
++import { AudioLines, ChevronFirst, ChevronLast, Download, Pause, Play, StepBack, StepForward, X } from 'lucide-react';
+ import { useApp } from '../store';
+ import { locale, t } from '../i18n';
+ import { day, duration, fpsOf, size, timecode } from '../tc';
+@@ -106,8 +106,13 @@ export function ClipPlayer({ clip, onClose }: { clip: Clip; onClose: () => void
+         ) : (
+         <>
+         <div className="sc-clip-view" onClick={toggle}>
+-          {/* The sound alone: the recording's picture at its middle while it plays. */}
+-          <video ref={video} className="sc-video" src={`/api/clips/${clip.id}/download?inline=1`} poster={clip.kind === 'audio' ? `/api/clips/${clip.id}/thumb.jpg` : undefined} preload="auto" playsInline onLoadedData={() => seek(0)} />
++          {/* The sound alone: its icon (no picture). */}
++          <video ref={video} className="sc-video" src={`/api/clips/${clip.id}/download?inline=1`} preload="auto" playsInline onLoadedData={() => seek(0)} />
++          {clip.kind === 'audio' && (
++            <span className="sc-clip-sound">
++              <AudioLines size={56} strokeWidth={1.5} />
++            </span>
++          )}
+           <Meters out={audio.out} />
+         </div>
+         <input type="range" className="sc-scrub" min={0} max={last} step={1} value={frame} aria-label={t('Position')} onChange={(e) => seek(Number(e.target.value))} onKeyDown={(e) => e.stopPropagation()} />
+diff --git a/web/src/pages/Clips.tsx b/web/src/pages/Clips.tsx
+index 01e96e8..7107499 100644
+--- a/web/src/pages/Clips.tsx
++++ b/web/src/pages/Clips.tsx
+@@ -6,7 +6,7 @@
+ import { useCallback, useEffect, useMemo, useState } from 'react';
+ import { useDisplayPref } from '../displayPrefs';
+ import { useShallow } from 'zustand/react/shallow';
+-import { AudioLines, CalendarClock, Camera, Clapperboard, Download, Globe2, Lock, Play, Search, Share2, Trash2, UsersRound, X } from 'lucide-react';
++import { AudioLines, CalendarClock, Camera, Clapperboard, Film, Download, Globe2, Lock, Play, Search, Share2, Trash2, UsersRound, X } from 'lucide-react';
+ import { api, can, useApp, useChanged } from '../store';
+ import { lang, locale, t, tn } from '../i18n';
+ import { confirmDialog } from '../ui/dialogs';
+@@ -281,16 +281,28 @@ export function Clips() {
+                               </td>
+                               <td>
+                                 <div className="sc-clip-name sc-clip-open" onClick={() => setOpen(c)}>
+-                                  <div className="sc-mini">
+-                                    <img src={`/api/clips/${c.id}/thumb.jpg`} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
++                                  <div className={`sc-mini ${c.kind ?? 'video'}`}>
++                                    {/* A sound: its icon, not a picture. */}
++                                    {c.kind === 'audio' ? (
++                                      <span className="sc-mini-sound">
++                                        <AudioLines size={22} />
++                                      </span>
++                                    ) : (
++                                      <img src={`/api/clips/${c.id}/thumb.jpg`} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
++                                    )}
+                                     <span className="sc-mini-play">
+                                       <Play size={14} />
+                                     </span>
+-                                    {c.kind && c.kind !== 'video' && <span className={`sc-mini-kind ${c.kind}`}>{c.kind === 'audio' ? <AudioLines size={11} /> : <Camera size={11} />}</span>}
+                                   </div>
+                                   <span className="sc-clip-t">
+                                     <strong title={c.name}>{c.name}</strong>
+-                                    <span className="muted">{c.mine ? c.format : t('By {name}', { name: c.createdBy })}</span>
++                                    <span className="sc-clip-sub">
++                                      <span className={`sc-kind-tag ${c.kind ?? 'video'}`}>
++                                        {c.kind === 'audio' ? <AudioLines size={11} /> : c.kind === 'image' ? <Camera size={11} /> : <Film size={11} />}
++                                        {c.kind === 'audio' ? t('Sound') : c.kind === 'image' ? t('Image') : t('Video')}
++                                      </span>
++                                      <span className="muted">{c.mine ? c.format : t('By {name}', { name: c.createdBy })}</span>
++                                    </span>
+                                   </span>
+                                 </div>
+                               </td>
+diff --git a/web/src/pages/Extract.tsx b/web/src/pages/Extract.tsx
+index 3115637..494b8dc 100644
+--- a/web/src/pages/Extract.tsx
++++ b/web/src/pages/Extract.tsx
+@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import { cachedStill, loadStill } from '../stills';
+ import { useDisplayPref } from '../displayPrefs';
+ import { useShallow } from 'zustand/react/shallow';
+-import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
++import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, History, Pause, Play, PlayCircle, Square, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
+ import { api, can, serverNow, useApp, useChanged } from '../store';
+ import { RecLogo } from '../ui/RecLogo';
+ import { t, locale } from '../i18n';
+@@ -284,6 +284,33 @@ function Editor({ rec }: { rec: Recorder }) {
+     setHole(null);
+     void pl.seekWall(wall);
+   }, []);
++  /** The clip played from its in to its out (then stopped on the out). */
++  const [previewing, setPreviewing] = useState(false);
++  const previewStarted = useRef(false);
++  const previewClip = () => {
++    const pl = p();
++    if (!pl || !mIn || !mOut) return;
++    if (previewing) {
++      pl.pause();
++      setPreviewing(false);
++      return;
++    }
++    setLive(false);
++    setHole(null);
++    previewStarted.current = false;
++    setPreviewing(true);
++    void pl.seekWall(mIn.wall, true);
++  };
++  useEffect(() => {
++    if (!previewing) return;
++    if (playing) previewStarted.current = true;
++    // Paused by hand, or at its out: over.
++    if ((previewStarted.current && !playing) || (mOut && pos && pos.wall >= mOut.wall)) {
++      if (playing) p()?.pause();
++      setPreviewing(false);
++    }
++  }, [pos, playing, previewing, mOut]); // eslint-disable-line react-hooks/exhaustive-deps
++
+   /** An in or out point dragged on the timeline: the frame there becomes it. */
+   const markAt = useCallback((which: 'in' | 'out', wall: number) => {
+     pendingMark.current = { which, wall };
+@@ -566,6 +593,9 @@ function Editor({ rec }: { rec: Recorder }) {
+           <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>
+             <Eraser size={18} />
+           </button>
++          <button className={`ctl sc-preview ${previewing ? 'on' : ''}`} data-tip={previewing ? t('Stop the preview') : t('Preview the clip: from IN to OUT')} disabled={kind === 'image' || frames === 0} onClick={previewClip}>
++            {previewing ? <Square size={16} /> : <PlayCircle size={18} />}
++          </button>
+           {can.extract(user) && <ExtractButton jobs={myJobs} recId={rec.id} canCut={canCut} onCut={() => void cut()} />}
+         </div>
+       </div>
+@@ -749,7 +779,7 @@ function MarkTag({ kind, mark, fps, timezone, onType, onClear }: { kind: 'in' |
+   useEffect(() => setText(shown), [shown]);
+   return (
+     <span className={`sc-mtag ${kind} ${mark ? 'set' : ''}`} data-tip={kind === 'in' ? t('In point (type a timecode)') : t('Out point (type a timecode)')}>
+-      <i>{kind === 'in' ? t('In').charAt(0) : t('Out').charAt(0)}</i>
++      <i>{kind === 'in' ? 'IN' : 'OUT'}</i>
+       <input
+         value={text}
+         placeholder="--:--:--:--"
+@@ -911,7 +941,7 @@ function ExtractButton({ jobs, recId, canCut, onCut }: { jobs: Job[]; recId: str
+ const TICKS = [1000, 2000, 5000, 10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000, 7_200_000, 10_800_000, 21_600_000];
+ 
+ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fps: number; span: number; setSpan: (ms: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; onMarkAt: (which: 'in' | 'out', wall: number) => void; timezone: string; guide: Programme[]; onProgramme: (g: Programme) => void }) {
+-  const { rec, pos, playing, fps, span, setSpan, spans, clips, mIn, mOut, onSeek, onMarkAt, timezone, guide, onProgramme } = props;
++  const { rec, pos, playing, fps, span, setSpan, spans, mIn, mOut, onSeek, onMarkAt, timezone, guide, onProgramme } = props;
+   const maxSpan = zoomMax(rec.loopHours);
+   const tracks = useRef<HTMLDivElement>(null);
+   const [width, setWidth] = useState(800);
+@@ -1113,10 +1143,6 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
+   };
+ 
+   const onAirKey = pos ? guide.find((g) => g.start <= pos.wall && pos.wall < g.end) : undefined;
+-  // Overview: the whole loop.
+-  const oFrom = loopFrom;
+-  const oSpan = now - loopFrom;
+-  const ox = (w: number) => Math.min(100, Math.max(0, ((w - oFrom) / oSpan) * 100));
+   const oldest = spans.length ? Math.min(...spans.map((s) => s.from)) : now;
+   // The in and out as drawn (one being dragged, where it is now).
+   const inAt = moving?.which === 'in' ? moving.wall : mIn?.wall;
+@@ -1135,43 +1161,18 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
+             <RotateCcw size={14} />
+           </button>
+         </div>
+-        <span className="muted">
+-          {day(start, timezone, locale())} {clock(start, timezone)} → {clock(end, timezone)}
+-        </span>
+         {pos && (pos.wall < start || pos.wall > end) && (
+           <button type="button" className="btn small" title={t('Centre on the playhead')} onClick={centre}>
+             <Crosshair size={13} /> {t('Playhead')}
+           </button>
+         )}
+         <div className="spacer" />
+-        <span className="muted">
+-          {t('Loop {h} h · since {when}', { h: rec.loopHours, when: `${day(oldest, timezone, locale())} ${clock(oldest, timezone)}` })}
++        {/* How far back the loop goes. */}
++        <span className="sc-backto" data-tip={t('Loop of {h} h', { h: rec.loopHours })}>
++          <History size={14} />
++          {t('Back to')} <b>{day(oldest, timezone, locale())} {clock(oldest, timezone)}</b>
+         </span>
+       </div>
+-      <div
+-        className="sc-overview"
+-        title={t('The whole loop: click or drag to move the view')}
+-        onPointerDown={(e) => {
+-          if (e.button !== 0) return;
+-          e.currentTarget.setPointerCapture(e.pointerId);
+-          const r = e.currentTarget.getBoundingClientRect();
+-          pan(oFrom + ((e.clientX - r.left) / r.width) * oSpan - span / 2);
+-        }}
+-        onPointerMove={(e) => {
+-          if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+-          const r = e.currentTarget.getBoundingClientRect();
+-          pan(oFrom + ((e.clientX - r.left) / r.width) * oSpan - span / 2);
+-        }}
+-      >
+-        {spans.map((s, i) => (
+-          <div key={i} className="sc-ov-rec" style={{ left: `${ox(s.from)}%`, width: `max(2px, ${ox(s.to) - ox(s.from)}%)` }} />
+-        ))}
+-        {clips.map((c) => (
+-          <div key={c.id} className="sc-ov-clip" style={{ left: `${ox(c.start)}%` }} title={c.name} />
+-        ))}
+-        <div className="sc-ov-win" style={{ left: `${ox(start)}%`, width: `${Math.max(0.4, ox(end) - ox(start))}%` }} />
+-        {pos && <div className="sc-ov-head" style={{ left: `${ox(pos.wall)}%` }} />}
+-      </div>
+       <div
+         className={`sc-tracks ${grab}`}
+         ref={tracks}
+@@ -1255,7 +1256,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
+         {/* The in and out points, the whole height of the timeline, each dragged by its handle or its line. */}
+         {inAt !== undefined && (
+           <div className={`sc-mark in ${moving?.which === 'in' ? 'moving' : ''}`} style={{ left: `${x(inAt)}%` }} data-tip={t('Drag to move the in point')}>
+-            <b>{t('In').charAt(0)}</b>
++            <b>IN</b>
+             <i className="sc-grip">
+               <ChevronLeft size={12} strokeWidth={3} />
+             </i>
+@@ -1263,7 +1264,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
+         )}
+         {outAt !== undefined && (
+           <div className={`sc-mark out ${moving?.which === 'out' ? 'moving' : ''}`} style={{ left: `${x(outAt)}%` }} data-tip={t('Drag to move the out point')}>
+-            <b>{t('Out').charAt(0)}</b>
++            <b>OUT</b>
+             <i className="sc-grip">
+               <ChevronRight size={12} strokeWidth={3} />
+             </i>
+diff --git a/web/src/styles.css b/web/src/styles.css
+index ca2ccc3..c77c328 100644
+--- a/web/src/styles.css
++++ b/web/src/styles.css
+@@ -1128,9 +1128,15 @@ a.btn { color: inherit; }
+ .sc-kind-b.audio.on svg { color: var(--mask, #2dd4bf); }
+ .sc-kind-b.image.on svg { color: #f472b6; }
+ @media (max-width: 1280px) { .sc-kind-b span { display: none; } }
+-.sc-mini-kind { position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; color: #0b0c12; }
+-.sc-mini-kind.audio { background: var(--mask, #2dd4bf); }
+-.sc-mini-kind.image { background: #f472b6; }
++/* Extraits: the kind of each clip; a sound shows its icon, not a picture. */
++.sc-mini.audio { background: color-mix(in srgb, var(--mask, #2dd4bf) 16%, var(--panel-3)); }
++.sc-mini-sound { position: absolute; inset: 0; display: grid; place-items: center; color: var(--mask, #2dd4bf); }
++.sc-clip-sub { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11.5px; }
++.sc-clip-sub .muted { overflow: hidden; text-overflow: ellipsis; }
++.sc-kind-tag { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 1px 6px; border-radius: 5px; font-size: 11px; font-weight: 600; background: var(--accent-soft); color: var(--accent-2); }
++.sc-kind-tag.audio { background: color-mix(in srgb, var(--mask, #2dd4bf) 16%, transparent); color: var(--mask, #2dd4bf); }
++.sc-kind-tag.image { background: rgba(244, 114, 182, 0.16); color: #f472b6; }
++.sc-clip-sound { position: absolute; inset: 0; display: grid; place-items: center; color: var(--mask, #2dd4bf); pointer-events: none; }
+ /* The in and out handles: a tab on the outer side of each line, the height of the pictures and the sound. */
+ .sc-grip { position: absolute; top: 0; bottom: 0; width: 14px; display: grid; place-items: center; color: #0b0c12; cursor: ew-resize; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45); }
+ .sc-mark.in .sc-grip { right: 1px; background: var(--accent); border-radius: 7px 0 0 7px; }
+@@ -1139,3 +1145,12 @@ a.btn { color: inherit; }
+ .sc-mark:hover .sc-grip, .sc-mark.moving .sc-grip { filter: brightness(1.12); width: 16px; }
+ .sc-mark.in b { left: auto; right: 0; border-radius: 3px 3px 0 3px; }
+ .sc-mark.out b { right: auto; left: 0; border-radius: 3px 3px 3px 0; }
++/* IN / OUT in words. */
++.sc-mtag i { width: auto; min-width: 26px; padding: 0 5px; font-size: 10px; letter-spacing: 0.03em; }
++.sc-mark b { letter-spacing: 0.03em; }
++/* How far back the loop goes. */
++.sc-backto { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-3); }
++.sc-backto b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
++/* The clip's preview, next to the scissors. */
++.sc-preview { gap: 6px; }
++.sc-preview.on { color: var(--accent-2); border-color: var(--accent); background: var(--accent-soft); }
