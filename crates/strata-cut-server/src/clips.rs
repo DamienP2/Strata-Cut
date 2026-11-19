@@ -48,8 +48,32 @@ pub struct Clip {
     /// Who else sees it.
     #[serde(default)]
     pub share: Share,
+    /// Picture and sound, the sound alone, or one picture.
+    #[serde(default)]
+    pub kind: Kind,
     #[serde(skip_serializing, default)]
     pub file: PathBuf,
+}
+
+/// What a clip holds: the picture with its sound (MP4), the sound alone (M4A, every track), or
+/// the one picture under the playhead (JPEG, full size).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    #[default]
+    Video,
+    Audio,
+    Image,
+}
+
+impl Kind {
+    fn ext(self) -> &'static str {
+        match self {
+            Kind::Video => "mp4",
+            Kind::Audio => "m4a",
+            Kind::Image => "jpg",
+        }
+    }
 }
 
 /// A clip shared: with everyone, or with groups of users.
@@ -122,6 +146,8 @@ pub struct ClipRequest {
     pub frames: u32,
     #[serde(default)]
     pub name: String,
+    #[serde(default)]
+    pub kind: Kind,
 }
 
 pub struct Clips {
@@ -239,8 +265,11 @@ impl Clips {
     }
 
     /// Checks a request and queues it.
-    fn queue(&self, req: ClipRequest, by: &str, by_id: &str) -> Result<Job, String> {
+    fn queue(&self, mut req: ClipRequest, by: &str, by_id: &str) -> Result<Job, String> {
         let rec = self.recorders.get(&req.recorder).ok_or("no such recorder")?;
+        if req.kind == Kind::Image {
+            req.frames = 1;
+        }
         if req.frames == 0 {
             return Err("the clip has no frame".into());
         }
@@ -304,23 +333,44 @@ impl Clips {
         let (fps_num, fps_den) = if media.fps_den == 0 { (25, 1) } else { (media.fps_num, media.fps_den) };
         let dir = self.dir();
         tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("{}: {e}", dir.display()))?;
-        let part = dir.join(format!("{}.part.mp4", job.id));
-        let out = dir.join(format!("{}.mp4", job.id));
+        let kind = job.req.kind;
+        if kind == Kind::Audio && media.audio_tracks == 0 {
+            return Err("this recording has no sound".into());
+        }
+        let part = dir.join(format!("{}.part.{}", job.id, kind.ext()));
+        let out = dir.join(format!("{}.{}", job.id, kind.ext()));
         // The recorder's times go on past the 33-bit wrap; the files' start again from 0 at it.
         let base = (seg_t0 / crate::recorder::PTS_WRAP).floor() * crate::recorder::PTS_WRAP;
         let start = job.req.t - base - 0.5 / fps;
         let dur = job.req.frames as f64 / fps;
         let input = format!("concat:{}", segs.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join("|"));
-        let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into(), "-i".into(), input];
-        args.extend(["-map", "0:v:0", "-map", "0:a?"].map(String::from));
-        args.extend(["-vf".into(), format!("trim=start={start:.6},setpts=PTS-STARTPTS")]);
-        args.extend(["-af".into(), format!("{},atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS", crate::recorder::AUDIO_SYNC, start + dur)]);
-        args.extend(["-frames:v".into(), job.req.frames.to_string()]);
-        args.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "16", "-profile:v", "high", "-pix_fmt", "yuv420p"].map(String::from));
-        if media.interlaced {
-            args.extend(["-flags", "+ildct+ilme"].map(String::from));
+        let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into(), "-i".into(), input.clone()];
+        let sound = format!("{},atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS", crate::recorder::AUDIO_SYNC, start + dur);
+        match kind {
+            Kind::Video => {
+                args.extend(["-map", "0:v:0", "-map", "0:a?"].map(String::from));
+                args.extend(["-vf".into(), format!("trim=start={start:.6},setpts=PTS-STARTPTS")]);
+                args.extend(["-af".into(), sound]);
+                args.extend(["-frames:v".into(), job.req.frames.to_string()]);
+                args.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "16", "-profile:v", "high", "-pix_fmt", "yuv420p"].map(String::from));
+                if media.interlaced {
+                    args.extend(["-flags", "+ildct+ilme"].map(String::from));
+                }
+                args.extend(["-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "-y"].map(String::from));
+            }
+            // Every sound track, as they are recorded.
+            Kind::Audio => {
+                args.extend(["-map", "0:a", "-vn", "-af"].map(String::from));
+                args.push(sound);
+                args.extend(["-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "-y"].map(String::from));
+            }
+            // The picture under the playhead, whole (an interlaced one deinterlaced).
+            Kind::Image => {
+                args.extend(["-map", "0:v:0", "-an", "-vf"].map(String::from));
+                args.push(format!("trim=start={start:.6},setpts=PTS-STARTPTS{}", if media.interlaced { ",yadif" } else { "" }));
+                args.extend(["-frames:v", "1", "-q:v", "2", "-update", "1", "-y"].map(String::from));
+            }
         }
-        args.extend(["-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "-y"].map(String::from));
         args.push(part.to_string_lossy().into_owned());
         let mut cmd = tokio::process::Command::new(&self.recorders.ffmpeg);
         cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
@@ -339,10 +389,11 @@ impl Clips {
         });
         let mut last = Instant::now();
         while let Ok(Some(l)) = lines.next_line().await {
-            if let Some(f) = l.strip_prefix("frame=").and_then(|f| f.trim().parse::<f64>().ok()) {
-                if last.elapsed() > Duration::from_millis(400) {
+            // How far it is: the time written (a sound alone has no frames).
+            if let Some(us) = l.strip_prefix("out_time_us=").and_then(|f| f.trim().parse::<f64>().ok()) {
+                if last.elapsed() > Duration::from_millis(400) && dur > 0.0 {
                     last = Instant::now();
-                    let p = (f / job.req.frames as f64).min(0.99);
+                    let p = (us / 1e6 / dur).clamp(0.0, 0.99);
                     self.set_job(&job.id, |j| j.progress = p);
                 }
             }
@@ -366,14 +417,24 @@ impl Clips {
         }
         let mut thumb_cmd = tokio::process::Command::new(&self.recorders.ffmpeg);
         crate::recorder::background(&mut thumb_cmd);
-        let _ = thumb_cmd
-            .args(["-v", "error", "-ss", &format!("{:.3}", if dur > 1.0 { dur / 2.0 } else { 0.0 }), "-i"])
-            .arg(&out)
-            .args(["-frames:v", "1", "-vf", "scale=-2:144", "-q:v", "5", "-y"])
-            .arg(&thumb)
-            .stdin(Stdio::null())
-            .status()
-            .await;
+        thumb_cmd.args(["-v", "error"]);
+        match kind {
+            Kind::Video => {
+                thumb_cmd.args(["-ss", &format!("{:.3}", if dur > 1.0 { dur / 2.0 } else { 0.0 }), "-i"]).arg(&out);
+            }
+            Kind::Image => {
+                thumb_cmd.arg("-i").arg(&out);
+            }
+            // The sound alone: a picture of the recording at its middle.
+            Kind::Audio => {
+                let mid = start + if dur > 1.0 { dur / 2.0 } else { 0.0 };
+                thumb_cmd.args(["-copyts", "-i", &input, "-vf", &format!("trim=start={mid:.6},setpts=PTS-STARTPTS,scale=-2:144")]);
+            }
+        }
+        if kind != Kind::Audio {
+            thumb_cmd.args(["-vf", "scale=-2:144"]);
+        }
+        let _ = thumb_cmd.args(["-frames:v", "1", "-q:v", "5", "-update", "1", "-y"]).arg(&thumb).stdin(Stdio::null()).status().await;
         Ok(Clip {
             id: job.id.clone(),
             name: job.name.clone(),
@@ -383,12 +444,17 @@ impl Clips {
             frames: job.req.frames,
             fps_num,
             fps_den,
-            format: "H.264 · AAC".into(),
+            format: match kind {
+                Kind::Video => "H.264 · AAC".into(),
+                Kind::Audio => format!("AAC · {} × 2.0", media.audio_tracks.max(1)),
+                Kind::Image => format!("JPEG · {}×{}", media.width, media.height),
+            },
             size,
             created_at: now_ms(),
             created_by: job.by.clone(),
             owner: job.by_id.clone(),
             share: Share::default(),
+            kind,
             file: out,
         })
     }
@@ -541,10 +607,10 @@ async fn cancel(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// "Plateau 1 / 14:32" → "Plateau 1 - 14-32.mp4" (no path characters).
-fn file_name(name: &str) -> String {
+/// "Plateau 1 / 14:32" → "Plateau 1 - 14-32.mp4" (no path characters), with the clip's kind.
+fn file_name(name: &str, kind: Kind) -> String {
     let clean: String = name.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '-' } else { c }).collect();
-    format!("{}.mp4", clean.trim())
+    format!("{}.{}", clean.trim(), kind.ext())
 }
 
 async fn download(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, req: Request) -> ApiResult<Response> {
@@ -555,7 +621,7 @@ async fn download(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath
     if inline {
         return Ok(res);
     }
-    let name = file_name(&clip.name);
+    let name = file_name(&clip.name, clip.kind);
     let ascii: String = name.chars().map(|c| if c.is_ascii() && c != '"' { c } else { '_' }).collect();
     let encoded: String = name.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
     if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")) {
@@ -600,7 +666,7 @@ mod tests {
         let ana = User::without_password("ana".into(), "Ana".into(), Role::Operator, String::new());
         let bob = User::without_password("bob".into(), "Bob".into(), Role::Viewer, String::new());
         let boss = User::without_password("boss".into(), String::new(), Role::Admin, String::new());
-        let mut c = Clip { id: "c".into(), name: "x".into(), recorder: "r".into(), recorder_name: "R".into(), start: 0, frames: 1, fps_num: 25, fps_den: 1, format: String::new(), size: 0, created_at: 0, created_by: "Ana".into(), owner: ana.id.clone(), share: Share::default(), file: PathBuf::new() };
+        let mut c = Clip { id: "c".into(), name: "x".into(), recorder: "r".into(), recorder_name: "R".into(), start: 0, frames: 1, fps_num: 25, fps_den: 1, format: String::new(), size: 0, created_at: 0, created_by: "Ana".into(), owner: ana.id.clone(), share: Share::default(), kind: Kind::Video, file: PathBuf::new() };
         assert!(c.visible(&ana, &[]) && !c.visible(&bob, &[]) && c.visible(&boss, &[]));
         c.share.groups = vec!["g".into()];
         assert!(c.visible(&bob, &["g".into()]) && !c.visible(&bob, &["h".into()]));
@@ -613,6 +679,7 @@ mod tests {
 
     #[test]
     fn file_names() {
-        assert_eq!(super::file_name("Plateau 1 / 14:32"), "Plateau 1 - 14-32.mp4");
+        assert_eq!(super::file_name("Plateau 1 / 14:32", super::Kind::Video), "Plateau 1 - 14-32.mp4");
+        assert_eq!(super::file_name("Son", super::Kind::Audio), "Son.m4a");
     }
 }

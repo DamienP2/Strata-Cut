@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, ChevronsRight, Crosshair, Download, Eraser, FastForward, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { RecLogo } from '../ui/RecLogo';
 import { t, locale } from '../i18n';
@@ -145,6 +145,10 @@ function Editor({ rec }: { rec: Recorder }) {
   spansRef.current = spans;
   /** The playhead in a period not recorded: that period (the picture says so instead of black). */
   const [hole, setHole] = useState<{ from: number; to: number } | null>(null);
+  /** An in or out point let go on the timeline, set once its frame is shown. */
+  const pendingMark = useRef<{ which: 'in' | 'out'; wall: number } | null>(null);
+  /** What the clip holds: the picture with its sound, the sound alone, the picture under the playhead. */
+  const [kind, setKind] = useDisplayPref<'video' | 'audio' | 'image'>('extract.kind', 'video');
   const [clips, setClips] = useState<Clip[]>([]);
   const [guide, setGuide] = useState<Programme[]>([]);
   const fps = fpsOf(run?.media?.fpsNum, run?.media?.fpsDen);
@@ -179,6 +183,12 @@ function Editor({ rec }: { rec: Recorder }) {
     p.onFrame = (wall, tt) => {
       setHole(null);
       last = { run: p.run?.id ?? '', t: tt, wall };
+      // An in or out point dragged on the timeline: set on the frame it was let go at.
+      const want = pendingMark.current;
+      if (want && Math.abs(wall - want.wall) < 120) {
+        pendingMark.current = null;
+        (want.which === 'in' ? setIn : setOut)(last);
+      }
       if (!frame)
         frame = requestAnimationFrame(() => {
           frame = 0;
@@ -265,6 +275,8 @@ function Editor({ rec }: { rec: Recorder }) {
     const before = all.filter((x) => x.to <= wall).at(-1);
     const after = all.find((x) => x.from > wall);
     if (all.length && !all.some((x) => wall >= x.from && wall < x.to) && wall < serverNow()) {
+      // Not a frame: no in or out point there.
+      pendingMark.current = null;
       setHole({ from: before?.to ?? wall, to: after?.from ?? serverNow() });
       setPos({ run: '', t: -1, wall });
       return;
@@ -272,6 +284,12 @@ function Editor({ rec }: { rec: Recorder }) {
     setHole(null);
     void pl.seekWall(wall);
   }, []);
+  /** An in or out point dragged on the timeline: the frame there becomes it. */
+  const markAt = useCallback((which: 'in' | 'out', wall: number) => {
+    pendingMark.current = { which, wall };
+    seekWall(wall);
+  }, [seekWall]);
+
   /** From a period not recorded: to the recording after it (or before it, going back). */
   const leaveHole = (forward: boolean, play = false) => {
     const pl = p();
@@ -416,12 +434,23 @@ function Editor({ rec }: { rec: Recorder }) {
 
   const admin = can.admin(user);
   const frames = mIn && mOut && mIn.run === mOut.run && mOut.t >= mIn.t ? Math.round((mOut.t - mIn.t) * fps) + 1 : 0;
-  const canCut = can.extract(user) && frames > 0;
+  const canCut = can.extract(user) && (kind === 'image' ? !!pos && !hole && !!pos.run : frames > 0);
   const cut = async () => {
+    // The picture under the playhead: no in or out needed (they stay).
+    if (kind === 'image') {
+      if (!pos || hole || !pos.run) return;
+      try {
+        await api('POST', '/api/clips', { recorder: rec.id, run: pos.run, t: pos.t, frames: 1, kind, name: name.trim() || `${rec.name} ${timecode(pos.wall, fps, timezone)}` });
+        setName('');
+      } catch (e) {
+        toast(t((e as Error).message), 'error');
+      }
+      return;
+    }
     if (!mIn || !mOut) return;
     if (mIn.run !== mOut.run) return toast(t('The in and out points must be in the same recording'), 'error');
     try {
-      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
+      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
       // Extraction started: the marks are cleared for the next clip.
       setIn(null);
       setOut(null);
@@ -518,9 +547,21 @@ function Editor({ rec }: { rec: Recorder }) {
         {/* The clip: its in and out (the timeline's E and S), its length, its name. */}
         <div className="sc-clipbar">
           <span className="sc-clipbar-l">{t('Clip')}</span>
+          <div className="sc-kind" role="radiogroup" aria-label={t('What the clip holds')}>
+            {([
+              ['video', <Film key="v" size={14} />, t('Video'), t('The picture with its sound')],
+              ['audio', <AudioLines key="a" size={14} />, t('Sound'), t('The sound alone (every track)')],
+              ['image', <Camera key="i" size={14} />, t('Image'), t('The picture under the playhead')],
+            ] as const).map(([k, icon, label, tip]) => (
+              <button key={k} type="button" role="radio" aria-checked={kind === k} className={`sc-kind-b ${k} ${kind === k ? 'on' : ''}`} data-tip={tip} onClick={() => setKind(k)}>
+                {icon}
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
           <MarkTag kind="in" mark={mIn} fps={fps} timezone={timezone} onType={(s) => typed(s, setIn)} onClear={() => setIn(null)} />
           <MarkTag kind="out" mark={mOut} fps={fps} timezone={timezone} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} />
-          <span className="sc-clipdur">{duration(frames, fps)}</span>
+          <span className="sc-clipdur">{kind === 'image' ? (pos ? timecode(pos.wall, fps, timezone) : '--:--:--:--') : duration(frames, fps)}</span>
           <input className="sc-clipname" value={name} placeholder={mIn ? `${rec.name} ${timecode(mIn.wall, fps, timezone)}` : t('Name of the clip')} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
           <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>
             <Eraser size={18} />
@@ -529,7 +570,7 @@ function Editor({ rec }: { rec: Recorder }) {
         </div>
       </div>
       {/* The timeline takes the whole width, under the panels. */}
-      <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
+      <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} onMarkAt={markAt} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
 
       <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={admin} act={act} />
     </>
@@ -869,8 +910,8 @@ function ExtractButton({ jobs, recId, canCut, onCut }: { jobs: Job[]; recId: str
 /** Steps of the ruler, ms. */
 const TICKS = [1000, 2000, 5000, 10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000, 7_200_000, 10_800_000, 21_600_000];
 
-function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fps: number; span: number; setSpan: (ms: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; timezone: string; guide: Programme[]; onProgramme: (g: Programme) => void }) {
-  const { rec, pos, playing, fps, span, setSpan, spans, clips, mIn, mOut, onSeek, timezone, guide, onProgramme } = props;
+function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fps: number; span: number; setSpan: (ms: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; onMarkAt: (which: 'in' | 'out', wall: number) => void; timezone: string; guide: Programme[]; onProgramme: (g: Programme) => void }) {
+  const { rec, pos, playing, fps, span, setSpan, spans, clips, mIn, mOut, onSeek, onMarkAt, timezone, guide, onProgramme } = props;
   const maxSpan = zoomMax(rec.loopHours);
   const tracks = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
@@ -1061,7 +1102,9 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
   };
 
   // Pointer on the timeline: dragging the playhead, moving the view, or a click.
-  const drag = useRef<{ mode: 'pending' | 'pan' | 'scrub'; x0: number; s0: number } | null>(null);
+  const drag = useRef<{ mode: 'pending' | 'pan' | 'scrub' | 'in' | 'out'; x0: number; s0: number } | null>(null);
+  /** An in or out point being dragged: where it is now (drawn there until it is set). */
+  const [moving, setMoving] = useState<{ which: 'in' | 'out'; wall: number } | null>(null);
   const [grab, setGrab] = useState<'' | 'on-head' | 'grabbing' | 'scrubbing'>('');
   const nearHead = (clientX: number) => {
     if (!pos || !tracks.current) return false;
@@ -1075,7 +1118,10 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
   const oSpan = now - loopFrom;
   const ox = (w: number) => Math.min(100, Math.max(0, ((w - oFrom) / oSpan) * 100));
   const oldest = spans.length ? Math.min(...spans.map((s) => s.from)) : now;
-  const sel = mIn && mOut && mOut.wall >= mIn.wall ? [mIn.wall, mOut.wall + 1000 / fps] : null;
+  // The in and out as drawn (one being dragged, where it is now).
+  const inAt = moving?.which === 'in' ? moving.wall : mIn?.wall;
+  const outAt = moving?.which === 'out' ? moving.wall : mOut ? mOut.wall + 1000 / fps : undefined;
+  const sel = inAt !== undefined && outAt !== undefined && outAt >= inAt ? [inAt, outAt] : null;
 
   return (
     <div className="sc-timeline">
@@ -1135,6 +1181,16 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
           // On the playhead or anywhere on the ruler (the hours): drag it.
           // Elsewhere: drag = move the view, click = put the playhead there.
           const onRuler = !!(e.target as HTMLElement).closest('.sc-ruler');
+          // An in or out point: dragged along, the picture following it; set where it is let go.
+          const mark = (e.target as HTMLElement).closest<HTMLElement>('.sc-mark');
+          if (mark) {
+            const which = mark.classList.contains('in') ? 'in' : 'out';
+            drag.current = { mode: which, x0: e.clientX, s0: start };
+            scrubbing.current = true;
+            setGrab('scrubbing');
+            setMoving({ which, wall: wallAt(e.clientX) });
+            return;
+          }
           if (nearHead(e.clientX) || onRuler) {
             drag.current = { mode: 'scrub', x0: e.clientX, s0: start };
             scrubbing.current = true;
@@ -1150,7 +1206,11 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
             setGrab(nearHead(e.clientX) || (e.target as HTMLElement).closest('.sc-ruler') ? 'on-head' : '');
             return;
           }
-          if (d.mode === 'scrub') scrubTo(wallAt(e.clientX));
+          if (d.mode === 'in' || d.mode === 'out') {
+            const w = wallAt(e.clientX);
+            setMoving({ which: d.mode, wall: w });
+            scrubTo(w);
+          } else if (d.mode === 'scrub') scrubTo(wallAt(e.clientX));
           else if (d.mode === 'pan' || Math.abs(e.clientX - d.x0) > 4) {
             d.mode = 'pan';
             setGrab('grabbing');
@@ -1162,6 +1222,11 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
           drag.current = null;
           scrubbing.current = false;
           setGrab(nearHead(e.clientX) ? 'on-head' : '');
+          if (d?.mode === 'in' || d?.mode === 'out') {
+            setMoving(null);
+            onMarkAt(d.mode, wallAt(e.clientX));
+            return;
+          }
           if (d?.mode !== 'pending') return;
           // A click on a programme: its start (Shift: in and out on the whole programme).
           const item = (e.target as HTMLElement).closest<HTMLElement>('.sc-epg-item');
@@ -1173,15 +1238,37 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         onPointerCancel={() => {
           drag.current = null;
           scrubbing.current = false;
+          setMoving(null);
           setGrab('');
         }}
         onPointerLeave={() => !drag.current && setGrab('')}
       >
         <Layers recId={rec.id} start={start} span={span} timezone={timezone} ticks={ticks} guide={guide} onAir={onAirKey ? String(onAirKey.id) + onAirKey.start : ''} strip={strip} now={now} spans={spans} wavePath={wavePath} gaps={gaps} />
-        {sel && <div className="sc-sel" style={{ left: `${x(sel[0])}%`, width: `${x(sel[1]) - x(sel[0])}%` }} />}
-        {/* The in and out points, each shown as soon as it is set. */}
-        {mIn && <div className="sc-mark in" style={{ left: `${x(mIn.wall)}%` }}><b>{t('In').charAt(0)}</b></div>}
-        {mOut && <div className="sc-mark out" style={{ left: `${x(mOut.wall + 1000 / fps)}%` }}><b>{t('Out').charAt(0)}</b></div>}
+        {/* In and out both set: what is outside them is darkened. */}
+        {sel && (
+          <>
+            <div className="sc-outside" style={{ left: 0, width: `${Math.max(0, Math.min(100, x(sel[0])))}%` }} />
+            <div className="sc-outside" style={{ left: `${Math.max(0, Math.min(100, x(sel[1])))}%`, right: 0 }} />
+            <div className="sc-sel" style={{ left: `${x(sel[0])}%`, width: `${x(sel[1]) - x(sel[0])}%` }} />
+          </>
+        )}
+        {/* The in and out points, the whole height of the timeline, each dragged by its handle or its line. */}
+        {inAt !== undefined && (
+          <div className={`sc-mark in ${moving?.which === 'in' ? 'moving' : ''}`} style={{ left: `${x(inAt)}%` }} data-tip={t('Drag to move the in point')}>
+            <b>{t('In').charAt(0)}</b>
+            <i className="sc-grip">
+              <ChevronLeft size={12} strokeWidth={3} />
+            </i>
+          </div>
+        )}
+        {outAt !== undefined && (
+          <div className={`sc-mark out ${moving?.which === 'out' ? 'moving' : ''}`} style={{ left: `${x(outAt)}%` }} data-tip={t('Drag to move the out point')}>
+            <b>{t('Out').charAt(0)}</b>
+            <i className="sc-grip">
+              <ChevronRight size={12} strokeWidth={3} />
+            </i>
+          </div>
+        )}
         {pos && x(pos.wall) >= 0 && x(pos.wall) <= 100 && <div className="sc-head" style={{ left: `${x(pos.wall)}%` }} />}
       </div>
     </div>

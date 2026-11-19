@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, Clapperboard, Download, Globe2, Lock, Play, Search, Share2, Trash2, UsersRound, X } from 'lucide-react';
+import { AudioLines, CalendarClock, Camera, Clapperboard, Download, Globe2, Lock, Play, Search, Share2, Trash2, UsersRound, X } from 'lucide-react';
 import { api, can, useApp, useChanged } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { confirmDialog } from '../ui/dialogs';
@@ -286,6 +286,7 @@ export function Clips() {
                                     <span className="sc-mini-play">
                                       <Play size={14} />
                                     </span>
+                                    {c.kind && c.kind !== 'video' && <span className={`sc-mini-kind ${c.kind}`}>{c.kind === 'audio' ? <AudioLines size={11} /> : <Camera size={11} />}</span>}
                                   </div>
                                   <span className="sc-clip-t">
                                     <strong title={c.name}>{c.name}</strong>
@@ -296,7 +297,7 @@ export function Clips() {
                               <td className="num" title={d}>
                                 {timecode(c.start, fps, timezone)}
                               </td>
-                              <td className="num">{duration(c.frames, fps)}</td>
+                              <td className="num">{c.kind === 'image' ? <span className="muted">{t('Image')}</span> : duration(c.frames, fps)}</td>
                               <td className="num">{size(c.size, locale(), fr)}</td>
                               <td className="muted" title={c.createdBy}>
                                 {ago(c.createdAt, now, timezone)}

@@ -8,6 +8,7 @@ import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
 import type { Clip } from '../types';
 
 export function ClipPlayer({ clip, onClose }: { clip: Clip; onClose: () => void }) {
+  const image = clip.kind === 'image';
   const timezone = useApp((s) => s.timezone);
   const fps = fpsOf(clip.fpsNum, clip.fpsDen);
   const last = Math.max(0, clip.frames - 1);
@@ -97,8 +98,16 @@ export function ClipPlayer({ clip, onClose }: { clip: Clip; onClose: () => void 
             <X size={16} />
           </button>
         </header>
+        {image ? (
+          // One picture: shown whole.
+          <div className="sc-clip-view">
+            <img className="sc-video" src={`/api/clips/${clip.id}/download?inline=1`} alt={clip.name} />
+          </div>
+        ) : (
+        <>
         <div className="sc-clip-view" onClick={toggle}>
-          <video ref={video} className="sc-video" src={`/api/clips/${clip.id}/download?inline=1`} preload="auto" playsInline onLoadedData={() => seek(0)} />
+          {/* The sound alone: the recording's picture at its middle while it plays. */}
+          <video ref={video} className="sc-video" src={`/api/clips/${clip.id}/download?inline=1`} poster={clip.kind === 'audio' ? `/api/clips/${clip.id}/thumb.jpg` : undefined} preload="auto" playsInline onLoadedData={() => seek(0)} />
           <Meters out={audio.out} />
         </div>
         <input type="range" className="sc-scrub" min={0} max={last} step={1} value={frame} aria-label={t('Position')} onChange={(e) => seek(Number(e.target.value))} onKeyDown={(e) => e.stopPropagation()} />
@@ -125,15 +134,19 @@ export function ClipPlayer({ clip, onClose }: { clip: Clip; onClose: () => void 
           <div className="spacer" />
           <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
         </div>
+        </>
+        )}
         <div className="sc-clip-meta">
           <span>{clip.recorderName}</span>
           <span>{day(clip.start, timezone, locale())}</span>
           <span>
             {t('In')} {timecode(clip.start, fps, timezone)}
           </span>
-          <span>
-            {t('Duration')} {duration(clip.frames, fps)}
-          </span>
+          {!image && (
+            <span>
+              {t('Duration')} {duration(clip.frames, fps)}
+            </span>
+          )}
           <span>{clip.format}</span>
           <span>{size(clip.size, locale(), locale() === 'fr-FR')}</span>
         </div>

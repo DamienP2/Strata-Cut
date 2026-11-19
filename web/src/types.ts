@@ -152,4 +152,6 @@ export interface Clip {
   sharedWithMe?: boolean;
   /** Deleted by itself at this time (ms); null: kept until deleted by hand. */
   expiresAt?: number | null;
+  /** The picture with its sound, the sound alone, or one picture. */
+  kind?: 'video' | 'audio' | 'image';
 }
