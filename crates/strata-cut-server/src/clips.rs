@@ -344,7 +344,7 @@ impl Clips {
         let start = job.req.t - base - 0.5 / fps;
         let dur = job.req.frames as f64 / fps;
         let input = format!("concat:{}", segs.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join("|"));
-        let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into(), "-i".into(), input.clone()];
+        let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into(), "-i".into(), input];
         let sound = format!("{},atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS", crate::recorder::AUDIO_SYNC, start + dur);
         match kind {
             Kind::Video => {
@@ -425,16 +425,12 @@ impl Clips {
             Kind::Image => {
                 thumb_cmd.arg("-i").arg(&out);
             }
-            // The sound alone: a picture of the recording at its middle.
-            Kind::Audio => {
-                let mid = start + if dur > 1.0 { dur / 2.0 } else { 0.0 };
-                thumb_cmd.args(["-copyts", "-i", &input, "-vf", &format!("trim=start={mid:.6},setpts=PTS-STARTPTS,scale=-2:144")]);
-            }
+            // The sound alone: no picture (the list shows its icon).
+            Kind::Audio => {}
         }
         if kind != Kind::Audio {
-            thumb_cmd.args(["-vf", "scale=-2:144"]);
+            let _ = thumb_cmd.args(["-vf", "scale=-2:144", "-frames:v", "1", "-q:v", "5", "-update", "1", "-y"]).arg(&thumb).stdin(Stdio::null()).status().await;
         }
-        let _ = thumb_cmd.args(["-frames:v", "1", "-q:v", "5", "-update", "1", "-y"]).arg(&thumb).stdin(Stdio::null()).status().await;
         Ok(Clip {
             id: job.id.clone(),
             name: job.name.clone(),

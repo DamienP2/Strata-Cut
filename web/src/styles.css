@@ -1128,9 +1128,15 @@ a.btn { color: inherit; }
 .sc-kind-b.audio.on svg { color: var(--mask, #2dd4bf); }
 .sc-kind-b.image.on svg { color: #f472b6; }
 @media (max-width: 1280px) { .sc-kind-b span { display: none; } }
-.sc-mini-kind { position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; color: #0b0c12; }
-.sc-mini-kind.audio { background: var(--mask, #2dd4bf); }
-.sc-mini-kind.image { background: #f472b6; }
+/* Extraits: the kind of each clip; a sound shows its icon, not a picture. */
+.sc-mini.audio { background: color-mix(in srgb, var(--mask, #2dd4bf) 16%, var(--panel-3)); }
+.sc-mini-sound { position: absolute; inset: 0; display: grid; place-items: center; color: var(--mask, #2dd4bf); }
+.sc-clip-sub { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11.5px; }
+.sc-clip-sub .muted { overflow: hidden; text-overflow: ellipsis; }
+.sc-kind-tag { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 1px 6px; border-radius: 5px; font-size: 11px; font-weight: 600; background: var(--accent-soft); color: var(--accent-2); }
+.sc-kind-tag.audio { background: color-mix(in srgb, var(--mask, #2dd4bf) 16%, transparent); color: var(--mask, #2dd4bf); }
+.sc-kind-tag.image { background: rgba(244, 114, 182, 0.16); color: #f472b6; }
+.sc-clip-sound { position: absolute; inset: 0; display: grid; place-items: center; color: var(--mask, #2dd4bf); pointer-events: none; }
 /* The in and out handles: a tab on the outer side of each line, the height of the pictures and the sound. */
 .sc-grip { position: absolute; top: 0; bottom: 0; width: 14px; display: grid; place-items: center; color: #0b0c12; cursor: ew-resize; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45); }
 .sc-mark.in .sc-grip { right: 1px; background: var(--accent); border-radius: 7px 0 0 7px; }
@@ -1139,3 +1145,12 @@ a.btn { color: inherit; }
 .sc-mark:hover .sc-grip, .sc-mark.moving .sc-grip { filter: brightness(1.12); width: 16px; }
 .sc-mark.in b { left: auto; right: 0; border-radius: 3px 3px 0 3px; }
 .sc-mark.out b { right: auto; left: 0; border-radius: 3px 3px 3px 0; }
+/* IN / OUT in words. */
+.sc-mtag i { width: auto; min-width: 26px; padding: 0 5px; font-size: 10px; letter-spacing: 0.03em; }
+.sc-mark b { letter-spacing: 0.03em; }
+/* How far back the loop goes. */
+.sc-backto { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-3); }
+.sc-backto b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+/* The clip's preview, next to the scissors. */
+.sc-preview { gap: 6px; }
+.sc-preview.on { color: var(--accent-2); border-color: var(--accent); background: var(--accent-soft); }

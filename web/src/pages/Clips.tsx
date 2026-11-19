@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { AudioLines, CalendarClock, Camera, Clapperboard, Download, Globe2, Lock, Play, Search, Share2, Trash2, UsersRound, X } from 'lucide-react';
+import { AudioLines, CalendarClock, Camera, Clapperboard, Film, Download, Globe2, Lock, Play, Search, Share2, Trash2, UsersRound, X } from 'lucide-react';
 import { api, can, useApp, useChanged } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { confirmDialog } from '../ui/dialogs';
@@ -281,16 +281,28 @@ export function Clips() {
                               </td>
                               <td>
                                 <div className="sc-clip-name sc-clip-open" onClick={() => setOpen(c)}>
-                                  <div className="sc-mini">
-                                    <img src={`/api/clips/${c.id}/thumb.jpg`} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+                                  <div className={`sc-mini ${c.kind ?? 'video'}`}>
+                                    {/* A sound: its icon, not a picture. */}
+                                    {c.kind === 'audio' ? (
+                                      <span className="sc-mini-sound">
+                                        <AudioLines size={22} />
+                                      </span>
+                                    ) : (
+                                      <img src={`/api/clips/${c.id}/thumb.jpg`} alt="" onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+                                    )}
                                     <span className="sc-mini-play">
                                       <Play size={14} />
                                     </span>
-                                    {c.kind && c.kind !== 'video' && <span className={`sc-mini-kind ${c.kind}`}>{c.kind === 'audio' ? <AudioLines size={11} /> : <Camera size={11} />}</span>}
                                   </div>
                                   <span className="sc-clip-t">
                                     <strong title={c.name}>{c.name}</strong>
-                                    <span className="muted">{c.mine ? c.format : t('By {name}', { name: c.createdBy })}</span>
+                                    <span className="sc-clip-sub">
+                                      <span className={`sc-kind-tag ${c.kind ?? 'video'}`}>
+                                        {c.kind === 'audio' ? <AudioLines size={11} /> : c.kind === 'image' ? <Camera size={11} /> : <Film size={11} />}
+                                        {c.kind === 'audio' ? t('Sound') : c.kind === 'image' ? t('Image') : t('Video')}
+                                      </span>
+                                      <span className="muted">{c.mine ? c.format : t('By {name}', { name: c.createdBy })}</span>
+                                    </span>
                                   </span>
                                 </div>
                               </td>

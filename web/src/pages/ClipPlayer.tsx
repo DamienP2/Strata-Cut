@@ -1,6 +1,6 @@
 // Checks a clip in the page: image by image, with its sound and VU-meters.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronFirst, ChevronLast, Download, Pause, Play, StepBack, StepForward, X } from 'lucide-react';
+import { AudioLines, ChevronFirst, ChevronLast, Download, Pause, Play, StepBack, StepForward, X } from 'lucide-react';
 import { useApp } from '../store';
 import { locale, t } from '../i18n';
 import { day, duration, fpsOf, size, timecode } from '../tc';
@@ -106,8 +106,13 @@ export function ClipPlayer({ clip, onClose }: { clip: Clip; onClose: () => void 
         ) : (
         <>
         <div className="sc-clip-view" onClick={toggle}>
-          {/* The sound alone: the recording's picture at its middle while it plays. */}
-          <video ref={video} className="sc-video" src={`/api/clips/${clip.id}/download?inline=1`} poster={clip.kind === 'audio' ? `/api/clips/${clip.id}/thumb.jpg` : undefined} preload="auto" playsInline onLoadedData={() => seek(0)} />
+          {/* The sound alone: its icon (no picture). */}
+          <video ref={video} className="sc-video" src={`/api/clips/${clip.id}/download?inline=1`} preload="auto" playsInline onLoadedData={() => seek(0)} />
+          {clip.kind === 'audio' && (
+            <span className="sc-clip-sound">
+              <AudioLines size={56} strokeWidth={1.5} />
+            </span>
+          )}
           <Meters out={audio.out} />
         </div>
         <input type="range" className="sc-scrub" min={0} max={last} step={1} value={frame} aria-label={t('Position')} onChange={(e) => seek(Number(e.target.value))} onKeyDown={(e) => e.stopPropagation()} />

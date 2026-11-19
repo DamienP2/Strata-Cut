@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, History, Pause, Play, PlayCircle, Square, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { RecLogo } from '../ui/RecLogo';
 import { t, locale } from '../i18n';
@@ -284,6 +284,33 @@ function Editor({ rec }: { rec: Recorder }) {
     setHole(null);
     void pl.seekWall(wall);
   }, []);
+  /** The clip played from its in to its out (then stopped on the out). */
+  const [previewing, setPreviewing] = useState(false);
+  const previewStarted = useRef(false);
+  const previewClip = () => {
+    const pl = p();
+    if (!pl || !mIn || !mOut) return;
+    if (previewing) {
+      pl.pause();
+      setPreviewing(false);
+      return;
+    }
+    setLive(false);
+    setHole(null);
+    previewStarted.current = false;
+    setPreviewing(true);
+    void pl.seekWall(mIn.wall, true);
+  };
+  useEffect(() => {
+    if (!previewing) return;
+    if (playing) previewStarted.current = true;
+    // Paused by hand, or at its out: over.
+    if ((previewStarted.current && !playing) || (mOut && pos && pos.wall >= mOut.wall)) {
+      if (playing) p()?.pause();
+      setPreviewing(false);
+    }
+  }, [pos, playing, previewing, mOut]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /** An in or out point dragged on the timeline: the frame there becomes it. */
   const markAt = useCallback((which: 'in' | 'out', wall: number) => {
     pendingMark.current = { which, wall };
@@ -566,6 +593,9 @@ function Editor({ rec }: { rec: Recorder }) {
           <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>
             <Eraser size={18} />
           </button>
+          <button className={`ctl sc-preview ${previewing ? 'on' : ''}`} data-tip={previewing ? t('Stop the preview') : t('Preview the clip: from IN to OUT')} disabled={kind === 'image' || frames === 0} onClick={previewClip}>
+            {previewing ? <Square size={16} /> : <PlayCircle size={18} />}
+          </button>
           {can.extract(user) && <ExtractButton jobs={myJobs} recId={rec.id} canCut={canCut} onCut={() => void cut()} />}
         </div>
       </div>
@@ -749,7 +779,7 @@ function MarkTag({ kind, mark, fps, timezone, onType, onClear }: { kind: 'in' | 
   useEffect(() => setText(shown), [shown]);
   return (
     <span className={`sc-mtag ${kind} ${mark ? 'set' : ''}`} data-tip={kind === 'in' ? t('In point (type a timecode)') : t('Out point (type a timecode)')}>
-      <i>{kind === 'in' ? t('In').charAt(0) : t('Out').charAt(0)}</i>
+      <i>{kind === 'in' ? 'IN' : 'OUT'}</i>
       <input
         value={text}
         placeholder="--:--:--:--"
@@ -911,7 +941,7 @@ function ExtractButton({ jobs, recId, canCut, onCut }: { jobs: Job[]; recId: str
 const TICKS = [1000, 2000, 5000, 10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 1_800_000, 3_600_000, 7_200_000, 10_800_000, 21_600_000];
 
 function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fps: number; span: number; setSpan: (ms: number) => void; spans: Span[]; clips: Clip[]; mIn: Mark | null; mOut: Mark | null; onSeek: (wall: number) => void; onMarkAt: (which: 'in' | 'out', wall: number) => void; timezone: string; guide: Programme[]; onProgramme: (g: Programme) => void }) {
-  const { rec, pos, playing, fps, span, setSpan, spans, clips, mIn, mOut, onSeek, onMarkAt, timezone, guide, onProgramme } = props;
+  const { rec, pos, playing, fps, span, setSpan, spans, mIn, mOut, onSeek, onMarkAt, timezone, guide, onProgramme } = props;
   const maxSpan = zoomMax(rec.loopHours);
   const tracks = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(800);
@@ -1113,10 +1143,6 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
   };
 
   const onAirKey = pos ? guide.find((g) => g.start <= pos.wall && pos.wall < g.end) : undefined;
-  // Overview: the whole loop.
-  const oFrom = loopFrom;
-  const oSpan = now - loopFrom;
-  const ox = (w: number) => Math.min(100, Math.max(0, ((w - oFrom) / oSpan) * 100));
   const oldest = spans.length ? Math.min(...spans.map((s) => s.from)) : now;
   // The in and out as drawn (one being dragged, where it is now).
   const inAt = moving?.which === 'in' ? moving.wall : mIn?.wall;
@@ -1135,42 +1161,17 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
             <RotateCcw size={14} />
           </button>
         </div>
-        <span className="muted">
-          {day(start, timezone, locale())} {clock(start, timezone)} → {clock(end, timezone)}
-        </span>
         {pos && (pos.wall < start || pos.wall > end) && (
           <button type="button" className="btn small" title={t('Centre on the playhead')} onClick={centre}>
             <Crosshair size={13} /> {t('Playhead')}
           </button>
         )}
         <div className="spacer" />
-        <span className="muted">
-          {t('Loop {h} h · since {when}', { h: rec.loopHours, when: `${day(oldest, timezone, locale())} ${clock(oldest, timezone)}` })}
+        {/* How far back the loop goes. */}
+        <span className="sc-backto" data-tip={t('Loop of {h} h', { h: rec.loopHours })}>
+          <History size={14} />
+          {t('Back to')} <b>{day(oldest, timezone, locale())} {clock(oldest, timezone)}</b>
         </span>
-      </div>
-      <div
-        className="sc-overview"
-        title={t('The whole loop: click or drag to move the view')}
-        onPointerDown={(e) => {
-          if (e.button !== 0) return;
-          e.currentTarget.setPointerCapture(e.pointerId);
-          const r = e.currentTarget.getBoundingClientRect();
-          pan(oFrom + ((e.clientX - r.left) / r.width) * oSpan - span / 2);
-        }}
-        onPointerMove={(e) => {
-          if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
-          const r = e.currentTarget.getBoundingClientRect();
-          pan(oFrom + ((e.clientX - r.left) / r.width) * oSpan - span / 2);
-        }}
-      >
-        {spans.map((s, i) => (
-          <div key={i} className="sc-ov-rec" style={{ left: `${ox(s.from)}%`, width: `max(2px, ${ox(s.to) - ox(s.from)}%)` }} />
-        ))}
-        {clips.map((c) => (
-          <div key={c.id} className="sc-ov-clip" style={{ left: `${ox(c.start)}%` }} title={c.name} />
-        ))}
-        <div className="sc-ov-win" style={{ left: `${ox(start)}%`, width: `${Math.max(0.4, ox(end) - ox(start))}%` }} />
-        {pos && <div className="sc-ov-head" style={{ left: `${ox(pos.wall)}%` }} />}
       </div>
       <div
         className={`sc-tracks ${grab}`}
@@ -1255,7 +1256,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         {/* The in and out points, the whole height of the timeline, each dragged by its handle or its line. */}
         {inAt !== undefined && (
           <div className={`sc-mark in ${moving?.which === 'in' ? 'moving' : ''}`} style={{ left: `${x(inAt)}%` }} data-tip={t('Drag to move the in point')}>
-            <b>{t('In').charAt(0)}</b>
+            <b>IN</b>
             <i className="sc-grip">
               <ChevronLeft size={12} strokeWidth={3} />
             </i>
@@ -1263,7 +1264,7 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         )}
         {outAt !== undefined && (
           <div className={`sc-mark out ${moving?.which === 'out' ? 'moving' : ''}`} style={{ left: `${x(outAt)}%` }} data-tip={t('Drag to move the out point')}>
-            <b>{t('Out').charAt(0)}</b>
+            <b>OUT</b>
             <i className="sc-grip">
               <ChevronRight size={12} strokeWidth={3} />
             </i>
