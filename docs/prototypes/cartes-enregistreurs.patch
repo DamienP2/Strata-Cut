@@ -1,0 +1,131 @@
+diff --git a/web/src/pages/Recorders.tsx b/web/src/pages/Recorders.tsx
+index d98a971..8f3c6b5 100644
+--- a/web/src/pages/Recorders.tsx
++++ b/web/src/pages/Recorders.tsx
+@@ -88,6 +88,15 @@ function hours(ms: number): string {
+   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`;
+ }
+ 
++/** Maquette (proposal only): ?maquette=a|b|c. */
++void hours;
++const MAQUETTE = new URLSearchParams(location.search).get('maquette') ?? 'a';
++/** "18 h 42", "42 min". */
++function span(ms: number): string {
++  const m = Math.floor(ms / 60_000);
++  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`;
++}
++
+ /** Changes every `ms`: for images that refresh. */
+ function useTick(ms: number) {
+   const [n, setN] = useState(0);
+@@ -245,12 +254,6 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder;
+         onClick={() => st?.oldest && void navigate(`/extract/${rec.id}`)}
+       >
+         {img && state !== 'off' ? <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${recording ? tick : 0}`} alt="" onError={() => setImg(false)} /> : <div className="sc-pic lost" />}
+-        {recording && (
+-          <span className="sc-onpic tl">
+-            <span className="sc-rec" />
+-            REC
+-          </span>
+-        )}
+         {state === 'nosignal' && (
+           <span className="sc-onpic lostmsg">
+             <WifiOff size={14} /> {t('No signal')}
+@@ -275,7 +278,14 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder;
+           <span className={`nav-dot ${recording ? 'ok' : state === 'off' || state === 'waiting' ? '' : state === 'error' ? 'bad' : 'warn'}`} />
+           <RecLogo rec={rec} />
+           <strong title={[sourceAddress(rec), fmt].filter(Boolean).join('\n')}>{rec.name}</strong>
+-          <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
++          {recording ? (
++            <span className="sc-state rec">
++              <span className="sc-rec" />
++              REC
++            </span>
++          ) : (
++            <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
++          )}
+         </div>
+         {/* The alerts (reception, server load, disk space, why no signal) go to Système › Santé, not here. */}
+         {st?.onAir && (
+@@ -320,15 +330,42 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder;
+             </span>
+           </div>
+         ) : null}
+-        <div className="sc-loop">
+-          <div className="sc-loop-head">
+-            <span>{t('Loop')} <b>{hours(have)}</b> {t('of {h} h', { h: rec.loopHours })}</span>
+-            <span>{fill >= 99.5 ? t('full') : `${Math.round(fill)} %`}</span>
++        {MAQUETTE === 'a' && (
++          <div className="mq-a" title={t('Back in time possible')}>
++            <span className="mq-bar">
++              <span style={{ width: `${fill}%` }} />
++            </span>
++            <span className="mq-txt">
++              <b>{span(have)}</b> / {rec.loopHours} h
++            </span>
+           </div>
+-          <span className="perf-bar tone-accent">
+-            <span className="perf-bar-fill" style={{ transform: `translateX(${fill - 100}%)` }} />
+-          </span>
+-        </div>
++        )}
++        {MAQUETTE === 'b' && (
++          <div className="mq-b">
++            <span className="mq-txt">
++              <b>{span(have)}</b>
++              <span> / {rec.loopHours} h</span>
++            </span>
++            <span className="mq-bar">
++              <span style={{ width: `${fill}%` }} />
++              {[...Array(Math.min(24, rec.loopHours) - 1)].map((_, i) => (
++                <i key={i} style={{ left: `${((i + 1) / Math.min(24, rec.loopHours)) * 100}%` }} />
++              ))}
++            </span>
++          </div>
++        )}
++        {MAQUETTE === 'c' && (
++          <div className="mq-c">
++            <svg viewBox="0 0 36 36" className="mq-ring">
++              <circle cx="18" cy="18" r="15" />
++              <circle cx="18" cy="18" r="15" className="on" style={{ strokeDasharray: `${(fill / 100) * 94.25} 94.25` }} />
++            </svg>
++            <span className="mq-txt">
++              <b>{span(have)}</b>
++              <small>/ {rec.loopHours} h</small>
++            </span>
++          </div>
++        )}
+       </div>
+       <div className="sc-card-foot">
+         <button className="btn small" onClick={() => void navigate(`/extract/${rec.id}`)} disabled={!st?.oldest}>
+diff --git a/web/src/styles.css b/web/src/styles.css
+index 6ef6b33..7ed4328 100644
+--- a/web/src/styles.css
++++ b/web/src/styles.css
+@@ -1175,3 +1175,26 @@ a.btn { color: inherit; }
+ /* Système › YouTube. */
+ .sc-yt-note { font-size: 13px; margin: 0 0 4px; display: flex; align-items: center; gap: 6px; }
+ .set-card .sc-yt-note { display: block; }
++
++/* Maquette (proposal only): the card's gauge. */
++.sc-state.rec { display: inline-flex; align-items: center; gap: 5px; background: var(--live-soft); color: var(--live); letter-spacing: 0.04em; }
++.sc-state.rec .sc-rec { width: 6px; height: 6px; }
++.project-card .project-body .mq-a, .project-card .project-body .mq-b, .project-card .project-body .mq-c { margin-top: auto; }
++.mq-a { display: flex; align-items: center; gap: 10px; padding: 6px 0 2px; }
++.mq-a .mq-bar { flex: 1; height: 6px; border-radius: 3px; background: var(--panel-3); overflow: hidden; }
++.mq-a .mq-bar > span { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
++.mq-a .mq-txt { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
++.mq-a .mq-txt b { color: var(--text); font-weight: 600; }
++.mq-b { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 2px; }
++.mq-b .mq-txt { font-variant-numeric: tabular-nums; color: var(--text-3); font-size: 12px; }
++.mq-b .mq-txt b { font-size: 17px; color: var(--text); font-weight: 650; letter-spacing: -0.01em; }
++.mq-b .mq-bar { position: relative; height: 8px; border-radius: 4px; background: var(--panel-3); overflow: hidden; }
++.mq-b .mq-bar > span { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 55%, transparent), var(--accent)); }
++.mq-b .mq-bar > i { position: absolute; top: 0; bottom: 0; width: 1px; background: color-mix(in srgb, var(--bg) 70%, transparent); }
++.mq-c { display: flex; align-items: center; gap: 10px; padding: 4px 0 0; }
++.mq-ring { width: 34px; height: 34px; transform: rotate(-90deg); flex: none; }
++.mq-ring circle { fill: none; stroke: var(--panel-3); stroke-width: 4; }
++.mq-ring circle.on { stroke: var(--accent); stroke-linecap: round; }
++.mq-c .mq-txt { display: flex; align-items: baseline; gap: 5px; font-variant-numeric: tabular-nums; }
++.mq-c .mq-txt b { font-size: 16px; font-weight: 650; color: var(--text); }
++.mq-c .mq-txt small { color: var(--text-3); font-size: 12px; }
