@@ -327,7 +327,7 @@ index d240647..01e96e8 100644
                                <td className="muted" title={c.createdBy}>
                                  {ago(c.createdAt, now, timezone)}
 diff --git a/web/src/pages/Extract.tsx b/web/src/pages/Extract.tsx
-index 4c32196..6db078e 100644
+index 4c32196..3115637 100644
 --- a/web/src/pages/Extract.tsx
 +++ b/web/src/pages/Extract.tsx
 @@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -335,7 +335,7 @@ index 4c32196..6db078e 100644
  import { useDisplayPref } from '../displayPrefs';
  import { useShallow } from 'zustand/react/shallow';
 -import { ArrowLeftToLine, ArrowRightToLine, CalendarPlus, Check, ChevronsRight, Crosshair, Download, Eraser, FastForward, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
-+import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
++import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, Pause, Play, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
  import { api, can, serverNow, useApp, useChanged } from '../store';
  import { RecLogo } from '../ui/RecLogo';
  import { t, locale } from '../i18n';
@@ -519,7 +519,7 @@ index 4c32196..6db078e 100644
            if (d?.mode !== 'pending') return;
            // A click on a programme: its start (Shift: in and out on the whole programme).
            const item = (e.target as HTMLElement).closest<HTMLElement>('.sc-epg-item');
-@@ -1173,15 +1238,31 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
+@@ -1173,15 +1238,37 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
          onPointerCancel={() => {
            drag.current = null;
            scrubbing.current = false;
@@ -545,21 +545,27 @@ index 4c32196..6db078e 100644
 +        {inAt !== undefined && (
 +          <div className={`sc-mark in ${moving?.which === 'in' ? 'moving' : ''}`} style={{ left: `${x(inAt)}%` }} data-tip={t('Drag to move the in point')}>
 +            <b>{t('In').charAt(0)}</b>
++            <i className="sc-grip">
++              <ChevronLeft size={12} strokeWidth={3} />
++            </i>
 +          </div>
 +        )}
 +        {outAt !== undefined && (
 +          <div className={`sc-mark out ${moving?.which === 'out' ? 'moving' : ''}`} style={{ left: `${x(outAt)}%` }} data-tip={t('Drag to move the out point')}>
 +            <b>{t('Out').charAt(0)}</b>
++            <i className="sc-grip">
++              <ChevronRight size={12} strokeWidth={3} />
++            </i>
 +          </div>
 +        )}
          {pos && x(pos.wall) >= 0 && x(pos.wall) <= 100 && <div className="sc-head" style={{ left: `${x(pos.wall)}%` }} />}
        </div>
      </div>
 diff --git a/web/src/styles.css b/web/src/styles.css
-index 94e04ed..23716fc 100644
+index 94e04ed..7f6c310 100644
 --- a/web/src/styles.css
 +++ b/web/src/styles.css
-@@ -1108,3 +1108,26 @@ a.btn { color: inherit; }
+@@ -1108,3 +1108,43 @@ a.btn { color: inherit; }
  .sc-clip-table td:first-child, .sc-clip-table th:first-child { overflow: visible; text-overflow: clip; }
  .sc-pick-all { display: inline-flex; align-items: center; cursor: pointer; }
  .sc-pick-all input, .sc-clip-table td:first-child input { margin: 0; }
@@ -586,6 +592,23 @@ index 94e04ed..23716fc 100644
 +.sc-mini-kind { position: absolute; right: 3px; bottom: 3px; width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; color: #0b0c12; }
 +.sc-mini-kind.audio { background: var(--mask, #2dd4bf); }
 +.sc-mini-kind.image { background: #f472b6; }
++/* The in and out handles: a tab on the outer side of each line, the height of the pictures and the sound. */
++.sc-grip { position: absolute; top: 0; bottom: 0; width: 14px; display: grid; place-items: center; color: #0b0c12; cursor: ew-resize; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45); }
++.sc-mark.in .sc-grip { right: 1px; background: var(--accent); border-radius: 7px 0 0 7px; }
++.sc-mark.out .sc-grip { left: 1px; background: var(--key); border-radius: 0 7px 7px 0; }
++.sc-mark .sc-grip::after { content: ''; position: absolute; left: 50%; top: 50%; width: 2px; height: 18px; margin: 14px 0 0 -1px; border-left: 1px solid rgba(11, 12, 18, 0.45); border-right: 1px solid rgba(11, 12, 18, 0.45); }
++.sc-mark:hover .sc-grip, .sc-mark.moving .sc-grip { filter: brightness(1.12); width: 16px; }
++.sc-mark.in b { left: auto; right: 0; border-radius: 3px 3px 0 3px; }
++.sc-mark.out b { right: auto; left: 0; border-radius: 3px 3px 3px 0; }
++.sc-mtag.in.set { border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-soft); }
++.sc-mtag.in.set i { background: var(--accent); }
++/* In and out: both in the app's colour (lavender), the arrow telling which is which. */
++.sc-mark.out { background: var(--accent); }
++.sc-mark.out b, .sc-mark.in b { background: var(--accent); }
++.sc-mark.out .sc-grip { background: var(--accent); }
++.sc-sel { box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent); }
++.sc-mtag.set { border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-soft); }
++.sc-mtag.set i { background: var(--accent); }
 diff --git a/web/src/types.ts b/web/src/types.ts
 index 3f59653..b01e0a4 100644
 --- a/web/src/types.ts
