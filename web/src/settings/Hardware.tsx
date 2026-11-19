@@ -321,8 +321,7 @@ function CardPicture({ card }: { card: CaptureCard }) {
                 <text className="hw-cap" x={cx} y={plateH + plateY + 38} textAnchor="middle">
                   {t('Reference')}
                 </text>
-                <text className={`hw-cap2 ${refState}`} x={cx} y={plateH + plateY + 54} textAnchor="middle">
-                  <title>{ref.locked ? (ref.kind === 'blackBurst' ? t('Locked to a black burst') : t('Locked to a tri-level sync')) : t('No reference signal')}</title>
+                <text className={`hw-cap2 ${refState}`} x={cx} y={plateH + plateY + 54} textAnchor="middle" data-tip={ref.locked ? (ref.kind === 'blackBurst' ? t('Locked to a black burst') : t('Locked to a tri-level sync')) : t('No reference signal')}>
                   {ref.locked ? formatName(ref.format ?? '', lang() === 'fr') || t('Locked') : '—'}
                 </text>
               </>

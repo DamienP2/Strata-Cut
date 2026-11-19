@@ -1,82 +1,44 @@
 /*
- * Drawn tooltips: any element with a `title` shows it in a card that follows
- * the pointer (the browser's own tooltip never appears). Write `title={t('…')}`.
+ * One kind of tooltip in the whole interface: the one that follows the pointer (FollowTip,
+ * drawn from `data-tip`). An element written with `title={t('…')}` has its title moved into
+ * `data-tip` as soon as it is in the page (or its title changes), so that the browser's own
+ * tooltip never shows next to it.
  */
 
-const DELAY = 380;
 let installed = false;
+
+/** Moves `title` into `data-tip` so the browser no longer shows its own. */
+function adopt(el: Element) {
+  const title = el.getAttribute('title');
+  if (title === null) return;
+  el.removeAttribute('title');
+  const h = el as HTMLElement;
+  if (title) h.dataset.tip = title;
+  else delete h.dataset.tip;
+  if (!el.getAttribute('aria-label') && !el.textContent?.trim()) el.setAttribute('aria-label', title);
+}
 
 export function installTooltips() {
   if (installed) return;
   installed = true;
-  const tip = document.createElement('div');
-  tip.id = 'tip';
-  tip.className = 'tip';
-  tip.setAttribute('role', 'tooltip');
-  document.body.appendChild(tip);
-
-  let target: HTMLElement | null = null;
-  let timer = 0;
-  let x = 0;
-  let y = 0;
-
-  const place = () => {
-    const w = tip.offsetWidth;
-    const h = tip.offsetHeight;
-    let left = x + 14;
-    let top = y + 18;
-    if (left + w > innerWidth - 8) left = Math.max(8, x - 14 - w);
-    if (top + h > innerHeight - 8) top = Math.max(8, y - 12 - h);
-    tip.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
-  };
-
-  const hide = () => {
-    clearTimeout(timer);
-    timer = 0;
-    target = null;
-    tip.classList.remove('on');
-  };
-
-  /** Moves `title` into `data-tip` so the browser no longer shows its own. */
-  const adopt = (el: HTMLElement) => {
-    const title = el.getAttribute('title');
-    if (title !== null) {
-      el.removeAttribute('title');
-      if (title) el.dataset.tip = title;
-      else delete el.dataset.tip;
-      if (!el.getAttribute('aria-label') && !el.textContent?.trim()) el.setAttribute('aria-label', title);
+  // A `title` set again (React draws an element anew, or changes its text) or on an element just
+  // added is moved at once.
+  const watch = new MutationObserver((records) => {
+    for (const r of records) {
+      if (r.type === 'attributes') adopt(r.target as Element);
+      else
+        for (const n of r.addedNodes) {
+          if (!(n instanceof Element)) continue;
+          adopt(n);
+          n.querySelectorAll('[title]').forEach(adopt);
+        }
     }
-  };
-
+  });
+  watch.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title'] });
+  document.querySelectorAll('[title]').forEach(adopt);
+  // Whatever the watch would not have seen yet: under the pointer.
   document.addEventListener('pointerover', (e) => {
-    if (e.pointerType === 'touch') return;
-    const el = (e.target as Element | null)?.closest?.('[title], [data-tip]') as HTMLElement | null;
-    if (!el) return hide();
-    adopt(el);
-    if (el === target) return;
-    hide();
-    if (!el.dataset.tip) return;
-    target = el;
-    x = e.clientX;
-    y = e.clientY;
-    timer = window.setTimeout(() => {
-      if (!target || !target.isConnected || !target.dataset.tip) return;
-      tip.textContent = target.dataset.tip;
-      place();
-      tip.classList.add('on');
-    }, DELAY);
+    const el = (e.target as Element | null)?.closest?.('[title]');
+    if (el) adopt(el);
   });
-  document.addEventListener('pointermove', (e) => {
-    if (!target) return;
-    x = e.clientX;
-    y = e.clientY;
-    if (tip.classList.contains('on')) place();
-  });
-  document.addEventListener('pointerout', (e) => {
-    if (!target) return;
-    const to = e.relatedTarget as Node | null;
-    if (!to || !target.contains(to)) hide();
-  });
-  for (const ev of ['pointerdown', 'wheel', 'keydown'] as const) document.addEventListener(ev, hide, { capture: true, passive: true });
-  addEventListener('blur', hide);
 }
