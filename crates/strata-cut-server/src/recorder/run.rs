@@ -106,6 +106,10 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                             Protocol::Web if message.starts_with("web: ") => message.clone(),
                             _ => String::new(),
                         };
+                        // Why, in the journal: at the first failure, then every tenth.
+                        if !reason.is_empty() && (failures == 1 || failures.is_multiple_of(10)) && cfg.protocol != Protocol::Web && !(cfg.protocol == Protocol::Srt && cfg.mode == Mode::Caller) {
+                            tracing::warn!("{}: {reason}", cfg.name);
+                        }
                         rec.set_state(State::Nosignal, reason);
                     }
                 }
@@ -521,6 +525,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
 
     let mut scan = Scanner { dup_end: *rec.last_end.lock().unwrap(), ..Default::default() };
     let mut tick = tokio::time::interval(Duration::from_millis(500));
+    let mut lag_logged = 0i64;
     let outcome = loop {
         tokio::select! {
             status = child.wait() => {
@@ -613,7 +618,13 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             _ = tick.tick() => {
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, false));
                 measure(m, rec, &run_id, std::mem::take(&mut scan.waves));
-                rec.preview_lag.store(scan.preview_lag() as u32, Ordering::Relaxed);
+                let lag = scan.preview_lag();
+                rec.preview_lag.store(lag as u32, Ordering::Relaxed);
+                // In the journal (not on the card): once every 10 minutes at most.
+                if lag >= 20.0 && now_ms() - lag_logged > 600_000 {
+                    lag_logged = now_ms();
+                    tracing::warn!("{}: the server is too busy, the preview is {lag:.0} s behind the recording (the recording is whole)", cfg.name);
+                }
                 if let Some((from, to)) = scan.jumped {
                     tracing::warn!("{}: the source's clock jumped ({from:.1} s → {to:.1} s): a new recording starts", cfg.name);
                     stop_child(&mut child).await;

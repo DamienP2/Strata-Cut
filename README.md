@@ -2,7 +2,7 @@
 
 Enregistre des flux vidéo en continu, en boucle (24 h par défaut, réglable par source : le plus ancien est effacé au fur et à mesure), et en extrait des passages à l'image près.
 
-- Sources : UDP, RTP (MPEG-TS), RTMP et SRT (écoute ou appel), directs web (YouTube, Facebook, Instagram, X, LinkedIn), cartes Blackmagic DeckLink, UltraStudio et Intensity (SDI, HDMI, du PAL au 8K ; le pilote Desktop Video est installé par le script). NDI et ST 2110 viendront plus tard.
+- Sources : UDP, RTP (MPEG-TS), RTMP et SRT (écoute ou appel), directs YouTube, cartes Blackmagic DeckLink, UltraStudio et Intensity (SDI, HDMI, du PAL au 8K). NDI et ST 2110 viendront plus tard.
 - Enregistrement : le flux tel quel, sans réencodage (segments MPEG-TS de 6 s), plus un proxy léger pour le navigateur. Une carte DeckLink donne des images brutes : elles sont encodées en H.264 au débit choisi (25 Mb/s par défaut).
 - Extraits : MP4 H.264 haute qualité (CRF 16) + AAC 256 kb/s, coupés sur l'image exacte de l'entrée, téléchargeables.
 - Serveur Rust (axum) qui embarque l'interface web (React). Linux.
@@ -28,6 +28,31 @@ Mettre à jour (récupère la dernière version, recompile, redémarre ; les don
 ```bash
 sudo ~/Strata-Cut/scripts/install-ubuntu.sh
 ```
+
+### Cartes Blackmagic (DeckLink, UltraStudio, Intensity) : le pilote Desktop Video
+
+Blackmagic distribue son pilote Linux après un formulaire : il se télécharge sur votre ordinateur, puis se copie sur le serveur par SSH. Le script d'installation guide et attend.
+
+1. **Sur votre ordinateur**, ouvrez la page Support de Blackmagic (https://www.blackmagicdesign.com/fr/support/family/capture-and-playback) et téléchargez **Desktop Video** pour **Linux** (Blackmagic demande ses coordonnées et l'accord de sa licence). Vous obtenez une archive `Blackmagic_Desktop_Video_Linux_<version>.tar.gz`.
+2. **Copiez-la sur le serveur par SSH**, depuis un terminal de votre ordinateur (`<compte>` : le compte avec lequel vous vous connectez au serveur, `<serveur>` : son adresse) :
+
+   macOS / Linux :
+
+   ```bash
+   scp ~/Downloads/Blackmagic_Desktop_Video_Linux_*.tar.gz <compte>@<serveur>:~/
+   ```
+
+   Windows (PowerShell) :
+
+   ```powershell
+   scp $HOME\Downloads\Blackmagic_Desktop_Video_Linux_*.tar.gz <compte>@<serveur>:~/
+   ```
+
+   (WinSCP ou FileZilla en SFTP font la même chose.)
+3. **Lancez le script d'installation** (ou relancez-le). S'il voit une carte Blackmagic sans pilote, il affiche ces mêmes étapes avec la bonne commande `scp` pour ce serveur, puis **attend** : appuyez sur Entrée quand la copie est finie. Il vérifie que l'archive est là et complète (sinon il le dit et attend encore), installe le pilote, construit son module pour le noyau en cours, puis continue l'installation. Tapez `p` pour passer sans pilote.
+
+   L'archive peut aussi être copiée avant de lancer le script : il la trouve seul (dossier personnel, `/home/*`, `/root`, `/tmp`), ou on l'indique avec `--desktop-video /chemin/de/l/archive`. Sans carte détectée (par exemple avant de l'installer), `--desktop-video wait` demande quand même l'archive.
+4. **Si le script le demande, redémarrez** le serveur (le module du pilote se charge au démarrage), puis relancez le script. Avec Secure Boot actif, le module doit être signé (clé MOK enrôlée au redémarrage).
 
 Guide pas à pas complet : [docs/INSTALL-UBUNTU.md](docs/INSTALL-UBUNTU.md).
 

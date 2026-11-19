@@ -86,13 +86,6 @@ function hours(ms: number): string {
   return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`;
 }
 
-/** "00:02:14" */
-function hms(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000));
-  const two = (n: number) => String(n).padStart(2, '0');
-  return `${two(Math.floor(s / 3600))}:${two(Math.floor(s / 60) % 60)}:${two(s % 60)}`;
-}
-
 /** Changes every `ms`: for images that refresh. */
 function useTick(ms: number) {
   const [n, setN] = useState(0);
@@ -281,31 +274,7 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
           <strong title={[sourceAddress(rec), fmt].filter(Boolean).join('\n')}>{rec.name}</strong>
           <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
         </div>
-        {state === 'nosignal' && st && (
-          <span className="sc-warnline">
-            <TriangleAlert size={12} /> {t('No signal for {d}', { d: hms(now - st.since) })}
-          </span>
-        )}
-        {state === 'nosignal' && st?.message && (
-          <span className="sc-warnline sc-reason" title={st.message}>
-            {t(st.message)}
-          </span>
-        )}
-        {recording && st && st.lost + st.damaged > 0 && (
-          <span className="sc-warnline" data-tip={t('Packets lost: {lost} (network, or a server too busy) · damaged stream: {damaged} (blocks or freezes in the picture). The last 10 minutes.', { lost: st.lost, damaged: st.damaged })}>
-            <TriangleAlert size={12} /> {t('Reception: {n} problems in 10 min', { n: st.lost + st.damaged })}
-          </span>
-        )}
-        {recording && st && (st.previewLag >= 15 || st.previewDropped) && (
-          <span className="sc-warnline" data-tip={t('The preview is encoded apart from the recording: when the processor is too busy, only the preview falls behind or skips. The recording and the clips stay whole. Fewer recorders, or more processor, put it right.')}>
-            <TriangleAlert size={12} /> {st.previewLag >= 15 ? t('Server overloaded: preview {s} s late', { s: st.previewLag }) : t('Server overloaded: the preview skips')}
-          </span>
-        )}
-        {st?.spaceLimited && (
-          <span className="sc-warnline">
-            <TriangleAlert size={12} /> {t('Loop shortened for lack of disk space')}
-          </span>
-        )}
+        {/* The alerts (reception, server load, disk space, why no signal) go to Système › Santé, not here. */}
         {st?.onAir && (
           <div className="sc-epg-now" title={st.next ? t('Next: {name}', { name: `${clock(st.next.start, timezone).slice(0, 5)} ${st.next.name}` }) : undefined}>
             <Tv size={12} />
@@ -625,7 +594,7 @@ function DecklinkFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder
       {info && (!info.gstreamer || !info.driver) && (
         <div className="sc-space bad span2">
           <strong>{!info.driver ? t('Blackmagic’s Desktop Video driver is not installed on the server.') : t('GStreamer’s DeckLink module is missing on the server.')}</strong>
-          <span>{!info.driver ? t('Install Desktop Video (Blackmagic’s site, Support page), restart the server, then run the install script again. In a virtual machine, the card must be passed through to it (PCI passthrough).') : t('Run the install script again: it installs GStreamer and its modules.')}</span>
+          <span>{!info.driver ? t('Download Desktop Video for Linux from Blackmagic’s site on your computer, copy it to the server (scp … :~/) and run the install script again: it installs it, step by step. In a virtual machine, the card must first be passed through to it (PCI passthrough).') : t('Run the install script again: it installs GStreamer and its modules.')}</span>
         </div>
       )}
       <Field label={t('Card')} hint={devices.length === 0 ? t('Cards are numbered from 1 in the order the driver sees them.') : undefined}>

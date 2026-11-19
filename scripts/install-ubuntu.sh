@@ -25,8 +25,8 @@
 #   --no-grow             ne donne pas au volume des données tout l'espace libre du disque (LVM)
 #   --desktop-video F     installe le pilote Blackmagic Desktop Video depuis cette archive
 #                         (Blackmagic_Desktop_Video_Linux_*.tar.gz) ou ce paquet desktopvideo_*.deb ;
-#                         « download » : le télécharge chez Blackmagic (vos coordonnées et l'accord
-#                         de licence sont demandés, comme sur leur site)
+#                         « wait » : explique comment copier l'archive par SSH et attend qu'elle
+#                         soit là (fait de lui-même si une carte Blackmagic est vue sans pilote)
 #   --no-desktop-video    ne propose pas le pilote Blackmagic
 #   --uninstall           retire le service et le programme (les données restent)
 #   --purge               avec --uninstall : supprime aussi les données et le compte de service
@@ -124,7 +124,7 @@ for d in "$DATA_DIR" "$RECORDINGS_DIR" "$CLIPS_DIR"; do
   [ -z "$d" ] || [[ "$d" = /* ]] || die "un dossier s'écrit en chemin absolu : $d"
 done
 [ -z "$PACKAGE" ] || PACKAGE="$(realpath "$PACKAGE")"
-if [ -n "$DESKTOP_VIDEO" ] && [ "$DESKTOP_VIDEO" != download ]; then
+if [ -n "$DESKTOP_VIDEO" ] && [ "$DESKTOP_VIDEO" != wait ]; then
   [ -e "$DESKTOP_VIDEO" ] || die "pilote Blackmagic introuvable : $DESKTOP_VIDEO"
   DESKTOP_VIDEO="$(realpath "$DESKTOP_VIDEO")"
 fi
@@ -193,7 +193,7 @@ dv_pci() { command -v lspci >/dev/null && lspci -mm -d bdbd: 2>/dev/null | head 
 
 # Une archive déjà là (dossier courant, compte qui installe, /root, /tmp, cache) : la plus récente.
 dv_find() {
-  local dirs=("$PWD" "$BUILD_HOME" /root /tmp "$DV_CACHE") f best=""
+  local dirs=("$PWD" "$BUILD_HOME" /root /tmp "$DV_CACHE" /home/*) f best=""
   for d in "${dirs[@]}"; do
     for f in "$d"/Blackmagic_Desktop_Video_Linux_*.tar* "$d"/desktopvideo_*.deb; do
       [ -f "$f" ] || continue
@@ -209,42 +209,52 @@ ask() { # ask VARIABLE "question" [défaut]
   printf -v "$1" '%s' "${answer:-${3:-}}"
 }
 
-# Téléchargé chez Blackmagic : la dernière version pour Linux (API publique de leur site), puis le
-# formulaire de téléchargement rempli avec VOS coordonnées et votre accord de licence.
-dv_download() {
-  [ -n "$TTY" ] || { warn "pilote Blackmagic : téléchargement interactif impossible sans terminal (utilisez --desktop-video ARCHIVE)"; return 1; }
-  local api="https://www.blackmagicdesign.com/api" latest id major minor version url file
-  latest="$(curl -fsS -m 20 "$api/support/latest-version/desktop-video/linux" 2>/dev/null)" || { warn "site de Blackmagic injoignable"; return 1; }
-  id="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["linux"]["downloadId"])' <<<"$latest" 2>/dev/null)" || true
-  major="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["linux"]["major"])' <<<"$latest" 2>/dev/null)" || true
-  minor="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["linux"]["minor"])' <<<"$latest" 2>/dev/null)" || true
-  [ -n "$id" ] || { warn "version de Desktop Video introuvable sur le site de Blackmagic"; return 1; }
-  version="$major.$minor"
-  echo "  Desktop Video $version pour Linux est disponible chez Blackmagic Design."
-  echo "  Comme sur leur site, Blackmagic demande vos coordonnées avant le téléchargement,"
-  echo "  et l'accord de sa licence : https://www.blackmagicdesign.com/fr/support (Desktop Video)."
-  local yes=""
-  ask yes "Télécharger Desktop Video $version maintenant ? (o/N)" "n"
-  [[ "$yes" =~ ^[oOyY] ]] || return 1
-  local first last email phone country city
-  ask first "Prénom"; ask last "Nom"; ask email "E-mail"; ask phone "Téléphone"
-  ask country "Pays (code à 2 lettres)" "fr"; ask city "Ville"
-  [ -n "$first" ] && [ -n "$last" ] && [ -n "$email" ] || { warn "coordonnées incomplètes : pilote non téléchargé"; return 1; }
-  ask yes "Acceptez-vous la licence de Blackmagic Design pour Desktop Video ? (o/N)" "n"
-  [[ "$yes" =~ ^[oOyY] ]] || { warn "licence non acceptée : pilote non téléchargé"; return 1; }
-  local body
-  body="$(FIRST="$first" LAST="$last" EMAIL="$email" PHONE="$phone" COUNTRY="${country,,}" CITY="$city" PRODUCT="Desktop Video $version" python3 -c '
-import json, os
-e = os.environ
-print(json.dumps({"firstname": e["FIRST"], "lastname": e["LAST"], "email": e["EMAIL"], "phone": e["PHONE"], "country": e["COUNTRY"], "city": e["CITY"], "state": "", "street": "",
-                  "product": e["PRODUCT"], "platform": "Linux", "policy": True, "hasAgreedToTerms": True}))')"
-  url="$(curl -fsS -m 30 -H 'Content-Type: application/json;charset=UTF-8' -H 'Referer: https://www.blackmagicdesign.com/support/' --data-binary "$body" "$api/register/${country,,}/download/$id" 2>/dev/null)" || true
-  [[ "$url" == https://* ]] || { warn "Blackmagic n'a pas donné de lien de téléchargement (formulaire refusé ?)"; return 1; }
-  mkdir -p "$DV_CACHE"
-  file="$DV_CACHE/Blackmagic_Desktop_Video_Linux_$version.tar.gz"
-  echo "  téléchargement de Desktop Video $version…"
-  curl -fL -m 1800 -o "$file.part" "$url" && mv -f "$file.part" "$file" || { rm -f "$file.part"; warn "téléchargement interrompu"; return 1; }
-  DESKTOP_VIDEO="$file"
+# Pas à pas : l'archive est téléchargée sur votre ordinateur (Blackmagic la donne après un
+# formulaire), copiée sur ce serveur par SSH (scp) ; le script attend qu'elle soit là, la vérifie,
+# puis continue.
+dv_wait_copy() {
+  [ -n "$TTY" ] || { warn "pilote Blackmagic : pas de terminal pour attendre la copie de l'archive"; return 1; }
+  local who host latest version="" answer f
+  who="${SUDO_USER:-$(id -un)}"
+  host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -n "$host" ] || host="$(hostname)"
+  # La dernière version, pour savoir quoi télécharger (le site de Blackmagic la publie).
+  latest="$(curl -fsS -m 15 https://www.blackmagicdesign.com/api/support/latest-version/desktop-video/linux 2>/dev/null)" || true
+  version="$(python3 -c 'import json,sys; d=json.load(sys.stdin)["linux"]; print("%s.%s" % (d["major"], d["minor"]))' <<<"$latest" 2>/dev/null)" || true
+  cat <<EOT
+
+  ┌─ Pilote Blackmagic Desktop Video ─────────────────────────────────────────────
+  │ 1. Sur votre ordinateur, ouvrez :
+  │      https://www.blackmagicdesign.com/fr/support/family/capture-and-playback
+  │    et téléchargez « Desktop Video ${version:-(la dernière version)} » pour Linux
+  │    (Blackmagic demande ses coordonnées et l'accord de sa licence).
+  │ 2. Copiez l'archive sur ce serveur, depuis un terminal de votre ordinateur :
+  │      macOS / Linux :
+  │        scp ~/Downloads/Blackmagic_Desktop_Video_Linux_*.tar.gz $who@$host:~/
+  │      Windows (PowerShell) :
+  │        scp \$HOME\Downloads\Blackmagic_Desktop_Video_Linux_*.tar.gz $who@$host:~/
+  │    (Téléchargements peut s'appeler autrement ; WinSCP ou FileZilla en SFTP marchent aussi.)
+  │ 3. Revenez ici et appuyez sur Entrée : l'archive est vérifiée, puis l'installation continue.
+  └───────────────────────────────────────────────────────────────────────────────
+EOT
+  while true; do
+    answer=""
+    read -r -p "  Entrée quand l'archive est copiée (p : passer, sans pilote Blackmagic) : " answer <"$TTY" || return 1
+    [[ "$answer" =~ ^[pP] ]] && return 1
+    f="$(dv_find)"
+    if [ -z "$f" ]; then
+      warn "aucune archive Blackmagic_Desktop_Video_Linux_*.tar.gz dans $BUILD_HOME, /home/*, /root ni /tmp — la copie est-elle finie ?"
+      continue
+    fi
+    # Une copie interrompue donne une archive illisible : elle est redemandée.
+    if [[ "$f" != *.deb ]] && ! tar -tf "$f" >/dev/null 2>&1; then
+      warn "$f est incomplète ou abîmée : copiez-la de nouveau"
+      continue
+    fi
+    ok "archive trouvée : $f"
+    DESKTOP_VIDEO="$f"
+    return 0
+  done
 }
 
 # Le paquet de l'archive (desktopvideo_*.deb, sans l'interface graphique) installé ; son module
@@ -286,11 +296,11 @@ desktop_video() {
     fi
     echo "  carte Blackmagic sur le bus PCI : $card — pilote Desktop Video absent"
     DESKTOP_VIDEO="$(dv_find)"
-    if [ -n "$DESKTOP_VIDEO" ]; then echo "  archive trouvée : $DESKTOP_VIDEO"; else DESKTOP_VIDEO=download; fi
+    if [ -n "$DESKTOP_VIDEO" ]; then echo "  archive trouvée : $DESKTOP_VIDEO"; else DESKTOP_VIDEO="wait"; fi
   fi
-  if [ "$DESKTOP_VIDEO" = download ]; then
-    if ! dv_download; then
-      warn "pilote Blackmagic non installé. Téléchargez « Desktop Video » pour Linux sur https://www.blackmagicdesign.com/fr/support puis relancez ce script avec --desktop-video /chemin/de/l/archive"
+  if [ "$DESKTOP_VIDEO" = wait ]; then
+    if ! dv_wait_copy; then
+      warn "pilote Blackmagic non installé : copiez l'archive Desktop Video sur ce serveur puis relancez ce script (voir docs/INSTALL-UBUNTU.md, « Carte Blackmagic »)"
       return 0
     fi
   fi

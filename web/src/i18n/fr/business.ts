@@ -395,7 +395,7 @@ export const business: Record<string, string> = {
   'Opening the card…': 'Ouverture de la carte…',
   'Blackmagic’s Desktop Video driver is not installed on the server.': 'Le pilote Desktop Video de Blackmagic n’est pas installé sur le serveur.',
   'GStreamer’s DeckLink module is missing on the server.': 'Le module DeckLink de GStreamer manque sur le serveur.',
-  'Install Desktop Video (Blackmagic’s site, Support page), restart the server, then run the install script again. In a virtual machine, the card must be passed through to it (PCI passthrough).': 'Installez Desktop Video (site de Blackmagic, page Support), redémarrez le serveur, puis relancez le script d’installation. Dans une machine virtuelle, la carte doit lui être attribuée (passthrough PCI).',
+  'Download Desktop Video for Linux from Blackmagic’s site on your computer, copy it to the server (scp … :~/) and run the install script again: it installs it, step by step. In a virtual machine, the card must first be passed through to it (PCI passthrough).': 'Téléchargez Desktop Video pour Linux sur le site de Blackmagic depuis votre ordinateur, copiez-le sur le serveur (scp … :~/) et relancez le script d’installation\u00a0: il l’installe pas à pas. Dans une machine virtuelle, la carte doit d’abord lui être attribuée (passthrough PCI).',
   'Run the install script again: it installs GStreamer and its modules.': 'Relancez le script d’installation\u00a0: il installe GStreamer et ses modules.',
   Card: 'Carte',
   'Cards are numbered from 1 in the order the driver sees them.': 'Les cartes sont numérotées à partir de 1, dans l’ordre où le pilote les voit.',
