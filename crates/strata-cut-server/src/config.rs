@@ -39,7 +39,34 @@ pub struct ServerConfig {
     /// The machine's NTP servers (empty = the system's default).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ntp: Vec<String>,
+    /// YouTube lives: what yt-dlp uses so that YouTube lets the server through.
+    #[serde(default)]
+    pub youtube: Youtube,
 }
+
+/// YouTube (Système › YouTube): for the web recorders, so that YouTube does not take the server
+/// for a bot. Each one may also have its own cookies, which then win.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Youtube {
+    /// A signed-in account's cookies (Netscape cookies.txt), for every web recorder without its own.
+    #[serde(default)]
+    pub cookies: String,
+    /// The YouTube client yt-dlp passes itself for ("" = yt-dlp's choice).
+    #[serde(default)]
+    pub client: String,
+    /// A PO Token ("Proof of Origin") made in a browser, and the visitor data it goes with.
+    #[serde(default)]
+    pub po_token: String,
+    #[serde(default)]
+    pub visitor_data: String,
+    /// A proxy for YouTube only (http://, https://, socks5://): another address than the server's.
+    #[serde(default)]
+    pub proxy: String,
+}
+
+/// The YouTube clients offered ("": yt-dlp's choice).
+pub const YOUTUBE_CLIENTS: [&str; 7] = ["", "tv", "web_safari", "mweb", "web", "ios", "android_vr"];
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +123,10 @@ impl ServerConfig {
         self.trusted_origins = self.trusted_origins.iter().map(|o| o.trim().trim_end_matches('/').to_string()).filter(|o| !o.is_empty()).collect();
         self.recordings_dir = self.recordings_dir.trim().to_string();
         self.clips_dir = self.clips_dir.trim().to_string();
+        self.youtube.client = self.youtube.client.trim().to_string();
+        self.youtube.po_token = self.youtube.po_token.trim().to_string();
+        self.youtube.visitor_data = self.youtube.visitor_data.trim().to_string();
+        self.youtube.proxy = self.youtube.proxy.trim().to_string();
         // No fixed share of the disk any more (System › Storage no longer sets one).
         self.loops_max_gb = 0.0;
         self.clips_max_gb = 0.0;
@@ -120,6 +151,19 @@ impl ServerConfig {
         }
         if self.ntp.len() > 8 {
             return Err("8 ntp servers at most".into());
+        }
+        let y = &self.youtube;
+        if !YOUTUBE_CLIENTS.contains(&y.client.as_str()) {
+            return Err("unknown youtube client".into());
+        }
+        if !y.proxy.is_empty() && !["http://", "https://", "socks5://", "socks5h://"].iter().any(|p| y.proxy.starts_with(p)) {
+            return Err("the proxy starts with http://, https:// or socks5://".into());
+        }
+        if [&y.po_token, &y.visitor_data, &y.proxy].iter().any(|v| v.contains(char::is_whitespace) || v.len() > 4096) {
+            return Err("a youtube setting holds spaces or is too long".into());
+        }
+        if y.cookies.len() > 1 << 20 {
+            return Err("the cookies are 1 MB at most".into());
         }
         if let Some(bad) = self.ntp.iter().find(|s| !crate::ntp::valid(s)) {
             let _ = bad;

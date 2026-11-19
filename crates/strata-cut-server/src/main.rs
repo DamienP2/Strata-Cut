@@ -267,6 +267,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
         recorders.set_config(&config);
         ntp::request(&data_dir, &config.ntp);
         clips.set_config(&config);
+        recorder::web::configure(&data_dir, &config.youtube);
         let wanted = args.bind.or(config.bind).or(args.default_bind).unwrap_or(DEFAULT_BIND.parse()?);
         let listener = bind_retry(wanted).await?;
         let bind = listener.local_addr()?;

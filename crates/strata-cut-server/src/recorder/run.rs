@@ -909,7 +909,7 @@ impl Scanner {
     /// How far the preview is behind the recording (s): the server is short of CPU when it grows.
     fn preview_lag(&self) -> f64 {
         match (self.last_t1, self.video_t1.or(self.first_t0)) {
-            (Some(rec), Some(prev)) => (rec - prev).max(0.0),
+            (Some(rec), Some(prev)) => lag_between(rec, prev),
             _ => 0.0,
         }
     }
@@ -1072,6 +1072,17 @@ impl Scanner {
     }
 }
 
+/// How far the preview is behind the recording (s), from their times. The recording keeps a
+/// source's times whole; the preview reads them through MPEG-TS, whose clock starts again from 0
+/// every 26 h 30 (33 bits at 90 kHz): a source with large times (an RTMP encoder running for days)
+/// gives the two a whole number of turns apart, which is no lag.
+fn lag_between(recorded: f64, previewed: f64) -> f64 {
+    let wrap = super::PTS_WRAP;
+    let d = (recorded - previewed).rem_euclid(wrap);
+    // Just past a turn: the preview a little ahead, not a whole turn behind.
+    if d > wrap / 2.0 { 0.0 } else { d }
+}
+
 /// "s00000012.ts" → 12.
 fn seq_of(name: &str) -> Option<u32> {
     let stem = Path::new(name).file_stem()?.to_str()?;
@@ -1138,6 +1149,16 @@ mod tests {
         let r = receiver_args(vec!["-i".into(), "x".into()], Path::new("/r"), false, None, 5000);
         assert!(!r.iter().any(|x| x.contains("discardcorrupt") || x.contains("libx264") || x == "-vf" || x == "-af"));
         assert!(r.contains(&"udp://127.0.0.1:5000?pkt_size=1316".to_string()));
+    }
+
+    #[test]
+    fn lag_past_the_clock_turns() {
+        let wrap = crate::recorder::PTS_WRAP;
+        assert!((lag_between(100.0, 97.5) - 2.5).abs() < 1e-9);
+        // An RTMP source's large times: ten turns apart, 3 s behind.
+        assert!((lag_between(10.0 * wrap + 500.0, 497.0) - 3.0).abs() < 1e-6);
+        // The preview a hair ahead: no lag.
+        assert_eq!(lag_between(500.0, 500.5), 0.0);
     }
 
     #[test]

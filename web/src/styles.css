@@ -850,9 +850,11 @@ a.btn { color: inherit; }
 .sc-clipbar-l { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
 .sc-mtag { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px 0 4px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-3); }
 .sc-mtag.set { border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-soft); }
-.sc-mtag i { font: 700 10.5px var(--mono); font-style: normal; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 4px 4px 4px 0; background: var(--line-2); color: var(--text-2); }
-.sc-mtag.out i { border-radius: 4px 4px 0 4px; }
-.sc-mtag.set i { background: var(--accent); color: var(--on-accent); }
+/* IN / OUT: a button that sets the point at the playhead. */
+.sc-mtag-k { font: 700 10px var(--mono); letter-spacing: 0.03em; min-width: 30px; height: 22px; padding: 0 6px; display: grid; place-items: center; border: 0; border-radius: 5px; background: var(--line-2); color: var(--text); cursor: pointer; transition: filter 0.12s, transform 0.12s; }
+.sc-mtag-k:hover { filter: brightness(1.25); }
+.sc-mtag-k:active { transform: scale(0.94); }
+.sc-mtag.set .sc-mtag-k { background: var(--accent); color: var(--on-accent); }
 .sc-mtag input { width: 104px; min-height: 0 !important; height: 24px; padding: 0 2px; border: none; background: none; font: 13px var(--mono); color: var(--text); }
 .sc-mtag-x { border: none; background: none; color: var(--text-3); cursor: pointer; display: grid; place-items: center; padding: 2px; border-radius: 4px; }
 .sc-mtag-x:hover { color: var(--text); background: var(--panel-2); }
@@ -1146,7 +1148,6 @@ a.btn { color: inherit; }
 .sc-mark.in b { left: auto; right: 0; border-radius: 3px 3px 0 3px; }
 .sc-mark.out b { right: auto; left: 0; border-radius: 3px 3px 3px 0; }
 /* IN / OUT in words. */
-.sc-mtag i { width: auto; min-width: 26px; padding: 0 5px; font-size: 10px; letter-spacing: 0.03em; }
 .sc-mark b { letter-spacing: 0.03em; }
 /* How far back the loop goes. */
 .sc-backto { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-3); }
@@ -1154,3 +1155,23 @@ a.btn { color: inherit; }
 /* The clip's preview, next to the scissors. */
 .sc-preview { gap: 6px; }
 .sc-preview.on { color: var(--accent-2); border-color: var(--accent); background: var(--accent-soft); }
+/* The extraction mode, clearly: the kind chosen filled with its colour, the extract button in it, saying what it makes. */
+.sc-kind-b.video.on { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px var(--accent); }
+.sc-kind-b.audio.on { background: color-mix(in srgb, var(--mask, #2dd4bf) 22%, transparent); color: var(--text); box-shadow: inset 0 0 0 1px var(--mask, #2dd4bf); }
+.sc-kind-b.image.on { background: rgba(244, 114, 182, 0.22); color: var(--text); box-shadow: inset 0 0 0 1px #f472b6; }
+.sc-kind-b { height: 30px; }
+.sc-xbtn:not(.busy) { width: auto; padding: 0 14px 0 12px; gap: 7px; display: inline-flex; align-items: center; }
+.sc-xkind { font-weight: 700; font-size: 13px; }
+.sc-xbtn.kind-audio:not(.busy) { background: var(--mask, #2dd4bf); color: #0b0c12; }
+.sc-xbtn.kind-image:not(.busy) { background: #f472b6; color: #0b0c12; }
+.sc-xbtn.kind-audio:not(.busy):hover:not(:disabled) { background: color-mix(in srgb, var(--mask, #2dd4bf) 85%, #fff); }
+.sc-xbtn.kind-image:not(.busy):hover:not(:disabled) { background: color-mix(in srgb, #f472b6 85%, #fff); }
+/* Extraction: the clip's preview, in a window. */
+.sc-preview-modal header .sc-kind-tag { margin-right: 4px; }
+.sc-clip-sound.solid { background: radial-gradient(circle at 50% 50%, #0d2a2a, #05070a 70%); }
+.sc-preview-bar { position: relative; height: 8px; border-radius: 4px; background: var(--panel-3); cursor: pointer; overflow: hidden; }
+.sc-preview-bar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 4px; }
+.sys-tabs { margin: 0 0 18px; }
+/* Système › YouTube. */
+.sc-yt-note { font-size: 13px; margin: 0 0 4px; display: flex; align-items: center; gap: 6px; }
+.set-card .sc-yt-note { display: block; }

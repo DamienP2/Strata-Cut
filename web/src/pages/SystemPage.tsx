@@ -1,7 +1,7 @@
 /* /system/<section>: the list of sections on the left, the open one on the right. */
 import { useDisplayPref } from '../displayPrefs';
 import { lazy, Suspense, useEffect, type ComponentType, type LazyExoticComponent } from 'react';
-import { CloudDownload, Cpu, Gauge, HardDrive, HeartPulse, Lock, RotateCcw, SlidersHorizontal, Users as UsersIcon, UsersRound } from 'lucide-react';
+import { CloudDownload, Cpu, Gauge, HardDrive, HeartPulse, Lock, RotateCcw, SlidersHorizontal, Users as UsersIcon, UsersRound, MonitorPlay } from 'lucide-react';
 import { t } from '../i18n';
 import { navigate } from '../router';
 import { can, useApp, useChanged, type PublicUser } from '../store';
@@ -18,6 +18,10 @@ interface Section {
   icon: ComponentType<{ size?: number }>;
   admin: boolean;
   page: LazyExoticComponent<ComponentType>;
+  /** A tab of another section (not in the list on the left): that section's id. */
+  tabOf?: string;
+  /** Its name as a tab (English). */
+  tab?: string;
 }
 
 interface Group {
@@ -29,8 +33,9 @@ export const SYSTEM: Group[] = [
   {
     title: 'Monitoring',
     sections: [
-      { id: 'performance', label: 'Performance', icon: Gauge, admin: true, page: page(() => import('../settings/Performance'), 'Performance') },
-      { id: 'health', label: 'Health', icon: HeartPulse, admin: true, page: page(() => import('../settings/Health'), 'Health') },
+      // Health and performance: one page, two tabs.
+      { id: 'health', label: 'Health and performance', tab: 'Health', icon: HeartPulse, admin: true, page: page(() => import('../settings/Health'), 'Health') },
+      { id: 'performance', label: 'Performance', tab: 'Performance', tabOf: 'health', icon: Gauge, admin: true, page: page(() => import('../settings/Performance'), 'Performance') },
     ],
   },
   {
@@ -47,8 +52,10 @@ export const SYSTEM: Group[] = [
       { id: 'general', label: 'General', icon: SlidersHorizontal, admin: true, page: page(() => import('../settings/General'), 'General') },
       { id: 'storage', label: 'Storage', icon: HardDrive, admin: true, page: page(() => import('../settings/Storage'), 'Storage') },
       { id: 'hardware', label: 'Hardware', icon: Cpu, admin: true, page: page(() => import('../settings/Hardware'), 'Hardware') },
-      { id: 'updates', label: 'Updates', icon: CloudDownload, admin: true, page: page(() => import('../settings/Updates'), 'Updates') },
-      { id: 'maintenance', label: 'Maintenance', icon: RotateCcw, admin: true, page: page(() => import('../settings/Maintenance'), 'Maintenance') },
+      { id: 'youtube', label: 'YouTube', icon: MonitorPlay, admin: true, page: page(() => import('../settings/Youtube'), 'Youtube') },
+      // Updates and maintenance: one page, two tabs.
+      { id: 'updates', label: 'Updates and maintenance', tab: 'Updates', icon: CloudDownload, admin: true, page: page(() => import('../settings/Updates'), 'Updates') },
+      { id: 'maintenance', label: 'Maintenance', tab: 'Maintenance', tabOf: 'updates', icon: RotateCcw, admin: true, page: page(() => import('../settings/Maintenance'), 'Maintenance') },
     ],
   },
 ];
@@ -81,6 +88,8 @@ export function SystemPage({ section }: { section?: string }) {
   useChanged('users', () => admin && void loadUsers());
 
   const Page = open?.page;
+  const family = open?.tabOf ?? open?.id;
+  const tabs = all.filter((s) => s.id === family || s.tabOf === family);
   return (
     <SidePage
       className="sys-page"
@@ -88,12 +97,12 @@ export function SystemPage({ section }: { section?: string }) {
       nav={groups.map((g) => (
         <div key={g.title} className="sys-group">
           <NavSection title={t(g.title)} />
-          {g.sections.map((s) => (
+          {g.sections.filter((s) => !s.tabOf).map((s) => (
             <NavItem
               key={s.id}
               icon={s.icon}
               label={t(s.label)}
-              on={s.id === open?.id}
+              on={s.id === open?.id || s.id === open?.tabOf}
               onClick={() => void navigate(`/system/${s.id}`)}
               status={s.id === 'health' && needsLook(health) ? 'warn' : null}
               count={s.id === 'users' && users ? users.length : undefined}
@@ -102,6 +111,17 @@ export function SystemPage({ section }: { section?: string }) {
         </div>
       ))}
     >
+      {/* A section with tabs: its tabs over its page. */}
+      {tabs.length > 1 && (
+        <div className="sc-clips-tabs sys-tabs" role="tablist">
+          {tabs.map((x) => (
+            <button key={x.id} type="button" role="tab" aria-selected={x.id === open?.id} className={`sc-clips-tab ${x.id === open?.id ? 'on' : ''}`} onClick={() => void navigate(`/system/${x.id}`)}>
+              <x.icon size={14} />
+              {t(x.tab ?? x.label)}
+            </button>
+          ))}
+        </div>
+      )}
       {Page && (
         <Suspense fallback={<div className="loading">{t('Loading…')}</div>}>
           <Page key={open.id} />

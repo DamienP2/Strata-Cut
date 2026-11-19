@@ -25,6 +25,13 @@ pub fn masked(cfg: &ServerConfig) -> ServerConfig {
     if !c.security.sso.client_secret.is_empty() {
         c.security.sso.client_secret = MASK.into();
     }
+    // A YouTube account's cookies and its token: never sent back.
+    if !c.youtube.cookies.is_empty() {
+        c.youtube.cookies = MASK.into();
+    }
+    if !c.youtube.po_token.is_empty() {
+        c.youtube.po_token = MASK.into();
+    }
     c
 }
 
@@ -75,6 +82,12 @@ async fn put_config(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(
     let old = s.config.load_full();
     if cfg.security.sso.client_secret == MASK {
         cfg.security.sso.client_secret = old.security.sso.client_secret.clone();
+    }
+    if cfg.youtube.cookies == MASK {
+        cfg.youtube.cookies = old.youtube.cookies.clone();
+    }
+    if cfg.youtube.po_token == MASK {
+        cfg.youtube.po_token = old.youtube.po_token.clone();
     }
     if cfg.bind != old.bind {
         if let Some(addr) = cfg.bind.filter(|a| *a != s.bind) {

@@ -2,12 +2,13 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, History, Pause, Play, PlayCircle, Square, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, History, Pause, Play, PlayCircle, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { RecLogo } from '../ui/RecLogo';
 import { t, locale } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer, type RunInfo } from '../player';
+import { ClipPreview } from './ClipPreview';
 import { behind, clock, day, duration, fpsOf, parseTimecode, timecode } from '../tc';
 import { Empty } from '../ui/Empty';
 import { formatDuration } from '../ui/format';
@@ -284,32 +285,14 @@ function Editor({ rec }: { rec: Recorder }) {
     setHole(null);
     void pl.seekWall(wall);
   }, []);
-  /** The clip played from its in to its out (then stopped on the out). */
+  /** The clip seen before it is made, in a window (the page's player paused meanwhile). */
   const [previewing, setPreviewing] = useState(false);
-  const previewStarted = useRef(false);
   const previewClip = () => {
-    const pl = p();
-    if (!pl || !mIn || !mOut) return;
-    if (previewing) {
-      pl.pause();
-      setPreviewing(false);
-      return;
-    }
+    if (!mIn || !mOut) return;
     setLive(false);
-    setHole(null);
-    previewStarted.current = false;
+    p()?.halt();
     setPreviewing(true);
-    void pl.seekWall(mIn.wall, true);
   };
-  useEffect(() => {
-    if (!previewing) return;
-    if (playing) previewStarted.current = true;
-    // Paused by hand, or at its out: over.
-    if ((previewStarted.current && !playing) || (mOut && pos && pos.wall >= mOut.wall)) {
-      if (playing) p()?.pause();
-      setPreviewing(false);
-    }
-  }, [pos, playing, previewing, mOut]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** An in or out point dragged on the timeline: the frame there becomes it. */
   const markAt = useCallback((which: 'in' | 'out', wall: number) => {
@@ -586,22 +569,25 @@ function Editor({ rec }: { rec: Recorder }) {
               </button>
             ))}
           </div>
-          <MarkTag kind="in" mark={mIn} fps={fps} timezone={timezone} onType={(s) => typed(s, setIn)} onClear={() => setIn(null)} />
-          <MarkTag kind="out" mark={mOut} fps={fps} timezone={timezone} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} />
+          <MarkTag kind="in" mark={mIn} fps={fps} timezone={timezone} onType={(s) => typed(s, setIn)} onClear={() => setIn(null)} onMark={markIn} />
+          <MarkTag kind="out" mark={mOut} fps={fps} timezone={timezone} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} onMark={markOut} />
           <span className="sc-clipdur">{kind === 'image' ? (pos ? timecode(pos.wall, fps, timezone) : '--:--:--:--') : duration(frames, fps)}</span>
           <input className="sc-clipname" value={name} placeholder={mIn ? `${rec.name} ${timecode(mIn.wall, fps, timezone)}` : t('Name of the clip')} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
           <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>
             <Eraser size={18} />
           </button>
-          <button className={`ctl sc-preview ${previewing ? 'on' : ''}`} data-tip={previewing ? t('Stop the preview') : t('Preview the clip: from IN to OUT')} disabled={kind === 'image' || frames === 0} onClick={previewClip}>
-            {previewing ? <Square size={16} /> : <PlayCircle size={18} />}
+          <button className="ctl sc-preview" data-tip={t('Preview the clip: from IN to OUT')} disabled={kind === 'image' || frames === 0} onClick={previewClip}>
+            <PlayCircle size={18} />
           </button>
-          {can.extract(user) && <ExtractButton jobs={myJobs} recId={rec.id} canCut={canCut} onCut={() => void cut()} />}
+          {can.extract(user) && <ExtractButton jobs={myJobs} recId={rec.id} canCut={canCut} onCut={() => void cut()} kind={kind} />}
         </div>
       </div>
       {/* The timeline takes the whole width, under the panels. */}
       <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} onMarkAt={markAt} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
 
+      {previewing && mIn && mOut && (
+        <ClipPreview recId={rec.id} name={name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}`} from={mIn} to={mOut} fps={fps} timezone={timezone} sound={kind === 'audio'} onClose={() => setPreviewing(false)} />
+      )}
       <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={admin} act={act} />
     </>
   );
@@ -773,13 +759,16 @@ function MarkOutIcon() {
 }
 
 /** An in or out point as on the timeline (E / S), its timecode typed in, a × to clear it. */
-function MarkTag({ kind, mark, fps, timezone, onType, onClear }: { kind: 'in' | 'out'; mark: Mark | null; fps: number; timezone: string; onType: (s: string) => void; onClear: () => void }) {
+function MarkTag({ kind, mark, fps, timezone, onType, onClear, onMark }: { kind: 'in' | 'out'; mark: Mark | null; fps: number; timezone: string; onType: (s: string) => void; onClear: () => void; onMark: () => void }) {
   const shown = mark ? timecode(mark.wall, fps, timezone) : '';
   const [text, setText] = useState(shown);
   useEffect(() => setText(shown), [shown]);
   return (
     <span className={`sc-mtag ${kind} ${mark ? 'set' : ''}`} data-tip={kind === 'in' ? t('In point (type a timecode)') : t('Out point (type a timecode)')}>
-      <i>{kind === 'in' ? 'IN' : 'OUT'}</i>
+      {/* A click: the point here, at the playhead. */}
+      <button type="button" className="sc-mtag-k" data-tip={kind === 'in' ? t('Set the in point here') : t('Set the out point here')} data-keys={kind === 'in' ? 'I' : 'O'} onClick={onMark}>
+        {kind === 'in' ? 'IN' : 'OUT'}
+      </button>
       <input
         value={text}
         placeholder="--:--:--:--"
@@ -807,7 +796,7 @@ function MarkTag({ kind, mark, fps, timezone, onType, onClear }: { kind: 'in' | 
  * clip ready: play it in Clips, download it, put it away). A click extracts the marks (queued
  * after the others); without marks, it opens the bubble.
  */
-function ExtractButton({ jobs, recId, canCut, onCut }: { jobs: Job[]; recId: string; canCut: boolean; onCut: () => void }) {
+function ExtractButton({ jobs, recId, canCut, onCut, kind }: { jobs: Job[]; recId: string; canCut: boolean; onCut: () => void; kind: 'video' | 'audio' | 'image' }) {
   const toast = useApp((s) => s.toast);
   const [open, setOpen] = useState(false);
   const closing = useRef(0);
@@ -851,8 +840,8 @@ function ExtractButton({ jobs, recId, canCut, onCut }: { jobs: Job[]; recId: str
   return (
     <div className="sc-xwrap" onMouseEnter={show} onMouseLeave={hide}>
       <button
-        className={`ctl primary sc-xbtn ${busy ? 'busy' : ''}`}
-        data-tip={busy ? undefined : t('Extract')}
+        className={`ctl primary sc-xbtn kind-${kind} ${busy ? 'busy' : ''}`}
+        data-tip={busy ? undefined : kind === 'audio' ? t('Extract the sound') : kind === 'image' ? t('Extract the picture under the playhead') : t('Extract the video')}
         data-keys={busy ? undefined : '⏎'}
         disabled={!canCut && list.length === 0}
         onClick={() => (canCut ? onCut() : setOpen((o) => !o))}
@@ -867,7 +856,9 @@ function ExtractButton({ jobs, recId, canCut, onCut }: { jobs: Job[]; recId: str
           </>
         ) : (
           <>
-            <Scissors size={18} />
+            <Scissors size={17} />
+            {/* What it makes, in the mode's colour. */}
+            <span className="sc-xkind">{kind === 'audio' ? t('Sound') : kind === 'image' ? t('Image') : t('Video')}</span>
             {ready > 0 && <span className="sc-xready" />}
           </>
         )}
@@ -987,7 +978,9 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
     if (!moved) return;
     if (!follow.current && !playing) follow.current = true; // a frame moved by hand
     if (!follow.current) return;
-    if (pos.wall < start + span * 0.02 || pos.wall > start + span * 0.98) setStart(clampStart(pos.wall - span * (pos.wall > start ? 0.8 : 0.2), span));
+    // Going right (the live): once at 3/4 of the view, the view moves to put it at 1/4 again.
+    if (pos.wall > start + span * 0.75) setStart(clampStart(pos.wall - span * 0.25, span));
+    else if (pos.wall < start + span * 0.02) setStart(clampStart(pos.wall - span * 0.2, span));
   }, [pos, start, span, playing, clampStart]);
   /** Moves the view by hand (the playhead stays). */
   const pan = useCallback(

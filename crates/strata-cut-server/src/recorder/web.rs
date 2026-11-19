@@ -53,10 +53,35 @@ pub enum Source {
     Piped,
 }
 
-/// The cookies of a signed-in account (Netscape cookies.txt), in a file for yt-dlp.
+/// The YouTube settings of the server (Système › YouTube), as last configured.
+static YOUTUBE: std::sync::RwLock<Option<crate::config::Youtube>> = std::sync::RwLock::new(None);
+
+/// The account's cookies set for every web recorder (without its own).
+fn shared_cookies(data_dir: &Path) -> PathBuf {
+    data_dir.join("cookies").join("_youtube.txt")
+}
+
+/// Takes the YouTube settings: the shared cookies in their file (private), the rest for yt-dlp.
+pub fn configure(data_dir: &Path, y: &crate::config::Youtube) {
+    let path = shared_cookies(data_dir);
+    if y.cookies.trim().is_empty() {
+        let _ = std::fs::remove_file(&path);
+    } else if std::fs::create_dir_all(data_dir.join("cookies")).is_ok() && std::fs::write(&path, y.cookies.as_bytes()).is_ok() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+    }
+    *YOUTUBE.write().unwrap() = Some(y.clone());
+}
+
+/// The cookies of a signed-in account (Netscape cookies.txt), in a file for yt-dlp: the
+/// recorder's own, else the server's (Système › YouTube).
 fn cookies_file(data_dir: &Path, c: &RecorderConfig) -> Option<PathBuf> {
     if c.cookies.trim().is_empty() {
-        return None;
+        let shared = shared_cookies(data_dir);
+        return shared.is_file().then_some(shared);
     }
     let dir = data_dir.join("cookies");
     std::fs::create_dir_all(&dir).ok()?;
@@ -81,6 +106,7 @@ fn common(data_dir: &Path, c: &RecorderConfig) -> Vec<String> {
     if !on_path("deno") && on_path("node") {
         a.extend(["--js-runtimes".into(), "node".into()]);
     }
+    a.extend(youtube_args(YOUTUBE.read().unwrap().as_ref()));
     a
 }
 
@@ -154,6 +180,32 @@ pub fn input_args(s: &Source) -> Vec<String> {
     }
 }
 
+/// yt-dlp's options from the server's YouTube settings: the client it passes for, the PO Token
+/// and its visitor data, the proxy.
+fn youtube_args(y: Option<&crate::config::Youtube>) -> Vec<String> {
+    let Some(y) = y else { return Vec::new() };
+    let mut extra: Vec<String> = Vec::new();
+    if !y.client.is_empty() {
+        extra.push(format!("player_client={}", y.client));
+    }
+    if !y.po_token.is_empty() {
+        // A token made by a page of the web client: given for its streams.
+        let token = if y.po_token.contains('+') { y.po_token.clone() } else { format!("web.gvs+{}", y.po_token) };
+        extra.push(format!("po_token={token}"));
+    }
+    if !y.visitor_data.is_empty() {
+        extra.push(format!("visitor_data={}", y.visitor_data));
+    }
+    let mut a = Vec::new();
+    if !extra.is_empty() {
+        a.extend(["--extractor-args".to_string(), format!("youtube:{}", extra.join(";"))]);
+    }
+    if !y.proxy.is_empty() {
+        a.extend(["--proxy".to_string(), y.proxy.clone()]);
+    }
+    a
+}
+
 /// yt-dlp writing the live (picture and sound joined) as MPEG-TS on its output.
 pub fn pipe_command(data_dir: &Path, c: &RecorderConfig) -> Command {
     let mut cmd = Command::new(ytdlp(data_dir));
@@ -163,7 +215,7 @@ pub fn pipe_command(data_dir: &Path, c: &RecorderConfig) -> Command {
 }
 
 /// YouTube wants to check that this server is not a bot: it takes a signed-in account's cookies.
-pub const BOT: &str = "web: youtube asks to check this server is not a bot (give the recorder a youtube account's cookies)";
+pub const BOT: &str = "web: youtube asks to check this server is not a bot (give it a youtube account's cookies: Système › YouTube)";
 /// The same with cookies given: YouTube no longer takes them.
 pub const BOT_COOKIES: &str = "web: youtube refuses these cookies (export them again, from a private window)";
 
@@ -223,6 +275,14 @@ pub fn keep_updated(data_dir: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn youtube_settings() {
+        assert!(youtube_args(None).is_empty());
+        let y = crate::config::Youtube { client: "tv".into(), po_token: "ABC".into(), visitor_data: "V1".into(), proxy: "socks5://10.0.0.1:1080".into(), ..Default::default() };
+        assert_eq!(youtube_args(Some(&y)), ["--extractor-args", "youtube:player_client=tv;po_token=web.gvs+ABC;visitor_data=V1", "--proxy", "socks5://10.0.0.1:1080"]);
+        assert!(youtube_args(Some(&crate::config::Youtube::default())).is_empty());
+    }
     use serde_json::json;
 
     #[test]
