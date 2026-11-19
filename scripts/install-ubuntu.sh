@@ -276,7 +276,7 @@ dv_install() {
     warn "Secure Boot est actif : le module Blackmagic devra être signé (clé MOK enrôlée au redémarrage) pour se charger"
   fi
   echo "  installation de $(basename "$deb")"
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$deb" >/dev/null || { warn "le paquet Desktop Video ne s'est pas installé"; return 1; }
+  NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive LC_ALL=C apt-get install -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$deb" </dev/null 2>&1 | apt_progress || { warn "le paquet Desktop Video ne s'est pas installé"; return 1; }
   modprobe blackmagic 2>/dev/null || true
   modprobe blackmagic-io 2>/dev/null || true
   ok "pilote Blackmagic Desktop Video $(dpkg-query -W -f='${Version}' desktopvideo 2>/dev/null) installé"
@@ -309,24 +309,50 @@ desktop_video() {
 
 # ---------------------------------------------------------------- 2. paquets
 step "2/9  Paquets Ubuntu"
+# La liste des paquets n'est relue qu'une fois, et seulement s'il en manque un (mises à jour rapides).
+APT_UPDATED=0
+apt_update_once() {
+  [ "$APT_UPDATED" -eq 1 ] && return 0
+  echo "  lecture de la liste des paquets…"
+  LC_ALL=C apt-get update -qq </dev/null
+  APT_UPDATED=1
+}
+# Ce qu'apt fait, sur une seule ligne (sinon un long téléchargement a l'air bloqué) ; ses erreurs en clair.
+apt_progress() {
+  local line n=0 total=""
+  while IFS= read -r line; do
+    case "$line" in
+      *" newly installed"*) total="${line%% newly installed*}"; total="${total##*, }" ;;
+      Get:*) n=$((n + 1)); printf '\r  téléchargement : %d/%s paquets…   ' "$n" "${total:-?}" ;;
+      "Setting up "*) line="${line#Setting up }"; printf '\r  configuration : %-50.50s' "${line%% *}" ;;
+      E:* | *"dpkg: error"*) printf '\n  %s\n' "$line" ;;
+    esac
+  done
+  printf '\r%-78s\r' ''
+}
+# APT_LIGHT=1 : sans les paquets seulement « recommandés » (GStreamer en tire beaucoup).
 apt_install() {
-  local missing=()
+  local missing=() light=()
   for p in "$@"; do dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p"); done
   if [ ${#missing[@]} -gt 0 ]; then
+    apt_update_once
     echo "  installation : ${missing[*]}"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}" >/dev/null
+    [ "${APT_LIGHT:-0}" -eq 1 ] && light=(--no-install-recommends)
+    # Aucune question ne doit attendre une réponse invisible : needrestart (Ubuntu 22.04+) est mis
+    # en pause, dpkg garde les fichiers de réglages en place, et rien n'est lu au clavier.
+    NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive LC_ALL=C \
+      apt-get install -y -q "${light[@]}" -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "${missing[@]}" </dev/null 2>&1 | apt_progress
   fi
 }
 if [ "$NO_APT" -eq 1 ]; then
   ok "installation des paquets sautée (--no-apt)"
 else
-  apt-get update -qq
   apt_install ca-certificates curl ffmpeg python3 cloud-guest-utils
   if [ -z "$PACKAGE" ]; then apt_install git openssh-client build-essential pkg-config; fi
   ok "ffmpeg, python3 et outils de base en place"
   # Cartes DeckLink (Blackmagic) : GStreamer les capture (module DeckLink dans « bad »,
   # H.264 dans « ugly », AAC dans libav) ; gst-device-monitor liste les cartes.
-  apt_install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav pciutils
+  APT_LIGHT=1 apt_install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-base-apps gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav pciutils
   ok "GStreamer en place (cartes DeckLink)"
   desktop_video
 fi
@@ -532,7 +558,8 @@ else
   fi
   ok "Rust $rust_v"
   echo "  construction de l'interface web…"
-  as_builder "cd '$SRC_DIR/web' && npm ci --no-audit --no-fund --loglevel=error && npm run build >/dev/null"
+  # Les dépendances de l'interface ne sont réinstallées que si leur liste a changé.
+  as_builder "cd '$SRC_DIR/web' && lock=\$(sha256sum package-lock.json | cut -c1-64) && if [ \"\$(cat node_modules/.strata-lock 2>/dev/null)\" != \"\$lock\" ]; then npm ci --no-audit --no-fund --loglevel=error && echo \"\$lock\" > node_modules/.strata-lock; fi && npm run build >/dev/null"
   ok "interface web construite"
   # Le numéro de version : celui de la dernière version publiée (étiquette vX.Y.Z), comme les paquets,
   # pour que Système › Mises à jour compare juste (Cargo.toml garde un numéro de départ).

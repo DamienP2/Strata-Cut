@@ -318,7 +318,8 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         match super::web::resolve(m.data_dir(), cfg).await {
             Ok(s) => Some(s),
             Err(reason) => {
-                tracing::info!("{}: {reason}", cfg.name);
+                // In the journal (Système › Santé): why the page gives no live.
+                tracing::warn!("{}: {reason}", cfg.name);
                 return Outcome::Exited { had_data: false, message: reason };
             }
         }
