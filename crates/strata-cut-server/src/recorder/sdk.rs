@@ -492,6 +492,7 @@ fn fake_signal(index: u32) -> Result<Option<u32>, String> {
         0 => Ok(Some(cc(b"Hi50"))),
         2 => Ok(Some(cc(b"hp50"))),
         4 => Ok(Some(cc(b"Hp25"))),
+        6 => Ok(Some(cc(b"Hp50"))),
         7 => Err("cannot enable the video input (in use by another program?)".into()),
         _ => Ok(None),
     }

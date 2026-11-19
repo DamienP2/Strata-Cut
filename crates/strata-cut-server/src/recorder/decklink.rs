@@ -629,8 +629,10 @@ fn writer(path: PathBuf, rx: std::sync::mpsc::Receiver<Vec<u8>>, stop: Arc<Atomi
 }
 
 /// Moves the card's frames and sound into the encoder's pipes until `stop`, the encoder stops or
-/// the signal's format changes. A frame the encoder cannot take in time is dropped with its
-/// sound (the picture and the sound stay together); a frame without sound gets silence.
+/// the signal's format changes. The sound always goes: the encoder needs it to start (it reads
+/// its two inputs in turn), and it keeps the time. A picture the encoder cannot take in time is
+/// owed: the next one goes in its place as many times, so that the pictures stay as long as the
+/// sound. A frame without sound gets silence.
 pub fn pump(r: Recording, video: PathBuf, audio: PathBuf, channels: u32, stop: Arc<AtomicBool>, on_signal: impl Fn(bool)) -> End {
     let broken = Arc::new(AtomicBool::new(false));
     let (vtx, vrx) = std::sync::mpsc::sync_channel::<Vec<u8>>(25);
@@ -642,11 +644,15 @@ pub fn pump(r: Recording, video: PathBuf, audio: PathBuf, channels: u32, stop: A
     // A black UYVY picture, for a frame the card gave without one.
     let black: Vec<u8> = [128u8, 16].iter().copied().cycle().take(size).collect();
     let per_second = 48000.0 * m.duration as f64 / m.timescale.max(1) as f64;
-    let (mut frames, mut written, mut dropped, mut idle) = (0u64, 0u64, 0u64, 0u32);
+    // Frames handled, sound samples written, pictures owed to the encoder and repeated lately.
+    let (mut frames, mut written, mut owed, mut repeated, mut idle) = (0u64, 0u64, 0u64, 0u64, 0u32);
     let mut signal = r.signal;
     let mut p = Packet::default();
     let mut last_report = Instant::now();
     let mut shim_dropped = 0;
+    // The encoder's first seconds (it looks at its inputs before it reads them in step): what it
+    // could not take then is no sign of a server short of processor.
+    let begun = Instant::now();
     loop {
         if stop.load(Ordering::Relaxed) {
             return End::Stopped;
@@ -684,27 +690,37 @@ pub fn pump(r: Recording, video: PathBuf, audio: PathBuf, channels: u32, stop: A
             let n = due.saturating_sub(written);
             (vec![0u8; n as usize * channels as usize * 4], n)
         };
+        frames += 1;
+        written += samples;
+        if channels > 0 && atx.send(sound).is_err() {
+            return End::Failed("the encoder stopped".into());
+        }
+        // The pictures owed go first, as copies of this one, as long as the encoder takes them.
+        let copy = (owed > 0).then(|| picture.clone());
         match vtx.try_send(picture) {
             Ok(()) => {
-                frames += 1;
-                written += samples;
-                if atx.send(sound).is_err() {
-                    return End::Failed("the encoder stopped".into());
+                if let Some(copy) = copy {
+                    while owed > 0 && vtx.try_send(copy.clone()).is_ok() {
+                        owed -= 1;
+                        if begun.elapsed() > Duration::from_secs(5) {
+                            repeated += 1;
+                        }
+                    }
                 }
             }
-            Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                // The encoder is behind: this frame and its sound go.
-                dropped += 1;
-            }
+            Err(std::sync::mpsc::TrySendError::Full(_)) => owed += 1,
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return End::Failed("the encoder stopped".into()),
         }
         if last_report.elapsed() > Duration::from_secs(60) {
             last_report = Instant::now();
             let lost = r.cap.dropped();
-            if dropped > 0 || lost > shim_dropped {
-                tracing::warn!("decklink {}: {} frame(s) dropped in the last minute (the server is short of processor)", r.mode.name, dropped + lost - shim_dropped);
+            if lost > shim_dropped {
+                tracing::warn!("decklink {}: {} frame(s) lost in the last minute: the capture could not keep up (the server is short of processor)", r.mode.name, lost - shim_dropped);
             }
-            dropped = 0;
+            if repeated > 0 || (owed > 0 && begun.elapsed() > Duration::from_secs(5)) {
+                tracing::warn!("decklink {}: the encoder could not keep up with {} picture(s) in the last minute (repeated in their place; the server is short of processor)", r.mode.name, repeated + owed);
+            }
+            repeated = 0;
             shim_dropped = lost;
         }
     }
