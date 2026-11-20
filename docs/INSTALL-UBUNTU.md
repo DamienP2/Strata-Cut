@@ -217,15 +217,16 @@ Une seule source par enregistreur, et un port par enregistreur en écoute.
 
 Une source NDI du réseau s'ajoute comme les autres : **Nouvelle source › NDI**, puis choisissez-la dans la liste des sources trouvées (ou écrivez son nom, `MACHINE (Canal 1)`). Ses images et son son sont reçus par la bibliothèque NDI, puis encodés en H.264 / AAC au débit choisi (comme pour une carte) : comptez environ deux à trois cœurs par source HD.
 
-La bibliothèque NDI n'est pas fournie avec Strata Cut (sa licence ne le permet pas) : elle s'installe une fois.
+La bibliothèque NDI n'est pas fournie avec Strata Cut (sa licence ne le permet pas) : elle s'installe une fois, depuis le **NDI SDK pour Linux** ([ndi.video](https://ndi.video/for-developers/ndi-sdk/)), un fichier `Install_NDI_SDK_v6_Linux.sh`.
 
-1. Téléchargez le **NDI SDK pour Linux** sur [ndi.video](https://ndi.video/for-developers/ndi-sdk/) et acceptez sa licence en lançant son installateur (`Install_NDI_SDK_v6_Linux.sh`).
-2. Copiez la bibliothèque de votre architecture sur le serveur, puis relancez le script d'installation (il la trouve dans le dossier courant, `/root` ou `/tmp`, l'installe dans `/usr/local/lib` et installe Avahi pour la découverte) :
+1. Copiez ce fichier sur le serveur, par exemple dans `/tmp` (depuis votre poste : `scp Install_NDI_SDK_v6_Linux.sh serveur:/tmp/`).
+2. Sur le serveur, dans un terminal (SSH) :
    ```bash
-   cp "NDI SDK for Linux/lib/x86_64-linux-gnu/libndi.so.6" /tmp/
-   sudo ~/Strata-Cut/scripts/install-ubuntu.sh --no-pull
+   sudo ~/Strata-Cut/scripts/install-ubuntu.sh --no-pull --ndi-sdk /tmp/Install_NDI_SDK_v6_Linux.sh
    ```
-   À la main : `sudo install -m 644 libndi.so.6 /usr/local/lib/ && sudo ldconfig && sudo apt install avahi-daemon && sudo systemctl restart strata-cut`.
+   L'installateur du SDK affiche sa licence (Espace pour avancer) et vous demande de l'accepter ; le script installe ensuite la bibliothèque dans `/usr/local/lib`, et Avahi pour la découverte des sources. Strata Cut la trouve sans redémarrer : **Nouvelle source › NDI** liste alors les sources du réseau.
+
+Si vous avez déjà lancé l'installateur du SDK vous-même (il crée le dossier `NDI SDK for Linux` là où il a été lancé), le script le trouve seul dans le dossier courant, `/tmp`, `/root` ou votre dossier personnel : `--ndi-sdk` est alors inutile. À la main : `sudo install -m 644 "NDI SDK for Linux/lib/x86_64-linux-gnu/"libndi.so.6.* /usr/local/lib/libndi.so.6 && sudo ldconfig && sudo apt install avahi-daemon`.
 
 Les sources s'annoncent sur le réseau local (mDNS, port UDP 5353) ; le flux passe en TCP à partir du port 5960. Pour une source d'un autre sous-réseau, écrivez son **adresse IP** dans le champ « Adresse » de la source ; un *NDI Discovery Server* se déclare dans `~/.ndi/ndi-config.v1.json` du compte `strata-cut` (`/var/lib/strata-cut/.ndi/`).
 

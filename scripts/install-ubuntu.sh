@@ -28,6 +28,9 @@
 #                         « wait » : explique comment copier l'archive par SSH et attend qu'elle
 #                         soit là (fait de lui-même si une carte Blackmagic est vue sans pilote)
 #   --no-desktop-video    ne propose pas le pilote Blackmagic
+#   --ndi-sdk F           installe la bibliothèque NDI (sources NDI) depuis l'installateur du SDK
+#                         NDI (Install_NDI_SDK_v6_Linux.sh : sa licence s'accepte dans le terminal),
+#                         son dossier « NDI SDK for Linux » déjà déballé, ou un libndi.so
 #   --uninstall           retire le service et le programme (les données restent)
 #   --purge               avec --uninstall : supprime aussi les données et le compte de service
 #   -h, --help            cette aide
@@ -60,6 +63,7 @@ NO_SERVICE=0
 NO_GROW=0
 DESKTOP_VIDEO=""
 NO_DESKTOP_VIDEO=0
+NDI_SDK=""
 DV_CACHE="/var/cache/strata-cut"
 UNINSTALL=0
 PURGE=0
@@ -112,6 +116,7 @@ while [ $# -gt 0 ]; do
     --no-grow) NO_GROW=1; shift ;;
     --desktop-video) DESKTOP_VIDEO="${2:?}"; shift 2 ;;
     --no-desktop-video) NO_DESKTOP_VIDEO=1; shift ;;
+    --ndi-sdk) NDI_SDK="${2:?}"; shift 2 ;;
     --uninstall) UNINSTALL=1; shift ;;
     --purge) PURGE=1; shift ;;
     -h | --help) usage ;;
@@ -127,6 +132,10 @@ done
 if [ -n "$DESKTOP_VIDEO" ] && [ "$DESKTOP_VIDEO" != wait ]; then
   [ -e "$DESKTOP_VIDEO" ] || die "pilote Blackmagic introuvable : $DESKTOP_VIDEO"
   DESKTOP_VIDEO="$(realpath "$DESKTOP_VIDEO")"
+fi
+if [ -n "$NDI_SDK" ]; then
+  [ -e "$NDI_SDK" ] || die "SDK NDI introuvable : $NDI_SDK"
+  NDI_SDK="$(realpath "$NDI_SDK")"
 fi
 [ "$(id -u)" -eq 0 ] || die "lancez ce script avec sudo (… | sudo bash)"
 
@@ -642,31 +651,89 @@ if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --no-create-home --home-dir "$DATA_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
   ok "compte de service « $SERVICE_USER » créé"
 fi
-# Sources NDI : la bibliothèque NDI (libndi.so) n'est pas fournie avec ce programme : elle vient
-# du SDK NDI pour Linux (ndi.video, licence à accepter). Trouvée à côté (dossier courant, compte
-# qui installe, /root, /tmp), elle est copiée dans /usr/local/lib ; la découverte des sources sur
-# le réseau passe par Avahi (mDNS).
+# Sources NDI : la bibliothèque NDI (libndi.so) vient du SDK NDI pour Linux (ndi.video). Son
+# installateur (Install_NDI_SDK_v6_Linux.sh) fait lire et accepter sa licence, puis crée le
+# dossier « NDI SDK for Linux ». Ce script prend la bibliothèque de ce dossier (ou un libndi.so
+# posé seul à côté) et l'installe dans /usr/local/lib. Avec --ndi-sdk, il lance lui-même
+# l'installateur du SDK : vous lisez et acceptez la licence dans le terminal.
+case "$(uname -m)" in
+  x86_64) ndi_arch=x86_64-linux-gnu ;;
+  aarch64 | arm64) ndi_arch=aarch64 ;;
+  *) ndi_arch="$(uname -m)" ;;
+esac
+# La bibliothèque d'un dossier « NDI SDK for Linux », pour ce processeur (le fichier, pas un lien).
+ndi_from_sdk() {
+  local d f best=""
+  for d in "$1"/lib/"$ndi_arch"*; do
+    for f in "$d"/libndi.so*; do
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
+      if [ -z "$best" ] || [ "$(printf '%s\n%s\n' "$best" "$f" | sort -V | tail -1)" = "$f" ]; then best="$f"; fi
+    done
+  done
+  printf '%s' "$best"
+}
+# Trouvée à côté : un SDK déjà déballé, ou un libndi.so posé seul.
+ndi_search() {
+  local d s f
+  for d in "$PWD" "$BUILD_HOME" /root /tmp /home/*; do
+    for s in "$d/NDI SDK for Linux" "$d"/*/"NDI SDK for Linux"; do
+      [ -d "$s" ] || continue
+      f="$(ndi_from_sdk "$s")"
+      if [ -n "$f" ]; then printf '%s' "$f"; return; fi
+    done
+    for f in "$d"/libndi.so*; do
+      if [ -f "$f" ]; then printf '%s' "$f"; return; fi
+    done
+  done
+}
+ndi_new=""
+if [ -n "$NDI_SDK" ]; then
+  if [ -d "$NDI_SDK" ]; then
+    ndi_new="$(ndi_from_sdk "$NDI_SDK")"
+  elif [[ "$NDI_SDK" == *.sh ]]; then
+    (exec </dev/tty) 2>/dev/null || die "le SDK NDI demande d'accepter sa licence : lancez ce script dans un terminal (SSH)"
+    echo
+    echo "  SDK NDI : lisez sa licence (Espace pour avancer), puis acceptez-la pour l'installer."
+    rm -rf /tmp/strata-cut-ndi
+    mkdir -p /tmp/strata-cut-ndi
+    (cd /tmp/strata-cut-ndi && bash "$NDI_SDK" </dev/tty >/dev/tty 2>&1) || warn "l'installateur du SDK NDI s'est arrêté"
+    ndi_new="$(ndi_from_sdk "/tmp/strata-cut-ndi/NDI SDK for Linux")"
+    [ -n "$ndi_new" ] || warn "SDK NDI : aucune bibliothèque pour ce processeur ($ndi_arch) — licence refusée ?"
+  else
+    ndi_new="$NDI_SDK"
+  fi
+fi
+[ -n "$ndi_new" ] || ndi_new="$(ndi_search)"
+if [ -n "$ndi_new" ]; then
+  # Sous son nom à numéro de version (libndi.so.6), et libndi.so qui y renvoie.
+  major="$(basename "$ndi_new" | sed -n 's/^libndi\.so\.\([0-9]*\).*/\1/p')"
+  target="/usr/local/lib/libndi.so${major:+.$major}"
+  if ! cmp -s "$ndi_new" "$target"; then
+    install -m 0644 "$ndi_new" "$target"
+    ok "NDI : bibliothèque installée ($(basename "$ndi_new") → $target)"
+  fi
+  [ "$target" = /usr/local/lib/libndi.so ] || ln -sf "$(basename "$target")" /usr/local/lib/libndi.so
+  ldconfig
+fi
 ndi_lib=""
 for f in /usr/local/lib/libndi.so* /usr/lib/libndi.so* /usr/lib/x86_64-linux-gnu/libndi.so* /usr/lib/aarch64-linux-gnu/libndi.so*; do
   [ -e "$f" ] && ndi_lib="$f"
 done
-if [ -z "$ndi_lib" ]; then
-  for d in "$PWD" "$BUILD_HOME" /root /tmp; do
-    for f in "$d"/libndi.so*; do
-      [ -f "$f" ] || continue
-      install -m 0644 "$f" /usr/local/lib/libndi.so.6
-      ldconfig
-      ndi_lib=/usr/local/lib/libndi.so.6
-      break 2
-    done
-  done
-fi
 if [ -n "$ndi_lib" ]; then
+  # La découverte des sources passe par Avahi (mDNS).
   apt_install avahi-daemon libavahi-client3
   has_systemd && systemctl enable --now avahi-daemon >/dev/null 2>&1 || true
   ok "NDI : bibliothèque présente ($ndi_lib), découverte des sources par Avahi"
 else
-  echo "  NDI : bibliothèque absente (facultatif : voir docs/INSTALL-UBUNTU.md, « NDI »)"
+  sdk=""
+  for d in "$PWD" "$BUILD_HOME" /root /tmp /home/*; do
+    for f in "$d"/Install_NDI_SDK_*Linux*.sh; do [ -f "$f" ] && sdk="$f"; done
+  done
+  if [ -n "$sdk" ]; then
+    echo "  NDI : installateur du SDK trouvé ($sdk) : relancez ce script avec  --ndi-sdk \"$sdk\"  pour l'installer (sa licence est à accepter)"
+  else
+    echo "  NDI : bibliothèque absente (facultatif : voir docs/INSTALL-UBUNTU.md, « NDI »)"
+  fi
 fi
 # Cartes DeckLink : le pilote Desktop Video de Blackmagic s'installe à part (site de Blackmagic).
 decklink_lib=""
