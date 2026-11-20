@@ -45,4 +45,5 @@ pub fn router() -> Router<Shared> {
         .merge(crate::storage::routes())
         .merge(crate::recorder::routes())
         .merge(crate::clips::routes())
+        .merge(crate::streams::routes())
 }

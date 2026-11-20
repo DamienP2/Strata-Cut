@@ -2,7 +2,7 @@
 //! that never stops (the oldest minutes are removed as new ones arrive).
 mod media;
 pub mod index;
-mod run;
+pub(crate) mod run;
 pub use run::AUDIO_SYNC;
 pub mod web;
 pub mod epg;
@@ -136,6 +136,10 @@ pub struct RecorderConfig {
     pub audio_channels: u32,
     #[serde(default = "auto")]
     pub audio_input: String,
+    /// Not recorded during its programmed slots either (Programmation: "Non enregistrée"); with
+    /// `enabled` (continuous) false. Still received while a stream sends it somewhere.
+    #[serde(default)]
+    pub slots_off: bool,
     /// HLS: the stream read when the playlist offers several (its playlist's address as written
     /// in it, see `hls`; empty: the best picture).
     #[serde(default)]
@@ -350,6 +354,13 @@ pub struct Rec {
     pub preview_lag: std::sync::atomic::AtomicU32,
     preview_dropped_at: std::sync::atomic::AtomicI64,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Local UDP ports the stream as received is copied to (the streams to destinations: see
+    /// `crate::streams`), each with its key.
+    pub taps: Mutex<Vec<(u64, u16)>>,
+    /// Streams sending this source somewhere: it is received (and recorded) while there are.
+    pub streams: std::sync::atomic::AtomicU32,
+    /// Wakes a recorder waiting for its next slot (a stream starts).
+    pub wake: tokio::sync::Notify,
 }
 
 impl Rec {
@@ -863,6 +874,9 @@ impl Manager {
             last_end: Mutex::new(None),
             preview_dropped_at: 0.into(),
             task: Mutex::new(None),
+            taps: Mutex::new(Vec::new()),
+            streams: 0.into(),
+            wake: tokio::sync::Notify::new(),
         });
         rec.refresh_status();
         let handle = tokio::spawn(run::supervise(self.clone(), rec.clone()));
@@ -912,7 +926,16 @@ impl Manager {
     }
 
     /// A stopped recorder records during its slots, from a little before (the connection takes time).
+    /// Received now: a stream sends it somewhere, or one of its slots (unless it is not recorded).
     pub fn wants(&self, id: &str, now: i64) -> bool {
+        if let Some(r) = self.get(id) {
+            if r.streams.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+                return true;
+            }
+            if r.config().slots_off {
+                return false;
+            }
+        }
         let tz = self.tz();
         self.schedules.active(id, &tz, now).is_some() || self.schedules.active(id, &tz, now + PREROLL_MS).is_some()
     }

@@ -48,7 +48,7 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
             let now = now_ms();
             let tz = m.tz();
             if !m.wants(&rec.id, now) {
-                let next = m.schedules.next(&rec.id, &tz, now);
+                let next = if cfg.slots_off { None } else { m.schedules.next(&rec.id, &tz, now) };
                 rec.set_state(if next.is_some() { State::Waiting } else { State::Off }, "");
                 rec.refresh_status();
                 let wait = next.map(|(_, a, _)| (a - super::PREROLL_MS - now).clamp(0, 30_000)).unwrap_or(30_000);
@@ -57,6 +57,7 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                     r = cfg_rx.changed() => { if r.is_ok() { rec.no_audio.store(false, Ordering::Relaxed); } }
                     _ = stop_rx.changed() => {}
                     _ = m.schedules.changed.notified() => {}
+                    _ = rec.wake.notified() => {}
                 }
                 continue;
             }
@@ -138,14 +139,15 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
     rec.refresh_status();
 }
 
-/// Two settings that record the same way (only the name or the loop length differ).
+/// Two settings that record the same way (only the name, the loop length or when it records
+/// differ: a recording under way goes on, and stops at the end of its slot if it must).
 fn same_source(a: &RecorderConfig, b: &RecorderConfig) -> bool {
-    let strip = |c: &RecorderConfig| RecorderConfig { name: String::new(), loop_hours: 0, bitrate: 0.0, ..c.clone() };
+    let strip = |c: &RecorderConfig| RecorderConfig { name: String::new(), loop_hours: 0, bitrate: 0.0, enabled: false, slots_off: false, ..c.clone() };
     strip(a) == strip(b)
 }
 
 /// The most telling line of FFmpeg's last words (not the generic "Error opening input files").
-pub(super) fn best_line(lines: &[String]) -> String {
+pub(crate) fn best_line(lines: &[String]) -> String {
     let generic = |raw: &str| {
         let l = clean_message(raw);
         // The input's description and the files opened are not errors.
@@ -348,6 +350,57 @@ pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool
 }
 
 /// A free UDP port on the loopback, for the receiver's copy to the preview.
+/// Copies the stream as received (MPEG-TS on the loopback, from the receiver) to the preview,
+/// and to the streams that send this source somewhere (`Rec::taps`): a stream starts and stops
+/// without touching the recording. Stops when dropped.
+struct Relay(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for Relay {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+impl Relay {
+    fn start(sock: std::net::UdpSocket, preview: u16, rec: Arc<Rec>) -> Relay {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = stop.clone();
+        set_receive_buffer(&sock, 8 << 20);
+        let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
+        let local = std::net::Ipv4Addr::LOCALHOST;
+        let spawned = std::thread::Builder::new().name("relay".into()).spawn(move || {
+            let mut buf = vec![0u8; 65536];
+            let mut taps: Vec<u16> = Vec::new();
+            let mut packets = 0u32;
+            while !done.load(Ordering::Relaxed) {
+                let Ok(n) = sock.recv(&mut buf) else { continue };
+                let _ = sock.send_to(&buf[..n], (local, preview));
+                // The taps, looked at again every 64 packets (a few hundredths of a second).
+                if packets.is_multiple_of(64) {
+                    taps = rec.taps.lock().unwrap().iter().map(|t| t.1).collect();
+                }
+                packets = packets.wrapping_add(1);
+                for &port in &taps {
+                    let _ = sock.send_to(&buf[..n], (local, port));
+                }
+            }
+        });
+        if let Err(e) = spawned {
+            tracing::error!("cannot start the relay of a recorder: {e}");
+        }
+        Relay(stop)
+    }
+}
+
+/// A larger buffer for a socket receiving a stream (the system may give less).
+fn set_receive_buffer(sock: &std::net::UdpSocket, bytes: i32) {
+    use std::os::fd::AsRawFd;
+    // SAFETY: setsockopt on an open socket, with a pointer to an int and its size.
+    unsafe {
+        libc::setsockopt(sock.as_raw_fd(), libc::SOL_SOCKET, libc::SO_RCVBUF, (&bytes as *const i32).cast(), std::mem::size_of::<i32>() as libc::socklen_t);
+    }
+}
+
 fn free_port() -> Option<u16> {
     std::net::UdpSocket::bind("127.0.0.1:0").ok()?.local_addr().ok().map(|a| a.port())
 }
@@ -459,13 +512,16 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     let ts = matches!(cfg.protocol, Protocol::Udp | Protocol::Rtp | Protocol::Srt);
     let found = rec.epg_found.lock().unwrap().clone();
     let epg_map = found.stream.clone().filter(|_| ts && !rec.epg_failed.load(Ordering::Relaxed));
-    let Some(port) = free_port() else {
+    // The receiver sends its copy of the stream to the relay, which gives it to the preview and
+    // to the streams.
+    let (Some(port), Ok(relay_sock)) = (free_port(), std::net::UdpSocket::bind("127.0.0.1:0")) else {
         finish_run(rec, &run_id);
         return Outcome::Exited { had_data: false, message: "no free local port for the preview".into() };
     };
+    let relay_port = relay_sock.local_addr().map(|a| a.port()).unwrap_or(0);
     // HLS: the variant of the quality chosen, when the playlist offers several.
     let program = if cfg.protocol == Protocol::Hls { super::hls::choose(&cfg.url, &cfg.variant).await.1 } else { None };
-    let args = receiver_args(input, &run_dir, ts, epg_map.as_deref(), port, program);
+    let args = receiver_args(input, &run_dir, ts, epg_map.as_deref(), relay_port, program);
     let preview_args = preview_args(port, &run_dir, &base.join("thumb.jpg"), audio);
     tracing::debug!("{}: ffmpeg {}", cfg.name, args.join(" "));
     tracing::debug!("{}: preview: ffmpeg {}", cfg.name, preview_args.join(" "));
@@ -481,6 +537,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             return Outcome::Exited { had_data: false, message: format!("cannot start {}: {e}", m.ffmpeg) };
         }
     };
+    let _relay = Relay::start(relay_sock, port, rec.clone());
     let plog: Arc<Mutex<VecDeque<String>>> = Default::default();
     if let Some(err) = preview.stderr.take() {
         let (plog, rec2, name) = (plog.clone(), rec.clone(), cfg.name.clone());
@@ -741,8 +798,9 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     break Outcome::Restart;
                 }
                 // Programmed: the slot is over (or was removed).
-                if !cfg.enabled && !m.wants(&rec.id, now_ms()) {
-                    tracing::info!("{}: end of the programmed slot", cfg.name);
+                // (Its settings as they are now: the recording mode may have changed meanwhile.)
+                if !cfg_rx.borrow().enabled && !m.wants(&rec.id, now_ms()) {
+                    tracing::info!("{}: end of the programmed slot (or of its last stream)", cfg.name);
                     stop_child(&mut child).await;
                     tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
                     break Outcome::Restart;
@@ -913,7 +971,7 @@ impl CardCapture {
 }
 
 /// Asks a child to end (SIGINT: FFmpeg closes its files), killed after `grace`.
-async fn stop_within(child: &mut tokio::process::Child, grace: Duration) {
+pub(crate) async fn stop_within(child: &mut tokio::process::Child, grace: Duration) {
     if let Some(pid) = child.id() {
         let t = std::time::Instant::now();
         unsafe {
@@ -1213,7 +1271,7 @@ mod tests {
     use super::*;
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
-        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into(), variant: String::new() }
+        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into(), variant: String::new(), slots_off: false }
     }
 
     #[test]

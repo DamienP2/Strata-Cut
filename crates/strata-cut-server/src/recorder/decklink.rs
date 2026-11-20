@@ -970,6 +970,7 @@ mod tests {
             audio_channels: 8,
             audio_input: "embedded".into(),
             variant: String::new(),
+            slots_off: false,
         }
     }
 

@@ -11,6 +11,7 @@ mod cli;
 mod clips;
 mod config;
 mod groups;
+mod streams;
 mod guard;
 mod health;
 mod logs;
@@ -262,6 +263,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     // The capture cards are searched once now (then only when asked, in Système › Matériel).
     tokio::spawn(recorder::decklink::search_at_start(data_dir.clone()));
     let clips = clips::Clips::start(&data_dir, &first, events.clone(), recorders.clone());
+    let streams = streams::Streams::start(&data_dir, recorders.clone(), events.clone());
     loop {
         let config = config::ServerConfig::load(&data_dir);
         recorders.set_config(&config);
@@ -284,6 +286,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
             closing: watch::channel(false).0,
             recorders: recorders.clone(),
             clips: clips.clone(),
+            streams: streams.clone(),
         });
         let mut app = api::router();
         app = match &args.web_dir {
@@ -308,7 +311,8 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
         }
         tracing::info!("settings changed: restarting the web server");
     }
-    tracing::info!("stopping: web server closed, the recorders stop");
+    tracing::info!("stopping: web server closed, the streams and the recorders stop");
+    streams.shutdown().await;
     recorders.shutdown().await;
     tracing::info!("stopping: recorders stopped");
     health::stopped();

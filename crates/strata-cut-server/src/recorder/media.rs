@@ -34,6 +34,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/probe", post(probe))
         .route("/api/recorders/{id}/enabled", post(set_enabled))
+        .route("/api/recorders/{id}/recording", post(set_recording))
         .route("/api/recorders/{id}/clear", post(clear))
         .route("/api/recorders/{id}/logo", get(logo_get).put(logo_put).delete(logo_delete).layer(axum::extract::DefaultBodyLimit::max(super::logo::MAX + 4096)))
         .route("/api/recorders/{id}/logo/url", post(logo_url))
@@ -219,6 +220,26 @@ async fn set_enabled(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlP
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut c = rec.config();
     c.enabled = b.enabled;
+    s.recorders.update(&id, c).map(Json).map_err(bad)
+}
+
+#[derive(Deserialize)]
+struct Recording {
+    /// "continuous", "slots" or "off".
+    mode: String,
+}
+
+/// Programmation: how a source is recorded (all the time, during its slots, not at all).
+async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Recording>) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    let mut c = rec.config();
+    (c.enabled, c.slots_off) = match b.mode.as_str() {
+        "continuous" => (true, false),
+        "slots" => (false, false),
+        "off" => (false, true),
+        _ => return Err(bad("the recording is continuous, by slots or off")),
+    };
     s.recorders.update(&id, c).map(Json).map_err(bad)
 }
 

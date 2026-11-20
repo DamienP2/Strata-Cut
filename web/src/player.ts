@@ -85,12 +85,13 @@ class Buffer {
 }
 
 /** A run the browser can play: its preview has a picture already, and a few seconds of it. */
-/** Live: how far behind the newest fragment it plays (s): enough not to wait for the next one.
- * It starts at LIVE_DELAY, grows at each stall (a server or a network slower than that), and
- * comes back down slowly once all goes well. */
-const LIVE_DELAY = 2.0;
-const LIVE_DELAY_MIN = 1.5;
-const LIVE_DELAY_MAX = 5.0;
+/** Live: how far behind the newest fragment it plays (s). Smooth before near: a few seconds
+ * behind, within what is recorded (the playhead stays on the stills), never waiting for the
+ * next fragment. It grows at each stall (a server or a network slower than that), and comes
+ * back down slowly once all goes well. */
+const LIVE_DELAY = 7.0;
+const LIVE_DELAY_MIN = 6.0;
+const LIVE_DELAY_MAX = 15.0;
 
 const playable = (r: RunInfo) => !!r.video?.codec && r.video.segs.length > 0 && r.to - r.from > 4000;
 /** The newest run that can be played (else the newest at all). */
@@ -182,7 +183,7 @@ export class LoopPlayer {
     void this.fill();
     // Live: it waits for a fragment not there yet: more delay from now on, and asked at once.
     if (this.live && !this.video.paused && this.now() - this.seekedAt > 4000) {
-      this.delay = Math.min(LIVE_DELAY_MAX, this.delay + 0.75);
+      this.delay = Math.min(LIVE_DELAY_MAX, this.delay + 1.5);
       this.stalledAt = this.now();
       void this.refresh();
     }
@@ -392,7 +393,7 @@ export class LoopPlayer {
       const delay = this.delay;
       const behind = edge - (this.video.currentTime + this.base);
       const stalled = this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
-      if (behind > delay + 6 || (stalled && behind > delay + 1)) {
+      if (behind > delay + 8 || (stalled && behind > delay + 1)) {
         this.video.playbackRate = 1;
         this.seekedAt = this.now();
         this.video.currentTime = edge - delay - this.base;
