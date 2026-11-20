@@ -15,13 +15,13 @@ import { navigate } from '../router';
 import { LoopPlayer } from '../player';
 import { fpsOf, scanFormat, timecode, formatName } from '../tc';
 import { Empty } from '../ui/Empty';
-import { RecLogo } from '../ui/RecLogo';
 import { NumberField } from '../ui/fields';
 import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
 import { clockOf, mbps, useDestinations, useStreams, volume, type Destination, type StreamInfo } from '../streams';
 import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
 import { explainGuard } from '../ui/guard';
+import { SourceGroups } from '../ui/SourceGroups';
 
 const COLORS = ['var(--accent)', 'var(--pvw)', 'var(--warn)', '#c084fc', '#38bdf8'];
 
@@ -40,35 +40,26 @@ export function Streamer({ source }: { source?: string }) {
   const mine = streams.filter((s) => s.source === id);
   return (
     <section className="sc-edit st-page">
-      <aside className="lib-nav">
-        <div className="lib-nav-section">
-          <span className="grow">{t('Sources')}</span>
-        </div>
-        {recorders.map((r) => (
-          <SourceItem key={r.id} r={r} on={r.id === id} air={streams.filter((s) => s.source === r.id).length} />
-        ))}
-      </aside>
+      <SourceGroups
+        kind="stream"
+        current={id}
+        base="/streamer"
+        badge={(r) => {
+          const n = streams.filter((s) => s.source === r.id).length;
+          return n > 0 ? (
+            <span className="sc-grp-air" data-tip={tn(n, 'Sent to {n} destination', 'Sent to {n} destinations')}>
+              <Radio size={12} />
+              {n}
+            </span>
+          ) : null;
+        }}
+      />
       {rec ? <Center key={rec.id} rec={rec} streams={mine} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
       <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} streams={streams} />}</aside>
       <div className="st-bw">
         <Bandwidth streams={mine} dests={dests ?? []} />
       </div>
     </section>
-  );
-}
-
-function SourceItem({ r, on, air }: { r: Recorder; on: boolean; air: number }) {
-  const st = useApp((s) => s.status[r.id]?.state);
-  return (
-    <div className={`lib-nav-item sc-src ${on ? 'on' : ''}`} onClick={() => void navigate(`/streamer/${r.id}`)}>
-      <span className={`nav-dot ${st === 'recording' ? 'ok' : st === 'off' || st === 'waiting' ? '' : st === 'error' ? 'bad' : 'warn'}`} />
-      <RecLogo rec={r} size="sm" />
-      <span className="sc-src-t">
-        <span className="sc-src-name">{r.name}</span>
-        <span className="sc-src-prog">{st === 'recording' ? t('Received') : st === 'off' || st === 'waiting' ? t('Not received now') : st === 'error' ? t('Error') : t('No signal')}</span>
-      </span>
-      {air > 0 && <span className="st-air">ON AIR</span>}
-    </div>
   );
 }
 

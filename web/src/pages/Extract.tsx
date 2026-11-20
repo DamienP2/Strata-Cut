@@ -4,7 +4,7 @@ import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
 import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, History, Pause, Play, PlayCircle, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
-import { RecLogo } from '../ui/RecLogo';
+import { SourceGroups } from '../ui/SourceGroups';
 import { t, locale } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer, type RunInfo } from '../player';
@@ -107,27 +107,7 @@ export function Extract({ recorder }: { recorder?: string }) {
 }
 
 function Sources({ current }: { current?: string }) {
-  const { recorders, status } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status })));
-  return (
-    <aside className="lib-nav">
-      <div className="lib-nav-section">
-        <span className="grow">{t('Recorders')}</span>
-      </div>
-      {recorders.map((r) => {
-        const st = status[r.id]?.state;
-        return (
-          <div key={r.id} className={`lib-nav-item sc-src ${r.id === current ? 'on' : ''}`} onClick={() => void navigate(`/extract/${r.id}`)}>
-            <span className={`nav-dot ${st === 'recording' ? 'ok' : st === 'off' || st === 'waiting' ? '' : st === 'error' ? 'bad' : 'warn'}`} />
-            <RecLogo rec={r} size="sm" />
-            <span className="sc-src-t">
-              <span className="sc-src-name">{r.name}</span>
-              <span className="sc-src-prog">{status[r.id]?.onAir?.name ?? (st === 'recording' ? t('Recording') : st === 'off' ? t('Stopped') : st === 'waiting' ? t('Programmed') : st === 'error' ? t('Error') : t('No signal'))}</span>
-            </span>
-          </div>
-        );
-      })}
-    </aside>
-  );
+  return <SourceGroups kind="extract" current={current} base="/extract" />;
 }
 
 function Editor({ rec }: { rec: Recorder }) {

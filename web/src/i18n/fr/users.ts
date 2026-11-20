@@ -46,7 +46,7 @@ export const users: Record<string, string> = {
   'Share their clips': 'Partager ses extraits',
   'Delete their clips': 'Supprimer ses extraits',
   'See what is recorded, and when': 'Voir ce qui est enregistré, et quand',
-  'Start and stop recordings, program slots': 'Lancer et arrêter les enregistrements, programmer les créneaux',
+  'Start and stop recordings, program slots': 'Lancer et arrêter les enregistrements, programmer les enregistrements',
   'See the streams': 'Voir les diffusions',
   'Start, stop and test streams': 'Lancer, arrêter et tester les diffusions',
   you: 'vous',
