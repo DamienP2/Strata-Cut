@@ -208,11 +208,32 @@ pub fn srt_reason(log: &str) -> String {
     String::new()
 }
 
+/// What FFmpeg's RTP reading takes, after the address: the kernel's buffer (FFmpeg has no
+/// buffer of its own for RTP: 32 MB, about 12 s at 10 Mb/s of FFmpeg held up), and no report
+/// sent back to the group (`ttl=0`: the server only listens).
+const RTP_OPTIONS: &str = "timeout=5000000&buffer_size=33554432&ttl=0";
+
 /// The FFmpeg input for a recorder.
 pub fn input_args(c: &RecorderConfig) -> Vec<String> {
+    input_args_as(c, false)
+}
+
+/// `rtp`: a source given as UDP sends RTP (see `udp_in::sniff`): read as RTP, FFmpeg puts the
+/// datagrams back in order (within 100 ms). (It does not drop one sent twice, read as RTP or as
+/// UDP: measured, 18 damaged packets for 18 doubles; the witness counts them.)
+pub fn input_args_as(c: &RecorderConfig, rtp: bool) -> Vec<String> {
     let join = |url: &str, extra: &str| if url.contains('?') { format!("{url}&{extra}") } else { format!("{url}?{extra}") };
     let mut a: Vec<String> = Vec::new();
     let url = match c.protocol {
+        Protocol::Udp if rtp => {
+            // The address alone: the options of a UDP reading mean nothing to the RTP one.
+            let address = c.url.split('?').next().unwrap_or(&c.url).replacen("udp://", "rtp://", 1);
+            let card = super::udp_in::Target::parse(&c.url, &c.iface).map(|t| t.iface).filter(|i| !i.is_unspecified());
+            match card {
+                Some(i) => format!("{address}?localaddr={i}&{RTP_OPTIONS}"),
+                None => format!("{address}?{RTP_OPTIONS}"),
+            }
+        }
         Protocol::Udp => {
             // The receiving thread's buffer (in 188-byte packets): ~47 MB, about 37 s at 10 Mb/s of
             // FFmpeg held up before a packet is lost; the kernel's buffer behind it (16 MB).
@@ -223,7 +244,7 @@ pub fn input_args(c: &RecorderConfig) -> Vec<String> {
             join(&c.url, &extra)
         }
         Protocol::Rtp => {
-            let mut extra = "timeout=5000000&buffer_size=16777216".to_string();
+            let mut extra = RTP_OPTIONS.to_string();
             if !c.iface.is_empty() {
                 extra = format!("localaddr={}&{extra}", c.iface);
             }
@@ -511,7 +532,23 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             }
             vec!["-f".into(), "mpegts".into(), "-i".into(), ts.to_string_lossy().into_owned()]
         }
-        None => input_args(cfg),
+        None => {
+            // A source given as UDP may send RTP (most IPTV head-ends do): its first datagram says.
+            let rtp = cfg.protocol == Protocol::Udp && {
+                let target = super::udp_in::Target::parse(&cfg.url, &cfg.iface);
+                let kind = match target {
+                    Some(t) => tokio::task::spawn_blocking(move || super::udp_in::sniff(&t, Duration::from_millis(1500))).await.ok().flatten(),
+                    None => None,
+                };
+                kind == Some(super::udp_in::Kind::Rtp)
+            };
+            if rtp && !rec.rtp.swap(true, Ordering::Relaxed) {
+                tracing::info!("{}: this UDP source sends RTP: read as RTP (datagrams that come out of order are put back in order)", cfg.name);
+            } else if !rtp {
+                rec.rtp.store(cfg.protocol == Protocol::Rtp, Ordering::Relaxed);
+            }
+            input_args_as(cfg, rtp)
+        }
     };
     // MPEG-TS sources may carry a programme guide: FFmpeg describes the input to find it.
     let ts = matches!(cfg.protocol, Protocol::Udp | Protocol::Rtp | Protocol::Srt);
@@ -639,8 +676,8 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     };
     // A multicast source: the server watches the same group beside FFmpeg (the stream as it
     // arrives: missing packets, sent twice, marked in error), until the run ends.
-    let _witness = if cfg.protocol == Protocol::Udp {
-        super::udp_in::Target::parse(&cfg.url, &cfg.iface).filter(|t| t.multicast()).and_then(|t| super::udp_in::watch(&t, rec.net.clone()).map_err(|e| tracing::debug!("{}: no witness: {e}", cfg.name)).ok())
+    let _witness = if matches!(cfg.protocol, Protocol::Udp | Protocol::Rtp) {
+        super::udp_in::Target::parse(&cfg.url.replacen("rtp://", "udp://", 1), &cfg.iface).filter(|t| t.multicast()).and_then(|t| super::udp_in::watch(&t, rec.net.clone()).map_err(|e| tracing::debug!("{}: no witness: {e}", cfg.name)).ok())
     } else {
         None
     };
@@ -657,9 +694,20 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             // Joining a stream in its course, FFmpeg complains of the pictures begun before it
             // (references missing up to the first key frame): nothing was damaged.
             let joined = std::time::Instant::now();
+            // Which of the input's streams are pictures ("Stream #0:1[0x101]: Video: …").
+            let mut pictures: Vec<u32> = Vec::new();
             while let Ok(Some(l)) = lines.next_line().await {
+                if let Some((n, video)) = stream_kind(&l) {
+                    if video && !pictures.contains(&n) {
+                        pictures.push(n);
+                    }
+                }
                 if let Some(kind) = glitch_of(&l).filter(|_| joined.elapsed() > Duration::from_secs(5)) {
                     rec2.glitch(kind);
+                    // Of picture or of sound ("Packet corrupt (stream = 1, dts = …)").
+                    if let Some(n) = corrupt_stream(&l) {
+                        rec2.damage[if pictures.is_empty() && n == 0 || pictures.contains(&n) { 0 } else { 1 }].fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 if ts && info.line(&l) && !mapped && !rec2.epg_failed.load(Ordering::Relaxed) {
                     tracing::info!("{name}: the source carries a programme guide");
@@ -875,12 +923,30 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     outcome
 }
 
+/// "  Stream #0:1[0x101](fra): Audio: mp2 …" → (1, false): a stream of the input, and whether it is pictures.
+fn stream_kind(line: &str) -> Option<(u32, bool)> {
+    let rest = line.trim_start().strip_prefix("Stream #0:")?;
+    let n: u32 = rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
+    let video = rest.contains(": Video:");
+    (video || rest.contains(": Audio:")).then_some((n, video))
+}
+
+/// "[mpegts @ 0x9] Packet corrupt (stream = 1, dts = 1234)." → 1.
+fn corrupt_stream(line: &str) -> Option<u32> {
+    line.split_once("Packet corrupt (stream = ")?.1.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()
+}
+
 /// A reception problem in FFmpeg's words: packets lost before FFmpeg (the network or a
 /// receiver too slow), or a damaged stream (what the picture shows as blocks, freezes).
+/// One line a damaged packet: what FFmpeg says again of the same packet (its size, then once
+/// for each thing written) is not counted.
 fn glitch_of(line: &str) -> Option<super::Glitch> {
     let l = line.to_ascii_lowercase();
-    const DAMAGED: [&str; 11] = [
-        "packet corrupt", "pes packet size mismatch", "error while decoding", "decode_slice_header error", "concealing",
+    if l.contains("corrupt input packet") || l.contains("pes packet size mismatch") {
+        return None;
+    }
+    const DAMAGED: [&str; 10] = [
+        "packet corrupt", "error while decoding", "decode_slice_header error", "concealing",
         "invalid nal unit", "missing picture", "non-existing pps", "continuity check failed", "corrupt decoded frame", "no frame!",
     ];
     if l.contains("circular buffer overrun") || l.contains("packet loss") || l.contains("missed") && l.contains("packets") {
@@ -1356,11 +1422,21 @@ mod tests {
         assert_eq!(glitch_of("[h264 @ 0x7] concealing 845 DC, 845 AC, 845 MV errors in P frame"), Some(super::super::Glitch::Damaged));
         assert_eq!(glitch_of("[mpegts @ 0x9] Packet corrupt (stream = 0, dts = 1234)."), Some(super::super::Glitch::Damaged));
         assert_eq!(glitch_of("[segment @ 0x1] Opening 'x.ts' for writing"), None);
+        // Said again of the same packet: not counted twice.
+        assert_eq!(glitch_of("[in#0/mpegts @ 0x5] corrupt input packet in stream 1"), None);
+        assert_eq!(glitch_of("[mpegts @ 0x9] PES packet size mismatch"), None);
+        assert_eq!(glitch_of("[rtp @ 0x9] RTP: missed 3 packets"), Some(super::super::Glitch::Lost));
+        assert_eq!(corrupt_stream("[mpegts @ 0x9] Packet corrupt (stream = 1, dts = 1234)."), Some(1));
+        assert_eq!(stream_kind("  Stream #0:0[0x100]: Video: h264 (High), yuv420p"), Some((0, true)));
+        assert_eq!(stream_kind("  Stream #0:1[0x101](fra): Audio: mp2, 48000 Hz"), Some((1, false)));
+        assert_eq!(stream_kind("  Stream #0:2[0x12]: Data: epg"), None);
     }
 
     #[test]
     fn inputs() {
         assert_eq!(input_args(&cfg(Protocol::Udp, Mode::Listener)).last().unwrap(), "udp://239.1.1.1:5000?localaddr=10.0.0.2&fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000");
+        // The same address sending RTP: read as RTP, on the same card.
+        assert_eq!(input_args_as(&cfg(Protocol::Udp, Mode::Listener), true).last().unwrap(), "rtp://239.1.1.1:5000?localaddr=10.0.0.2&timeout=5000000&buffer_size=33554432&ttl=0");
         let r = input_args(&cfg(Protocol::Rtmp, Mode::Listener));
         assert_eq!(r, vec!["-listen", "1", "-i", "rtmp://0.0.0.0:9000/live/a"]);
         let mut c = cfg(Protocol::Srt, Mode::Listener);

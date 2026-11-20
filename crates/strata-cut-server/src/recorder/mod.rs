@@ -358,6 +358,10 @@ pub struct Rec {
     glitches: Mutex<(std::collections::VecDeque<(i64, Glitch)>, i64)>,
     /// What the witness of a multicast source saw on the network (since the last report).
     pub net: Arc<udp_in::Counts>,
+    /// Damaged packets FFmpeg read, of picture and of sound (since the last report).
+    pub damage: [std::sync::atomic::AtomicU64; 2],
+    /// A source given as UDP that sends RTP: read as RTP.
+    pub rtp: std::sync::atomic::AtomicBool,
     /// Where the last recording of this source ended (source time, s): what a web page gives
     /// again after a cut is not recorded twice.
     pub last_end: Mutex<Option<f64>>,
@@ -693,18 +697,23 @@ impl Manager {
         for line in glitch_lines(&recs, dropped, nic) {
             tracing::warn!("{line}");
         }
-        // What the witness of each multicast source saw on the network card, beside FFmpeg's damage.
+        // In detail for each source: what FFmpeg read damaged (picture, sound), and what the
+        // witness of a multicast source saw arrive on the network card.
         for r in self.recs() {
-            let (seen, missing, twice, marked) = r.net.take();
+            let name = r.config().name;
+            let take = |a: &std::sync::atomic::AtomicU64| a.swap(0, std::sync::atomic::Ordering::Relaxed);
+            let (video, audio) = (take(&r.damage[0]), take(&r.damage[1]));
+            if video + audio > 0 {
+                tracing::warn!("{name}: damaged in the last 10 minutes: {video} packets of picture, {audio} of sound");
+            }
+            let (seen, net) = r.net.take();
             if seen == 0 {
                 continue;
             }
-            let name = r.config().name;
-            let damaged = recs.iter().find(|(n, _)| *n == name).map_or(0, |(_, e)| e.len());
-            if missing + twice + marked > 0 {
-                tracing::warn!("{name}: as it arrives on the network card, in the last 10 minutes: {missing} packets missing, {twice} sent twice, {marked} marked in error by the source");
-            } else if damaged > 0 {
-                tracing::warn!("{name}: the stream arrives whole on the network card ({seen} datagrams checked in the last 10 minutes): the damage comes from its reading on this server");
+            let rtp = r.rtp.load(std::sync::atomic::Ordering::Relaxed);
+            let damaged = video + audio;
+            for line in witness_lines(&name, seen, net, rtp, damaged) {
+                tracing::warn!("{line}");
             }
         }
     }
@@ -901,6 +910,8 @@ impl Manager {
             epg_from_disk: found_known.into(),
             glitches: Mutex::new((std::collections::VecDeque::new(), 0)),
             net: Default::default(),
+            damage: Default::default(),
+            rtp: false.into(),
             preview_lag: 0.into(),
             no_signal: false.into(),
             last_end: Mutex::new(None),
@@ -1257,6 +1268,28 @@ mod tests {
     }
 }
 
+/// What the witness of a multicast source says of ten minutes: what arrived on the network card
+/// (`seen` datagrams), beside what FFmpeg read damaged.
+fn witness_lines(name: &str, seen: u64, net: udp_in::Seen, rtp: bool, damaged: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    if rtp {
+        // Read as RTP: a datagram that comes late is put back in its place; one missing, or sent
+        // twice (FFmpeg reads it twice), damages the picture.
+        if net.reordered > 0 {
+            out.push(format!("{name}: RTP, in the last 10 minutes: {} datagrams came out of order: put back in order by this server (read as plain UDP, each would have damaged the picture)", net.reordered));
+        }
+        if net.missing + net.twice + net.marked > 0 {
+            out.push(format!("{name}: RTP, as it arrives on the network card, in the last 10 minutes: {} datagrams never came, {} came twice, {} packets marked in error by the source: the source or the network, not this server", net.missing, net.twice, net.marked));
+        }
+    } else if net.missing + net.twice + net.marked > 0 {
+        out.push(format!("{name}: as it arrives on the network card, in the last 10 minutes: {} packets missing, {} sent twice, {} marked in error by the source: the source or the network, not this server", net.missing, net.twice, net.marked));
+    }
+    if out.is_empty() && damaged > 0 {
+        out.push(format!("{name}: the stream arrives whole on the network card ({seen} datagrams checked in the last 10 minutes): the damage comes from its reading on this server"));
+    }
+    out
+}
+
 /// The UDP datagrams the system dropped since it started (its receive buffers full), from
 /// /proc/net/snmp ("RcvbufErrors"); None elsewhere.
 fn udp_dropped() -> Option<u64> {
@@ -1358,6 +1391,16 @@ mod glitch_tests {
         assert!(glitch_lines(&[], 0, 0).is_empty());
         let l = glitch_lines(&recs, 0, 12);
         assert!(l[0].contains("network card of this server") && l.iter().any(|x| x.contains("dropped 12 packets")), "{l:?}");
+    }
+
+    #[test]
+    fn witness() {
+        let seen = |missing, twice, marked, reordered| udp_in::Seen { missing, twice, marked, reordered };
+        assert!(witness_lines("TF1", 1000, seen(0, 0, 0, 0), false, 0).is_empty());
+        assert!(witness_lines("TF1", 1000, seen(0, 0, 0, 0), false, 4)[0].contains("arrives whole"));
+        assert!(witness_lines("TF1", 1000, seen(3, 1, 0, 0), false, 4)[0].contains("3 packets missing, 1 sent twice"));
+        let l = witness_lines("TF1", 1000, seen(2, 1, 0, 5), true, 2);
+        assert!(l[0].contains("5 datagrams came out of order") && l[1].contains("2 datagrams never came, 1 came twice"), "{l:?}");
     }
 
     #[test]

@@ -1,7 +1,13 @@
-//! A witness of a UDP multicast source: the server joins the same group beside FFmpeg (which
-//! records it, untouched) and checks the MPEG-TS packets as they arrive on the network card:
-//! missing ones (continuity counter), ones sent twice, ones the source marks in error. Its
-//! counts, beside FFmpeg's, say where damage comes from: the stream as it arrives, or its reading.
+//! What a UDP source sends, seen by the server itself beside FFmpeg (which records it, untouched).
+//!
+//! Its first datagram says how it carries its MPEG-TS: alone, or in RTP. FFmpeg reads RTP given
+//! as "udp://" without its numbers: a datagram that comes out of order, or twice, damages the
+//! picture (blocks), where a player that follows the numbers shows nothing. An RTP source is
+//! therefore read as RTP (see `run`).
+//!
+//! A witness then joins the group of a multicast source and checks what arrives on the network
+//! card: packets missing, sent twice, out of order, marked in error by the source. Its counts,
+//! beside FFmpeg's, say where damage comes from: the stream as it arrives, or its reading.
 use std::{
     net::{Ipv4Addr, UdpSocket},
     os::fd::FromRawFd,
@@ -93,50 +99,139 @@ pub fn open(t: &Target) -> Result<UdpSocket, String> {
     Ok(sock)
 }
 
+/// How a UDP source carries its MPEG-TS.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Kind {
+    /// MPEG-TS packets alone in each datagram.
+    Ts,
+    /// RTP (a numbered header before the MPEG-TS packets): a receiver can put the datagrams
+    /// back in order and drop those sent twice.
+    Rtp,
+    Other,
+}
+
+/// The RTP header's length when `dgram` is RTP carrying MPEG-TS (payload type 33), and its number.
+fn rtp(dgram: &[u8]) -> Option<(usize, u16)> {
+    if dgram.len() < 12 + 188 || dgram[0] >> 6 != 2 || dgram[1] & 0x7f != 33 {
+        return None;
+    }
+    let mut head = 12 + 4 * (dgram[0] & 0x0f) as usize;
+    if dgram[0] & 0x10 != 0 {
+        // A header extension: its length in 32-bit words, after its 16-bit profile.
+        let words = u16::from_be_bytes([*dgram.get(head + 2)?, *dgram.get(head + 3)?]) as usize;
+        head += 4 + 4 * words;
+    }
+    let payload = dgram.get(head..)?;
+    (!payload.is_empty() && payload.len().is_multiple_of(188) && payload[0] == 0x47).then(|| (head, u16::from_be_bytes([dgram[2], dgram[3]])))
+}
+
+pub fn classify(dgram: &[u8]) -> Kind {
+    if rtp(dgram).is_some() {
+        Kind::Rtp
+    } else if !dgram.is_empty() && dgram.len().is_multiple_of(188) && dgram[0] == 0x47 {
+        Kind::Ts
+    } else {
+        Kind::Other
+    }
+}
+
+/// What a source sends, from its first datagram (waited for `wait` at most); None: nothing
+/// came. The socket is closed before FFmpeg opens its own.
+pub fn sniff(t: &Target, wait: Duration) -> Option<Kind> {
+    let sock = open(t).ok()?;
+    let until = std::time::Instant::now() + wait;
+    let mut buf = vec![0u8; 65_536];
+    while std::time::Instant::now() < until {
+        if let Ok(n) = sock.recv(&mut buf) {
+            return Some(classify(&buf[..n]));
+        }
+    }
+    None
+}
+
 /// What the witness counted, per kind.
 #[derive(Default)]
 pub struct Counts {
     /// Datagrams received.
     pub seen: AtomicU64,
-    /// TS packets missing (continuity counter jumps).
+    /// Packets missing (MPEG-TS: continuity counter jumps; RTP: numbers that never came).
     pub missing: AtomicU64,
-    /// TS packets sent twice.
+    /// Packets sent twice.
     pub twice: AtomicU64,
     /// TS packets the source marks in error (transport error indicator).
     pub marked: AtomicU64,
+    /// RTP datagrams that came after a later one (out of order).
+    pub reordered: AtomicU64,
+}
+
+/// A count of what a datagram (or ten minutes) showed.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Seen {
+    pub missing: u64,
+    pub twice: u64,
+    pub marked: u64,
+    pub reordered: u64,
 }
 
 impl Counts {
-    /// The counts since the last call (seen, missing, twice, marked).
-    pub fn take(&self) -> (u64, u64, u64, u64) {
-        (self.seen.swap(0, Ordering::Relaxed), self.missing.swap(0, Ordering::Relaxed), self.twice.swap(0, Ordering::Relaxed), self.marked.swap(0, Ordering::Relaxed))
+    /// The datagrams and what they showed since the last call.
+    pub fn take(&self) -> (u64, Seen) {
+        let t = |a: &AtomicU64| a.swap(0, Ordering::Relaxed);
+        (t(&self.seen), Seen { missing: t(&self.missing), twice: t(&self.twice), marked: t(&self.marked), reordered: t(&self.reordered) })
+    }
+
+    fn add(&self, s: Seen) {
+        for (a, n) in [(&self.missing, s.missing), (&self.twice, s.twice), (&self.marked, s.marked), (&self.reordered, s.reordered)] {
+            if n > 0 {
+                a.fetch_add(n, Ordering::Relaxed);
+            }
+        }
     }
 }
 
-/// Checks the TS packets of each datagram: the last continuity counter of each PID.
+/// Checks each datagram: RTP by its numbers, plain MPEG-TS by the continuity counter of each PID.
 pub struct Check {
     last: Vec<i8>,
+    /// RTP: the highest number seen, and the last numbers received (to tell one sent twice
+    /// from one that comes late).
+    highest: Option<u16>,
+    recent: std::collections::VecDeque<u16>,
+    /// RTP numbers skipped and not come since (each is missing once it is 500 numbers old).
+    gaps: std::collections::VecDeque<u16>,
 }
 
 impl Default for Check {
     fn default() -> Self {
-        Check { last: vec![-1; 8192] }
+        Check { last: vec![-1; 8192], highest: None, recent: Default::default(), gaps: Default::default() }
     }
 }
 
+/// How far a late RTP datagram may come after its turn before it counts as missing.
+const RTP_WINDOW: u16 = 500;
+
 impl Check {
-    /// (missing, twice, marked) in this datagram; nothing for one that is not whole TS packets.
-    pub fn datagram(&mut self, dgram: &[u8]) -> (u64, u64, u64) {
-        let (mut missing, mut twice, mut marked) = (0, 0, 0);
-        if dgram.is_empty() || !dgram.len().is_multiple_of(188) {
-            return (0, 0, 0);
-        }
-        for p in dgram.chunks(188) {
+    /// What this datagram shows; nothing for one that is neither RTP nor whole TS packets.
+    pub fn datagram(&mut self, dgram: &[u8]) -> Seen {
+        let mut seen = Seen::default();
+        let ts = match rtp(dgram) {
+            Some((head, n)) => {
+                self.rtp_number(n, &mut seen);
+                &dgram[head..]
+            }
+            None if dgram.is_empty() || !dgram.len().is_multiple_of(188) => return seen,
+            None => dgram,
+        };
+        let plain = self.highest.is_none();
+        for p in ts.chunks(188) {
             if p[0] != 0x47 {
-                return (missing, twice, marked);
+                break;
             }
             if p[1] & 0x80 != 0 {
-                marked += 1;
+                seen.marked += 1;
+            }
+            // RTP: its numbers say what is missing or twice (the counters would say it again).
+            if !plain {
+                continue;
             }
             let pid = (((p[1] & 0x1f) as usize) << 8) | p[2] as usize;
             let afc = (p[3] >> 4) & 3;
@@ -150,14 +245,49 @@ impl Check {
             if last >= 0 && !announced {
                 let expected = (last + 1) & 0x0f;
                 if cc == last {
-                    twice += 1;
+                    seen.twice += 1;
                 } else if cc != expected {
-                    missing += ((cc - expected) & 0x0f) as u64;
+                    seen.missing += ((cc - expected) & 0x0f) as u64;
                 }
             }
             self.last[pid] = cc;
         }
-        (missing, twice, marked)
+        seen
+    }
+
+    fn rtp_number(&mut self, n: u16, seen: &mut Seen) {
+        let Some(high) = self.highest else {
+            self.highest = Some(n);
+            self.recent.push_back(n);
+            return;
+        };
+        let ahead = n.wrapping_sub(high) as i16;
+        if ahead > 0 {
+            // The numbers skipped may still come (late); a jump too large is the source starting again.
+            if (ahead as u16) < RTP_WINDOW {
+                for k in 1..ahead as u16 {
+                    self.gaps.push_back(high.wrapping_add(k));
+                }
+            } else {
+                self.gaps.clear();
+            }
+            self.highest = Some(n);
+        } else if let Some(i) = self.gaps.iter().position(|g| *g == n) {
+            self.gaps.remove(i);
+            seen.reordered += 1;
+        } else if self.recent.contains(&n) {
+            seen.twice += 1;
+        }
+        self.recent.push_back(n);
+        if self.recent.len() > RTP_WINDOW as usize {
+            self.recent.pop_front();
+        }
+        // Skipped numbers too old to come now: missing.
+        let high = self.highest.unwrap_or(n);
+        while self.gaps.front().is_some_and(|g| high.wrapping_sub(*g) >= RTP_WINDOW) {
+            self.gaps.pop_front();
+            seen.missing += 1;
+        }
     }
 }
 
@@ -188,16 +318,7 @@ pub fn watch(t: &Target, counts: Arc<Counts>) -> Result<Witness, String> {
             while !done.load(Ordering::Relaxed) {
                 let Ok(n) = sock.recv(&mut buf) else { continue };
                 counts.seen.fetch_add(1, Ordering::Relaxed);
-                let (m, d, e) = check.datagram(&buf[..n]);
-                if m > 0 {
-                    counts.missing.fetch_add(m, Ordering::Relaxed);
-                }
-                if d > 0 {
-                    counts.twice.fetch_add(d, Ordering::Relaxed);
-                }
-                if e > 0 {
-                    counts.marked.fetch_add(e, Ordering::Relaxed);
-                }
+                counts.add(check.datagram(&buf[..n]));
             }
         })
         .map_err(|e| format!("udp: {e}"))?;
@@ -231,24 +352,55 @@ mod tests {
 
     #[test]
     fn checks() {
+        let seen = |missing, twice, marked| Seen { missing, twice, marked, reordered: 0 };
         let mut c = Check::default();
         let mut dgram = Vec::new();
         // 3, 3 (twice), 4, 7 (5 and 6 missing); another PID; stuffing.
         for p in [packet(0x100, 3, 1), packet(0x100, 3, 1), packet(0x100, 4, 2), packet(0x100, 7, 2), packet(0x101, 9, 0), packet(0x1fff, 0, 0)] {
             dgram.extend_from_slice(&p);
         }
-        assert_eq!(c.datagram(&dgram), (2, 1, 0));
+        assert_eq!(c.datagram(&dgram), seen(2, 1, 0));
         // The counter wraps: 15 then 0 is fine.
         let mut c = Check::default();
         let mut dgram = Vec::new();
         for p in [packet(0x100, 15, 1), packet(0x100, 0, 1)] {
             dgram.extend_from_slice(&p);
         }
-        assert_eq!(c.datagram(&dgram), (0, 0, 0));
+        assert_eq!(c.datagram(&dgram), seen(0, 0, 0));
         // Marked in error by the source.
         let mut p = packet(0x100, 1, 1);
         p[1] |= 0x80;
-        assert_eq!(Check::default().datagram(&p), (0, 0, 1));
-        assert_eq!(Check::default().datagram(&[1, 2, 3]), (0, 0, 0));
+        assert_eq!(Check::default().datagram(&p), seen(0, 0, 1));
+        assert_eq!(Check::default().datagram(&[1, 2, 3]), seen(0, 0, 0));
+    }
+
+    fn rtp_dgram(n: u16) -> Vec<u8> {
+        let mut d = vec![0x80, 33, (n >> 8) as u8, n as u8, 0, 0, 0, 0, 1, 2, 3, 4];
+        d.extend_from_slice(&packet(0x100, (n & 15) as u8, 1));
+        d
+    }
+
+    #[test]
+    fn rtp_numbers() {
+        assert_eq!(classify(&rtp_dgram(7)), Kind::Rtp);
+        assert_eq!(classify(&packet(0x100, 1, 1)), Kind::Ts);
+        assert_eq!(classify(&[0x80, 33, 0, 1]), Kind::Other);
+        // 65534, 65535, 1 (0 skipped), 0 (late), 1 again (twice), 2, 4 (3 never comes).
+        let mut c = Check::default();
+        let mut total = Seen::default();
+        let mut feed = |c: &mut Check, n: u16| {
+            let s = c.datagram(&rtp_dgram(n));
+            total.missing += s.missing;
+            total.twice += s.twice;
+            total.reordered += s.reordered;
+        };
+        for n in [65534u16, 65535, 1, 0, 1, 2, 4] {
+            feed(&mut c, n);
+        }
+        // 3 is missing once it is 500 numbers old.
+        for n in 5..600u16 {
+            feed(&mut c, n);
+        }
+        assert_eq!(total, Seen { missing: 1, twice: 1, marked: 0, reordered: 1 });
     }
 }
