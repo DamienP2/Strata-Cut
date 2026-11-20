@@ -252,9 +252,18 @@ pub mod wave {
 
     pub const PER_SECOND: f64 = 100.0;
 
-    /// Decodes a proxy audio fragment (mono, 8 kHz) and measures it.
-    pub fn compute(ffmpeg: &str, init: &Path, seg: &Path) -> Option<Vec<u8>> {
-        let input = format!("concat:{}|{}", init.display(), seg.display());
+    /// Proxy audio fragments (decoded mono, 8 kHz) measured. Several fragments that follow each other, decoded by one FFmpeg (one per fragment loads
+    /// a server receiving many sources: their fragments last a second), then cut by their
+    /// durations (s). A single fragment: all its levels, whatever its duration.
+    pub fn compute_many(ffmpeg: &str, init: &Path, segs: &[(&Path, f64)]) -> Option<Vec<Vec<u8>>> {
+        if segs.is_empty() {
+            return None;
+        }
+        let mut input = format!("concat:{}", init.display());
+        for (seg, _) in segs {
+            input.push('|');
+            input.push_str(&seg.display().to_string());
+        }
         let mut cmd = std::process::Command::new(ffmpeg);
         super::super::background_std(&mut cmd);
         let out = cmd
@@ -266,7 +275,21 @@ pub mod wave {
         if out.stdout.len() < 2 {
             return None;
         }
-        Some(levels(&out.stdout))
+        Some(split(levels(&out.stdout), segs.iter().map(|s| s.1)))
+    }
+
+    /// The levels of several fragments, each its share by its duration (the last takes the rest).
+    pub fn split(all: Vec<u8>, durations: impl ExactSizeIterator<Item = f64>) -> Vec<Vec<u8>> {
+        let n = durations.len();
+        let mut out = Vec::with_capacity(n);
+        let (mut at, mut t) = (0usize, 0.0f64);
+        for (i, d) in durations.enumerate() {
+            t += d;
+            let end = if i + 1 == n { all.len() } else { ((t * PER_SECOND).round() as usize).clamp(at, all.len()) };
+            out.push(all[at..end].to_vec());
+            at = end;
+        }
+        out
     }
 
     /// 16-bit little-endian samples at 8 kHz → one level per 80 samples.
@@ -384,6 +407,16 @@ pub mod mp4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wave_split_by_durations() {
+        // 3 fragments of 1 s, 1.02 s and the rest: 100 levels a second.
+        let parts = wave::split((0..310u32).map(|x| x as u8).collect(), [1.0, 1.02, 1.0].into_iter());
+        assert_eq!(parts.iter().map(Vec::len).collect::<Vec<_>>(), vec![100, 102, 108]);
+        assert_eq!(parts[1][0], 100);
+        // One fragment: all its levels.
+        assert_eq!(wave::split(vec![1; 40], [0.0].into_iter())[0].len(), 40);
+    }
 
     fn run_with(segs: &[(f64, f64, f64)]) -> Run {
         let mut r = Run::new(PathBuf::from("/nonexistent"), RunMeta::default());

@@ -595,6 +595,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     let mut video_seen: (Option<u32>, i64) = (None, now_ms());
     let mut audio_seen: (Option<u32>, i64) = (None, now_ms());
     let mut master_seen: (Option<f64>, i64) = (None, now_ms());
+    let mut waves_at = now_ms();
     let outcome = loop {
         tokio::select! {
             status = child.wait() => {
@@ -694,7 +695,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             }
             _ = tick.tick() => {
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, false));
-                measure(m, rec, &run_id, std::mem::take(&mut scan.waves));
+                // Measured by batches: a few fragments, or the oldest waiting for 4 s.
+                if scan.waves.len() >= WAVE_BATCH || (!scan.waves.is_empty() && now_ms() - waves_at > WAVE_BATCH as i64 * 1000) {
+                    measure(m, rec, &run_id, std::mem::take(&mut scan.waves));
+                    waves_at = now_ms();
+                }
                 let lag = scan.preview_lag();
                 rec.preview_lag.store(lag as u32, Ordering::Relaxed);
                 // In the journal (not on the card): once every 10 minutes at most.
@@ -751,6 +756,8 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     tokio::time::sleep(Duration::from_millis(300)).await;
     stop_within(&mut preview, Duration::from_secs(1)).await;
     tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+    // The last sound levels (those waiting for their batch, and the last fragments).
+    measure(m, rec, &run_id, std::mem::take(&mut scan.waves));
     rec.preview_lag.store(0, Ordering::Relaxed);
     if let Some(end) = scan.last_t1 {
         *rec.last_end.lock().unwrap() = Some(end);
@@ -822,24 +829,51 @@ async fn read_guide(data_dir: PathBuf, rec: Arc<Rec>, service: Option<u16>, mut 
 }
 
 /// Measures new audio fragments for the timeline's waveform, off the async threads.
-fn measure(m: &Arc<Manager>, rec: &Arc<Rec>, run_id: &str, todo: Vec<(u32, PathBuf, PathBuf, PathBuf)>) {
+/// The sound levels of new audio fragments, measured together: one FFmpeg for a batch of
+/// fragments that follow each other (one per fragment, every second, loaded the server).
+fn measure(m: &Arc<Manager>, rec: &Arc<Rec>, run_id: &str, todo: Vec<Wave>) {
     if todo.is_empty() {
         return;
     }
     let (ffmpeg, rec, run_id) = (m.ffmpeg.clone(), rec.clone(), run_id.to_string());
     tokio::task::spawn_blocking(move || {
-        for (n, init, seg, out) in todo {
-            let Some(w) = super::index::wave::compute(&ffmpeg, &init, &seg) else { continue };
-            let _ = std::fs::write(&out, &w);
-            let mut runs = rec.runs.write().unwrap();
-            if let Some(r) = runs.iter_mut().find(|r| r.meta.id == run_id) {
-                if r.audio.segs.iter().any(|s| s.n == n) {
-                    r.audio.waves.insert(n, Arc::new(w));
+        // Batches of fragments in a row (a gap in the numbers starts another).
+        let mut batches: Vec<Vec<Wave>> = Vec::new();
+        for w in todo {
+            match batches.last_mut() {
+                Some(b) if b.last().is_some_and(|l| l.n + 1 == w.n && l.init == w.init) => b.push(w),
+                _ => batches.push(vec![w]),
+            }
+        }
+        for batch in batches {
+            let segs: Vec<(&Path, f64)> = batch.iter().map(|w| (w.seg.as_path(), w.dur)).collect();
+            let Some(levels) = super::index::wave::compute_many(&ffmpeg, &batch[0].init, &segs) else { continue };
+            for (w, levels) in batch.iter().zip(levels) {
+                if levels.is_empty() {
+                    continue;
+                }
+                let _ = std::fs::write(&w.out, &levels);
+                let mut runs = rec.runs.write().unwrap();
+                if let Some(r) = runs.iter_mut().find(|r| r.meta.id == run_id) {
+                    if r.audio.segs.iter().any(|s| s.n == w.n) {
+                        r.audio.waves.insert(w.n, Arc::new(levels));
+                    }
                 }
             }
         }
     });
 }
+
+/// An audio fragment to measure: its number, its track's init, itself, its duration (s), its level file.
+struct Wave {
+    n: u32,
+    init: PathBuf,
+    seg: PathBuf,
+    dur: f64,
+    out: PathBuf,
+}
+/// The fragments measured together: about every 4 s.
+const WAVE_BATCH: usize = 4;
 
 /// "[in#0 @ 0x55…] Error opening input: Connection refused" → "Error opening input: Connection refused".
 fn clean_message(l: &str) -> String {
@@ -919,8 +953,8 @@ struct Scanner {
     had_data: bool,
     growing_size: u64,
     still_ticks: u32,
-    /// New audio fragments to measure: (number, init, fragment, level file).
-    waves: Vec<(u32, PathBuf, PathBuf, PathBuf)>,
+    /// New audio fragments to measure.
+    waves: Vec<Wave>,
     /// The end of the last segment read (source time, s).
     last_t1: Option<f64>,
     /// The source's clock jumped (a new encoder, a splice): (from, to).
@@ -998,7 +1032,7 @@ impl Scanner {
                         self.video_t1 = Some(self.video_t1.map_or(t0 + dur, |v| v.max(t0 + dur)));
                     }
                     if !video {
-                        self.waves.push((n, run.track_dir(false).join("init.mp4"), run.proxy_path(false, n), run.wave_path(n)));
+                        self.waves.push(Wave { n, init: run.track_dir(false).join("init.mp4"), seg: run.proxy_path(false, n), dur, out: run.wave_path(n) });
                     }
                 }
             }
