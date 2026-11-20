@@ -424,17 +424,6 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     } else {
         None
     };
-    // A UDP source: received by the server itself, its packets sent twice dropped (FFmpeg keeps
-    // them: blocks in the picture), then given to FFmpeg. An address it cannot take: FFmpeg's.
-    let mut udp_sock = None;
-    if cfg.protocol == Protocol::Udp {
-        if let Some(t) = super::udp_in::Target::parse(&cfg.url, &cfg.iface) {
-            match super::udp_in::open(&t) {
-                Ok(s) => udp_sock = Some(s),
-                Err(message) => return Outcome::Exited { had_data: false, message },
-            }
-        }
-    }
     let base = m.recordings_dir().join(&rec.id);
     *rec.dir.lock().unwrap() = base.clone();
     let started = now_ms();
@@ -456,7 +445,6 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     let clog: Arc<Mutex<VecDeque<String>>> = Default::default();
     let input = match &source {
         Some(s) => super::web::input_args(s),
-        None if udp_sock.is_some() => ["-f", "mpegts", "-i", "pipe:0"].map(String::from).to_vec(),
         None if cfg.protocol == Protocol::Decklink => {
             let opened = {
                 let c = cfg.clone();
@@ -639,20 +627,6 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             }
         }
     }
-    // The UDP received by the server: on FFmpeg's standard input.
-    let mut udp_pipe = None;
-    if let Some(sock) = udp_sock.take() {
-        match std::io::pipe() {
-            Ok((reader, writer)) => {
-                stdin = Stdio::from(reader);
-                udp_pipe = Some((sock, writer));
-            }
-            Err(e) => {
-                finish_run(rec, &run_id);
-                return Outcome::Exited { had_data: false, message: format!("udp: {e}") };
-            }
-        }
-    }
     let stdout = if epg_map.is_some() { Stdio::piped() } else { Stdio::null() };
     let child = Command::new(&m.ffmpeg).args(&args).current_dir(&run_dir).stdin(stdin).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true).spawn();
     let mut child = match child {
@@ -663,8 +637,13 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             return Outcome::Exited { had_data: false, message: format!("cannot start {}: {e}", m.ffmpeg) };
         }
     };
-    // Receives until the run ends (dropped with it), or the source is silent.
-    let udp_rx = udp_pipe.map(|(sock, writer)| super::udp_in::start(sock, writer, rec.clone()));
+    // A multicast source: the server watches the same group beside FFmpeg (the stream as it
+    // arrives: missing packets, sent twice, marked in error), until the run ends.
+    let _witness = if cfg.protocol == Protocol::Udp {
+        super::udp_in::Target::parse(&cfg.url, &cfg.iface).filter(|t| t.multicast()).and_then(|t| super::udp_in::watch(&t, rec.net.clone()).map_err(|e| tracing::debug!("{}: no witness: {e}", cfg.name)).ok())
+    } else {
+        None
+    };
     let log: Arc<Mutex<VecDeque<String>>> = Default::default();
     // The guide found in the input while FFmpeg does not write it yet: start again with it.
     let epg_new = Arc::new(tokio::sync::Notify::new());
@@ -726,8 +705,6 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 let message = best_line(&lines);
                 match status {
                     Ok(s) if s.success() => tracing::info!("{}: the source stopped", cfg.name),
-                    // Nothing came on the server's UDP reception: FFmpeg found no stream (said by the state).
-                    Ok(s) if udp_rx.as_ref().is_some_and(|u| !u.received()) => tracing::debug!("{}: ffmpeg ended ({s}): {message}", cfg.name),
                     Ok(s) => tracing::warn!("{}: ffmpeg ended ({s}): {message}", cfg.name),
                     Err(e) => tracing::warn!("{}: ffmpeg: {e}", cfg.name),
                 }
@@ -895,11 +872,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         let _ = f.wait().await;
     }
     finish_run(rec, &run_id);
-    // The server's own UDP reception got nothing: FFmpeg only says it found no stream.
-    match outcome {
-        Outcome::Exited { had_data: false, .. } if udp_rx.as_ref().is_some_and(|u| !u.received()) => Outcome::Exited { had_data: false, message: "udp: nothing received (address, network card, multicast)".into() },
-        o => o,
-    }
+    outcome
 }
 
 /// A reception problem in FFmpeg's words: packets lost before FFmpeg (the network or a

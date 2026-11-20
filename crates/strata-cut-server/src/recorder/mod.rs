@@ -356,8 +356,8 @@ pub struct Rec {
     pub epg_from_disk: std::sync::atomic::AtomicBool,
     /// Reception problems of the last 10 minutes (when, which), and when the log last told them.
     glitches: Mutex<(std::collections::VecDeque<(i64, Glitch)>, i64)>,
-    /// TS packets the source sent twice, dropped by the server's own UDP reception (since the last report).
-    pub dups: std::sync::atomic::AtomicU64,
+    /// What the witness of a multicast source saw on the network (since the last report).
+    pub net: Arc<udp_in::Counts>,
     /// Where the last recording of this source ended (source time, s): what a web page gives
     /// again after a cut is not recorded twice.
     pub last_end: Mutex<Option<f64>>,
@@ -693,11 +693,18 @@ impl Manager {
         for line in glitch_lines(&recs, dropped, nic) {
             tracing::warn!("{line}");
         }
-        // Packets the source sends twice: dropped before FFmpeg (it took them for pictures: blocks).
+        // What the witness of each multicast source saw on the network card, beside FFmpeg's damage.
         for r in self.recs() {
-            let n = udp_in::take_dups(&r);
-            if n > 0 {
-                tracing::info!("{}: the source sent {n} packets twice in the last 10 minutes: dropped before recording", r.config().name);
+            let (seen, missing, twice, marked) = r.net.take();
+            if seen == 0 {
+                continue;
+            }
+            let name = r.config().name;
+            let damaged = recs.iter().find(|(n, _)| *n == name).map_or(0, |(_, e)| e.len());
+            if missing + twice + marked > 0 {
+                tracing::warn!("{name}: as it arrives on the network card, in the last 10 minutes: {missing} packets missing, {twice} sent twice, {marked} marked in error by the source");
+            } else if damaged > 0 {
+                tracing::warn!("{name}: the stream arrives whole on the network card ({seen} datagrams checked in the last 10 minutes): the damage comes from its reading on this server");
             }
         }
     }
@@ -893,7 +900,7 @@ impl Manager {
             epg_failed: false.into(),
             epg_from_disk: found_known.into(),
             glitches: Mutex::new((std::collections::VecDeque::new(), 0)),
-            dups: 0.into(),
+            net: Default::default(),
             preview_lag: 0.into(),
             no_signal: false.into(),
             last_end: Mutex::new(None),
