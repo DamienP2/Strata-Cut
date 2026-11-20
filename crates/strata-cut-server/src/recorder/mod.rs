@@ -577,6 +577,8 @@ pub struct Manager {
     pub grabs: tokio::sync::Semaphore,
     /// The UDP datagrams the system dropped so far (its receive buffers full), at the last report.
     udp_dropped: Mutex<Option<u64>>,
+    /// The same for the network cards (their receive rings full).
+    nic_dropped: Mutex<Option<u64>>,
     /// The programmed slots of the recorders in schedule mode.
     pub schedules: schedule::Schedules,
     /// The server's time zone (the slots' hours are in it).
@@ -589,6 +591,7 @@ impl Manager {
     pub fn start(data_dir: &Path, cfg: &ServerConfig, events: Events) -> Arc<Self> {
         let m = Arc::new(Manager {
             udp_dropped: Mutex::new(udp_dropped()),
+            nic_dropped: Mutex::new(nic_dropped()),
             data_dir: data_dir.to_path_buf(),
             recordings_dir: Mutex::new(cfg.recordings_dir(data_dir)),
             dirs: Mutex::new({
@@ -667,9 +670,8 @@ impl Manager {
     /// one each; and the datagrams the system itself dropped (its buffers full: this server).
     fn report_glitches(&self) {
         let now = now_ms();
-        let dropped = {
-            let mut last = self.udp_dropped.lock().unwrap();
-            let n = udp_dropped();
+        let since = |last: &Mutex<Option<u64>>, n: Option<u64>| {
+            let mut last = last.lock().unwrap();
             let d = match (*last, n) {
                 (Some(a), Some(b)) => b.saturating_sub(a),
                 _ => 0,
@@ -677,13 +679,15 @@ impl Manager {
             *last = n;
             d
         };
+        let dropped = since(&self.udp_dropped, udp_dropped());
+        let nic = since(&self.nic_dropped, nic_dropped());
         let recs: Vec<(String, Vec<(i64, Glitch)>)> = self
             .recs()
             .iter()
             .map(|r| (r.config().name, r.glitches.lock().unwrap().0.iter().filter(|(t, _)| now - t < 600_000).copied().collect::<Vec<_>>()))
             .filter(|(_, e)| !e.is_empty())
             .collect();
-        for line in glitch_lines(&recs, dropped) {
+        for line in glitch_lines(&recs, dropped, nic) {
             tracing::warn!("{line}");
         }
     }
@@ -1245,10 +1249,37 @@ fn udp_dropped() -> Option<u64> {
     values.split_whitespace().nth(i)?.parse().ok()
 }
 
+/// The packets the network cards dropped since the system started (their receive rings full:
+/// lost before any program sees them), from /proc/net/dev ("drop" and "fifo" received, the
+/// loopback left out), with those the kernel's backlog dropped; None elsewhere.
+fn nic_dropped() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/net/dev").ok()?;
+    // And the kernel's queue behind them (its backlog full: /proc/net/softnet_stat, 2nd column).
+    let backlog = std::fs::read_to_string("/proc/net/softnet_stat").map(|t| softnet_dropped_in(&t)).unwrap_or(0);
+    Some(nic_dropped_in(&text) + backlog)
+}
+
+fn softnet_dropped_in(text: &str) -> u64 {
+    text.lines().filter_map(|l| l.split_whitespace().nth(1)).filter_map(|x| u64::from_str_radix(x, 16).ok()).sum()
+}
+
+fn nic_dropped_in(text: &str) -> u64 {
+    text.lines()
+        .filter_map(|l| l.split_once(':'))
+        .filter(|(name, _)| name.trim() != "lo")
+        .filter_map(|(_, v)| {
+            // Received: bytes packets errs drop fifo frame compressed multicast.
+            let f: Vec<u64> = v.split_whitespace().take(5).filter_map(|x| x.parse().ok()).collect();
+            (f.len() == 5).then(|| f[3] + f[4])
+        })
+        .sum()
+}
+
 /// The journal's lines for the reception problems of the last 10 minutes (by recorder: when and
 /// what). Recorders whose problems fall at the same moments (within 2 s, for most of them) are
-/// one line: the stream arrives so. `dropped`: the datagrams the system dropped meanwhile.
-fn glitch_lines(recs: &[(String, Vec<(i64, Glitch)>)], dropped: u64) -> Vec<String> {
+/// one line: the stream arrives so. `dropped`: the datagrams the system dropped meanwhile;
+/// `nic`: the packets the network cards dropped.
+fn glitch_lines(recs: &[(String, Vec<(i64, Glitch)>)], dropped: u64, nic: u64) -> Vec<String> {
     let shared = |i: usize| {
         let mine = &recs[i].1;
         let common = mine.iter().filter(|(t, _)| recs.iter().enumerate().any(|(j, (_, o))| j != i && o.iter().any(|(u, _)| (t - u).abs() <= 2000))).count();
@@ -1262,7 +1293,13 @@ fn glitch_lines(recs: &[(String, Vec<(i64, Glitch)>)], dropped: u64) -> Vec<Stri
     };
     if together.len() >= 2 {
         let names: Vec<String> = together.iter().map(|&i| format!("{} ({})", recs[i].0, recs[i].1.len())).collect();
-        let why = if dropped > 0 { "the system's network buffers were full: this server" } else { "the stream arrives so: the source or the network, not this server" };
+        let why = if nic > 0 {
+            "the network card of this server dropped packets: this server"
+        } else if dropped > 0 {
+            "the system's network buffers were full: this server"
+        } else {
+            "the stream arrives so: the source or the network, not this server"
+        };
         out.push(format!("reception problems at the same moments in the last 10 minutes on {}: {why}", names.join(", ")));
     }
     for (i, (name, e)) in recs.iter().enumerate() {
@@ -1271,6 +1308,9 @@ fn glitch_lines(recs: &[(String, Vec<(i64, Glitch)>)], dropped: u64) -> Vec<Stri
         }
         let (lost, damaged) = count(e);
         out.push(format!("{name}: reception problems in the last 10 minutes: {lost} packets lost by this server, {damaged} damaged on arrival"));
+    }
+    if nic > 0 {
+        out.push(format!("the network cards dropped {nic} packets in the last 10 minutes, before any program read them (their receive rings too small, or the server short of processor): sudo ethtool -G <card> rx <its maximum>, which the installer sets"));
     }
     if dropped > 0 {
         out.push(format!("the system dropped {dropped} UDP packets in the last 10 minutes (its network buffers full: the server short of processor, or the buffers too small)"));
@@ -1286,12 +1326,26 @@ mod glitch_tests {
     fn together_or_not() {
         let at = |ts: &[i64]| ts.iter().map(|t| (*t, Glitch::Damaged)).collect::<Vec<_>>();
         let recs = vec![("TF1".to_string(), at(&[1000, 60_000, 120_500])), ("TMC".to_string(), at(&[1500, 60_800])), ("TFX".to_string(), at(&[120_000])), ("France 2".to_string(), at(&[300_000]))];
-        let l = glitch_lines(&recs, 0);
+        let l = glitch_lines(&recs, 0, 0);
         assert_eq!(l.len(), 2, "{l:?}");
         assert!(l[0].contains("TF1 (3), TMC (2), TFX (1)") && l[0].contains("not this server"), "{l:?}");
         assert!(l[1].starts_with("France 2:"), "{l:?}");
-        let l = glitch_lines(&recs, 40);
+        let l = glitch_lines(&recs, 40, 0);
         assert!(l[0].contains("this server") && !l[0].contains("not this server") && l.last().unwrap().contains("dropped 40"), "{l:?}");
-        assert!(glitch_lines(&[], 0).is_empty());
+        assert!(glitch_lines(&[], 0, 0).is_empty());
+        let l = glitch_lines(&recs, 0, 12);
+        assert!(l[0].contains("network card of this server") && l.iter().any(|x| x.contains("dropped 12 packets")), "{l:?}");
+    }
+
+    #[test]
+    fn nic_drops() {
+        let dev = "Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 1000 10 0 7 0 0 0 0 1000 10 0 0 0 0 0 0
+  eth0: 900000 800 0 3 2 0 0 50 1000 10 0 0 0 0 0 0
+  eth1: 900000 800 1 1 0 0 0 50 1000 10 0 0 0 0 0 0
+";
+        assert_eq!(nic_dropped_in(dev), 6);
+        assert_eq!(softnet_dropped_in("0001a2b3 00000010 00000000\n0001a2b3 00000002 00000001\n"), 18);
     }
 }

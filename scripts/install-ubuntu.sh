@@ -158,7 +158,8 @@ if [ "$UNINSTALL" -eq 1 ]; then
     ok "service retiré"
   fi
   if has_systemd; then
-    systemctl disable --now "$NTP_UNIT.path" "$STORAGE_UNIT.path" 2>/dev/null || true
+    systemctl disable --now "$NTP_UNIT.path" "$STORAGE_UNIT.path" strata-cut-nic.service 2>/dev/null || true
+    rm -f /etc/systemd/system/strata-cut-nic.service
     rm -f "/etc/systemd/system/$NTP_UNIT.path" "/etc/systemd/system/$NTP_UNIT.service" "/etc/systemd/system/$STORAGE_UNIT.path" "/etc/systemd/system/$STORAGE_UNIT.service"
     systemctl daemon-reload
   fi
@@ -581,8 +582,47 @@ cat >"$SYSCTL_FILE" <<'EOF'
 net.core.rmem_max = 33554432
 net.core.rmem_default = 1048576
 net.core.wmem_max = 33554432
+# Les rafales attendent le noyau au lieu d'être jetées.
+net.core.netdev_max_backlog = 16384
+net.core.netdev_budget = 600
 EOF
 if sysctl -q -p "$SYSCTL_FILE" 2>/dev/null; then ok "tampons réseau agrandis ($SYSCTL_FILE)"; else warn "tampons réseau non appliqués (conteneur ?)"; fi
+# Anneaux de réception des cartes réseau au maximum : trop petits (souvent 256 ou 512 par
+# défaut), une rafale des flux y est perdue avant tout programme (mosaïque qu'un poste VLC ne
+# voit pas). Réappliqué à chaque démarrage.
+if has_systemd; then
+  apt_install ethtool
+  mkdir -p /usr/local/lib/strata-cut
+  cat >/usr/local/lib/strata-cut/nic-rings <<'EOF'
+#!/bin/sh
+# Strata Cut : anneaux de réception des cartes réseau à leur maximum.
+for dev in /sys/class/net/*; do
+  name=${dev##*/}
+  [ -e "$dev/device" ] || continue
+  max=$(ethtool -g "$name" 2>/dev/null | awk '/[Mm]aximums/{m=1} m && /^RX:/{print $2; exit}')
+  case "$max" in ''|n/a|0) continue ;; esac
+  ethtool -G "$name" rx "$max" 2>/dev/null || true
+done
+exit 0
+EOF
+  chmod 0755 /usr/local/lib/strata-cut/nic-rings
+  cat >/etc/systemd/system/strata-cut-nic.service <<'EOF'
+[Unit]
+Description=Strata Cut: network cards' receive rings at their maximum
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/strata-cut/nic-rings
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable strata-cut-nic.service >/dev/null 2>&1
+  if systemctl start strata-cut-nic.service 2>/dev/null; then ok "anneaux de réception des cartes réseau au maximum"; else warn "anneaux des cartes réseau non réglés"; fi
+fi
 # L'heure de la machine fait le timecode : elle doit être synchronisée.
 if command -v timedatectl >/dev/null && has_systemd; then
   timedatectl set-ntp true 2>/dev/null || true

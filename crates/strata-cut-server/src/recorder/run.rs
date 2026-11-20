@@ -647,8 +647,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         tokio::spawn(async move {
             let mut lines = tokio::io::BufReader::new(err).lines();
             let mut info = super::epg::InfoReader::default();
+            // Joining a stream in its course, FFmpeg complains of the pictures begun before it
+            // (references missing up to the first key frame): nothing was damaged.
+            let joined = std::time::Instant::now();
             while let Ok(Some(l)) = lines.next_line().await {
-                if let Some(kind) = glitch_of(&l) {
+                if let Some(kind) = glitch_of(&l).filter(|_| joined.elapsed() > Duration::from_secs(5)) {
                     rec2.glitch(kind);
                 }
                 if ts && info.line(&l) && !mapped && !rec2.epg_failed.load(Ordering::Relaxed) {
