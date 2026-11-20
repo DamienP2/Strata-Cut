@@ -1268,3 +1268,20 @@ a.btn { color: inherit; }
 .sys-page .settings-head + .media-toolbar { margin: 14px 0 16px; }
 .st-field .num-field { max-width: 150px; }
 .io-metrics .wide { grid-column: 1 / -1; }
+
+/* The resources' guard: its settings, and the window when it refuses */
+.set-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.set-note { margin: 0 0 12px; font-size: 12.5px; }
+.guard-msg { display: flex; flex-direction: column; gap: 10px; font-size: 13px; line-height: 1.5; }
+.guard-msg p { margin: 0; }
+.guard-gauge { position: relative; height: 12px; border-radius: 6px; background: var(--panel-3); overflow: visible; margin: 4px 0 0; }
+.guard-gauge .now { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px 0 0 6px; background: var(--accent); }
+.guard-gauge .adds { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(135deg, var(--live) 0 5px, color-mix(in srgb, var(--live) 45%, transparent) 5px 10px); }
+.guard-gauge i { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--text); border-radius: 1px; }
+.guard-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.guard-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.guard-legend b { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.guard-legend b.now { background: var(--accent); }
+.guard-legend b.adds { background: var(--live); }
+.guard-legend b.limit { width: 2px; background: var(--text); }
+@media (max-width: 900px) { .set-grid.three { grid-template-columns: 1fr; } }

@@ -17,6 +17,7 @@ import { Segmented } from '../ui/fields';
 import { Field } from '../settings/ui';
 import { RecLogo } from '../ui/RecLogo';
 import type { Programme, Recorder, Slot } from '../types';
+import { explainGuard } from '../ui/guard';
 
 /** 1 = Monday … 7 = Sunday: their short names in the interface's language. */
 function dayNames(): string[] {
@@ -548,7 +549,7 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
     try {
       await api('POST', `/api/recorders/${r.id}/recording`, { mode });
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      if (!explainGuard(e)) toast(t((e as Error).message), 'error');
     }
   };
   // 6 h by default (from an hour ago), 12 h, a day, a week.

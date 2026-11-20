@@ -21,6 +21,7 @@ import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
 import { clockOf, mbps, useDestinations, useStreams, volume, type Destination, type StreamInfo } from '../streams';
 import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
+import { explainGuard } from '../ui/guard';
 
 const COLORS = ['var(--accent)', 'var(--pvw)', 'var(--warn)', '#c084fc', '#38bdf8'];
 
@@ -164,7 +165,7 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
       if (on) await api('POST', '/api/streams', { destination: d.id, source: rec.id, ...overrides(d) });
       else await api('DELETE', `/api/streams/${d.id}`);
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      if (!explainGuard(e)) toast(t((e as Error).message), 'error');
     }
   };
   const test = async (d: Destination) => {

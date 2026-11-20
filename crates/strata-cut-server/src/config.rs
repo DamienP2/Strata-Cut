@@ -42,6 +42,9 @@ pub struct ServerConfig {
     /// YouTube lives: what yt-dlp uses so that YouTube lets the server through.
     #[serde(default)]
     pub youtube: Youtube,
+    /// The resources' guard: a new recording or stream refused past these limits.
+    #[serde(default)]
+    pub limits: crate::limits::Limits,
 }
 
 /// YouTube (Système › YouTube): for the web recorders, so that YouTube does not take the server
@@ -149,6 +152,7 @@ impl ServerConfig {
         if self.name.is_empty() {
             return Err("the server name cannot be empty".into());
         }
+        self.limits.validate()?;
         if self.ntp.len() > 8 {
             return Err("8 ntp servers at most".into());
         }

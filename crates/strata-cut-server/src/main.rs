@@ -11,6 +11,7 @@ mod cli;
 mod clips;
 mod config;
 mod groups;
+mod limits;
 mod streams;
 mod guard;
 mod health;

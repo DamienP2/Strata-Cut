@@ -187,6 +187,10 @@ async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q):
     if c.cookies == super::MASKED {
         c.cookies = q.copy_of.as_ref().and_then(|id| s.recorders.get(id)).map(|r| r.config().cookies).unwrap_or_default();
     }
+    // Recording at once: is there room for it?
+    if c.enabled {
+        crate::limits::check(&s, &crate::limits::recording(&c))?;
+    }
     s.recorders.create(c).map(Json).map_err(bad)
 }
 
@@ -219,6 +223,9 @@ async fn set_enabled(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlP
     require(me.is_admin())?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut c = rec.config();
+    if b.enabled && !c.enabled && !matches!(rec.status.lock().unwrap().state, super::State::Recording) {
+        crate::limits::check(&s, &crate::limits::recording(&c))?;
+    }
     c.enabled = b.enabled;
     s.recorders.update(&id, c).map(Json).map_err(bad)
 }
@@ -234,6 +241,10 @@ async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, Ur
     require(me.is_admin())?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut c = rec.config();
+    // Recording all the time from now: is there room for it (unless it records already)?
+    if b.mode == "continuous" && !c.enabled && !matches!(rec.status.lock().unwrap().state, super::State::Recording) {
+        crate::limits::check(&s, &crate::limits::recording(&c))?;
+    }
     (c.enabled, c.slots_off) = match b.mode.as_str() {
         "continuous" => (true, false),
         "slots" => (false, false),

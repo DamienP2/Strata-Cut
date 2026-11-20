@@ -1,13 +1,14 @@
 /* Système › Serveur › Général: name and time zone, where the web interface listens, the clock. */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Clock, Network, Server } from 'lucide-react';
+import { Clock, Gauge, Network, Server } from 'lucide-react';
 import { locale, t } from '../i18n';
 import { api } from '../store';
 import { PageHead } from '../pages/SidePage';
 import { Dropdown, type DropOption } from '../ui/Dropdown';
 import { NumberField } from '../ui/fields';
 import { InfoTip } from '../ui/InfoTip';
-import { Card, Field, SaveBar } from './ui';
+import { Card, Field, SaveBar, Switch } from './ui';
+import { useMetrics, watchMetrics } from '../ui/metrics';
 import { useServerConfig } from './serverConfig';
 
 /** Every IANA time zone the browser knows, grouped by region. */
@@ -123,9 +124,41 @@ export function General() {
               </Field>
             </div>
           </Card>
+          <LimitsCard limits={{ ...LIMITS, ...((cfg.limits as Partial<Limits> | undefined) ?? {}) }} set={(p) => setCfg((c) => ({ ...c, limits: { ...LIMITS, ...((c.limits as Partial<Limits> | undefined) ?? {}), ...p } }))} />
         </>
       )}
       <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onDiscard={discard} />
     </>
+  );
+}
+
+interface Limits {
+  enabled: boolean;
+  maxCpu: number;
+  maxMemory: number;
+  uploadMbps: number;
+}
+const LIMITS: Limits = { enabled: true, maxCpu: 85, maxMemory: 90, uploadMbps: 0 };
+
+/** The resources' guard: a new recording or stream refused past these limits (with a window saying why). */
+function LimitsCard({ limits, set }: { limits: Limits; set: (p: Partial<Limits>) => void }) {
+  const m = useMetrics((s) => s.metrics?.machine);
+  useEffect(() => watchMetrics(), []);
+  const mem = m && m.memTotal ? Math.round((m.memUsed / m.memTotal) * 100) : null;
+  return (
+    <Card icon={<Gauge size={16} />} title={t('Resources’ guard')} actions={<Switch checked={limits.enabled} onChange={(enabled) => set({ enabled })} label={limits.enabled ? t('On') : t('Off')} />}>
+      <p className="muted set-note">{t('A new recording or stream started by hand is refused when it would take the server past these limits; a window says why. What already runs goes on, and the programmed slots start all the same.')}</p>
+      <div className="set-grid three">
+        <Field label={t('Processor')} hint={m ? t('Now: {n} %', { n: Math.round(m.cpu) }) : undefined}>
+          <NumberField value={limits.maxCpu} min={30} max={100} step={5} suffix="%" disabled={!limits.enabled} onChange={(v) => set({ maxCpu: v })} />
+        </Field>
+        <Field label={t('Memory')} hint={mem !== null ? t('Now: {n} %', { n: mem }) : undefined}>
+          <NumberField value={limits.maxMemory} min={30} max={100} step={5} suffix="%" disabled={!limits.enabled} onChange={(v) => set({ maxMemory: v })} />
+        </Field>
+        <Field label={t('Bandwidth of the streams')} hint={t('0: no limit. What the server’s link can send out.')}>
+          <NumberField value={limits.uploadMbps} min={0} max={100000} step={10} suffix="Mb/s" disabled={!limits.enabled} onChange={(v) => set({ uploadMbps: v })} />
+        </Field>
+      </div>
+    </Card>
   );
 }

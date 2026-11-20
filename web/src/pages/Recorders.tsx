@@ -15,6 +15,7 @@ import { InfoTip } from '../ui/InfoTip';
 import { openContextMenu } from '../ui/ContextMenu';
 import type { Protocol, Recorder, RecorderStatus } from '../types';
 import { clockOf, useStreams, type StreamInfo } from '../streams';
+import { explainGuard } from '../ui/guard';
 
 const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'udp', label: 'UDP', detail: 'udp://' },
@@ -484,7 +485,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
       }
       onClose();
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      if (!explainGuard(e)) toast(t((e as Error).message), 'error');
     } finally {
       setBusy(false);
       void reloadRecorders();

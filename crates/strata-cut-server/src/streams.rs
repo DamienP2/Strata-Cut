@@ -255,6 +255,35 @@ impl Streams {
         self.events.send(Audience::All, json!({"type": "changed", "what": "streams"}));
     }
 
+    /// What the streams send out now, kb/s.
+    pub fn out_kbps(&self) -> f64 {
+        self.sessions.lock().unwrap().values().map(|s| s.stats.lock().unwrap().kbps).sum()
+    }
+
+    /// What sending this source to this destination would take (the resources' guard); None
+    /// when it already does.
+    fn cost(&self, dest_id: &str, source: &str, o: &Overrides) -> Result<Option<crate::limits::Cost>, String> {
+        if self.sessions.lock().unwrap().get(dest_id).is_some_and(|s| s.source == source) {
+            return Ok(None);
+        }
+        let dest = self.get(dest_id).ok_or("no such destination")?;
+        let rec = self.recorders.get(source).ok_or("no such source")?;
+        let d = effective(&dest, o)?;
+        let (codec, height, bits) = {
+            let st = rec.status.lock().unwrap();
+            (st.media.as_ref().map(|m| m.codec.clone()).unwrap_or_default(), st.media.as_ref().map(|m| m.height).unwrap_or(1080), st.bitrate)
+        };
+        let again = d.encode == "h264" || (!d.srt() && !codec.is_empty() && codec != "h264");
+        let kbps = if again {
+            (if d.video_kbps > 0 { d.video_kbps } else { 6000 } + if d.audio_kbps > 0 { d.audio_kbps } else { 160 }) as f64
+        } else if bits > 0 {
+            bits as f64 / 1000.0
+        } else {
+            rec.config().bitrate.max(8.0) * 1000.0
+        };
+        Ok(Some(crate::limits::stream(format!("{} → {}", rec.config().name, dest.name), again, d.height, height, kbps)))
+    }
+
     /// The lives under way.
     pub fn json(&self) -> Value {
         let sessions: Vec<Arc<Session>> = self.sessions.lock().unwrap().values().cloned().collect();
@@ -627,6 +656,9 @@ async fn streams(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
 
 async fn start(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<StartBody>) -> ApiResult<Json<Value>> {
     require(me.can_extract())?;
+    if let Some(cost) = s.streams.cost(&b.destination, &b.source, &b.overrides).map_err(bad)? {
+        crate::limits::check(&s, &cost)?;
+    }
     s.streams.begin(&b.destination, &b.source, &b.overrides, &me.username).map_err(bad)?;
     Ok(Json(s.streams.json()))
 }
