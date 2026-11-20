@@ -1323,7 +1323,8 @@ fn witness_lines(name: &str, seen: u64, net: udp_in::Seen, rtp: bool, damaged: u
             out.push(format!("{name}: RTP, as it arrives on the network card, in the last 10 minutes: {} datagrams never came, {} came twice, {} packets marked in error by the source: the source or the network, not this server", net.missing, net.twice, net.marked));
         }
     } else if net.missing + net.twice + net.marked > 0 {
-        out.push(format!("{name}: as it arrives on the network card, in the last 10 minutes: {} packets missing, {} sent twice, {} marked in error by the source: the source or the network, not this server", net.missing, net.twice, net.marked));
+        let moments = if net.events > 0 { format!(" (in {} moments, up to {} at once)", net.events, net.worst) } else { String::new() };
+        out.push(format!("{name}: as it arrives on the network card, in the last 10 minutes: {} packets missing{moments}, {} sent twice, {} marked in error by the source: the source or the network, not this server", net.missing, net.twice, net.marked));
     }
     if out.is_empty() && damaged > 0 {
         out.push(format!("{name}: the stream arrives whole on the network card ({seen} datagrams checked in the last 10 minutes): the damage comes from its reading on this server"));
@@ -1436,10 +1437,12 @@ mod glitch_tests {
 
     #[test]
     fn witness() {
-        let seen = |missing, twice, marked, reordered| udp_in::Seen { missing, twice, marked, reordered };
+        let seen = |missing, twice, marked, reordered| udp_in::Seen { missing, twice, marked, reordered, ..Default::default() };
         assert!(witness_lines("TF1", 1000, seen(0, 0, 0, 0), false, 0).is_empty());
         assert!(witness_lines("TF1", 1000, seen(0, 0, 0, 0), false, 4)[0].contains("arrives whole"));
         assert!(witness_lines("TF1", 1000, seen(3, 1, 0, 0), false, 4)[0].contains("3 packets missing, 1 sent twice"));
+        let burst = udp_in::Seen { missing: 479, events: 61, worst: 14, ..Default::default() };
+        assert!(witness_lines("TF1", 1000, burst, false, 40)[0].contains("479 packets missing (in 61 moments, up to 14 at once)"));
         let l = witness_lines("TF1", 1000, seen(2, 1, 0, 5), true, 2);
         assert!(l[0].contains("5 datagrams came out of order") && l[1].contains("2 datagrams never came, 1 came twice"), "{l:?}");
     }

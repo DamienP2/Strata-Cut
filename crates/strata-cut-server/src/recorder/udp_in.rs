@@ -162,6 +162,10 @@ pub struct Counts {
     pub marked: AtomicU64,
     /// RTP datagrams that came after a later one (out of order).
     pub reordered: AtomicU64,
+    /// The moments packets were missing at (losses less than 100 ms apart are one moment), and
+    /// the most packets missing in one of them.
+    pub events: AtomicU64,
+    pub worst: AtomicU64,
 }
 
 /// A count of what a datagram (or ten minutes) showed.
@@ -171,13 +175,16 @@ pub struct Seen {
     pub twice: u64,
     pub marked: u64,
     pub reordered: u64,
+    /// Moments of loss, and the most packets missing in one (the witness's counts only).
+    pub events: u64,
+    pub worst: u64,
 }
 
 impl Counts {
     /// The datagrams and what they showed since the last call.
     pub fn take(&self) -> (u64, Seen) {
         let t = |a: &AtomicU64| a.swap(0, Ordering::Relaxed);
-        (t(&self.seen), Seen { missing: t(&self.missing), twice: t(&self.twice), marked: t(&self.marked), reordered: t(&self.reordered) })
+        (t(&self.seen), Seen { missing: t(&self.missing), twice: t(&self.twice), marked: t(&self.marked), reordered: t(&self.reordered), events: t(&self.events), worst: t(&self.worst) })
     }
 
     fn add(&self, s: Seen) {
@@ -315,10 +322,24 @@ pub fn watch(t: &Target, counts: Arc<Counts>) -> Result<Witness, String> {
         .spawn(move || {
             let mut buf = vec![0u8; 65_536];
             let mut check = Check::default();
+            // The moment of loss going on: when it last lost, and how much so far.
+            let mut moment: Option<(std::time::Instant, u64)> = None;
             while !done.load(Ordering::Relaxed) {
                 let Ok(n) = sock.recv(&mut buf) else { continue };
                 counts.seen.fetch_add(1, Ordering::Relaxed);
-                counts.add(check.datagram(&buf[..n]));
+                let seen = check.datagram(&buf[..n]);
+                if seen.missing > 0 {
+                    let so_far = match moment {
+                        Some((at, lost)) if at.elapsed() < Duration::from_millis(100) => lost,
+                        _ => {
+                            counts.events.fetch_add(1, Ordering::Relaxed);
+                            0
+                        }
+                    } + seen.missing;
+                    moment = Some((std::time::Instant::now(), so_far));
+                    counts.worst.fetch_max(so_far, Ordering::Relaxed);
+                }
+                counts.add(seen);
             }
         })
         .map_err(|e| format!("udp: {e}"))?;
@@ -352,7 +373,7 @@ mod tests {
 
     #[test]
     fn checks() {
-        let seen = |missing, twice, marked| Seen { missing, twice, marked, reordered: 0 };
+        let seen = |missing, twice, marked| Seen { missing, twice, marked, ..Default::default() };
         let mut c = Check::default();
         let mut dgram = Vec::new();
         // 3, 3 (twice), 4, 7 (5 and 6 missing); another PID; stuffing.
@@ -401,6 +422,6 @@ mod tests {
         for n in 5..600u16 {
             feed(&mut c, n);
         }
-        assert_eq!(total, Seen { missing: 1, twice: 1, marked: 0, reordered: 1 });
+        assert_eq!(total, Seen { missing: 1, twice: 1, reordered: 1, ..Default::default() });
     }
 }
