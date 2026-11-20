@@ -180,9 +180,11 @@ export class LoopPlayer {
     document.addEventListener('visibilitychange', this.onVisible);
   }
 
-  /** Back on the page while live: at the live at once, whatever happened while it was hidden. */
+  /** Back on the page while live: looked at at once, and put back at the live only if it fell
+   * behind meanwhile (the browser may have held it while hidden). Not moved when it kept up:
+   * a jump each time the page came back showed as a jolt. */
   private onVisible = () => {
-    if (document.visibilityState === 'visible' && this.live && !this.alive.dead) void this.goLive(this.now());
+    if (document.visibilityState === 'visible' && this.live && !this.alive.dead) void this.refresh();
   };
 
   destroy() {
