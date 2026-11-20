@@ -162,6 +162,11 @@ Si rien n'arrive : la carte doit être sur le bon VLAN, le commutateur doit tran
 echo 'net.ipv4.conf.all.rp_filter = 2' | sudo tee /etc/sysctl.d/91-multicast.conf && sudo sysctl --system
 ```
 
+Des paquets perdus (le journal dit « packets missing » à l'arrivée) : pour savoir où ils se perdent, lancez au même moment `scripts/ts-check.py` sur le serveur et à un autre endroit du chemin (l'hôte de la VM, le poste où le flux est propre). Là où il compte des pertes, et pas avant, est l'endroit où elles ont lieu :
+```bash
+python3 ts-check.py 239.1.1.10:1234 -i <adresse IP de la carte> -t 300
+```
+
 ### SRT
 
 - **Écoute** : la source se connecte au serveur. Choisissez un **port** (9000, 9001…) ; l'interface affiche l'adresse à donner à la source : `srt://<serveur>:9001`. Le port doit être ouvert en **UDP**.
