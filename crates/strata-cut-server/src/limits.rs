@@ -70,7 +70,7 @@ fn height_of(mode: &str) -> (u32, bool) {
     let at = mode.find(['i', 'p']).unwrap_or(mode.len());
     let h = mode[..at].parse().unwrap_or(1080);
     let rate: u32 = mode.get(at + 1..).and_then(|r| r.parse().ok()).unwrap_or(25);
-    (h, mode.contains('p') && (rate >= 50 && rate < 100 || rate >= 5000))
+    (h, mode.contains('p') && ((50..100).contains(&rate) || rate >= 5000))
 }
 
 /// A source that starts recording: its receiver and its preview (a light H.264), and, for a
