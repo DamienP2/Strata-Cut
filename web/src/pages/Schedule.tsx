@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, ChevronLeft, ChevronRight, Pencil, Plus, Scissors, Search, Trash2, TriangleAlert, Tv, X } from 'lucide-react';
+import { CalendarClock, ChevronLeft, ChevronRight, Pencil, Plus, Scissors, Search, Square, Trash2, TriangleAlert, Tv, X } from 'lucide-react';
 import { api, can, serverEvents, serverNow, useApp } from '../store';
 import { locale, t, tn } from '../i18n';
 import { navigate } from '../router';
@@ -540,6 +540,42 @@ function startOfDay(ms: number, tz: string): number {
  * shows above each row (a click on a programme makes a slot for it).
  */
 type RecMode = 'continuous' | 'slots' | 'off';
+
+/** A source's line: what it really recorded, with its stills on a grid of times; the holes in its loop. */
+function Recorded({ spans, recId, from, to, now, loopFrom, tileMs, x }: { spans: { from: number; to: number }[]; recId: string; from: number; to: number; now: number; loopFrom: number; tileMs: number; x: (ms: number) => number }) {
+  const end = Math.min(to, now);
+  const shown = spans.filter((s) => s.to > from && s.from < end);
+  const tiles: number[] = [];
+  for (const s of shown) {
+    for (let t0 = Math.floor(Math.max(s.from, from) / tileMs) * tileMs; t0 < Math.min(s.to, end); t0 += tileMs) {
+      const mid = t0 + tileMs / 2;
+      if (mid >= s.from && mid < s.to) tiles.push(t0);
+    }
+  }
+  // The holes, within the loop (before, nothing is kept anyway).
+  const holes: [number, number][] = [];
+  let cursor = Math.max(from, loopFrom);
+  for (const s of [...shown].sort((a, b) => a.from - b.from)) {
+    if (s.from > cursor) holes.push([cursor, Math.min(s.from, end)]);
+    cursor = Math.max(cursor, s.to);
+  }
+  if (cursor < end && shown.length) holes.push([cursor, end]);
+  return (
+    <>
+      {shown.map((s) => (
+        <span key={s.from} className="sc-cal-rec" style={{ left: `${Math.max(0, x(s.from))}%`, width: `${Math.min(100, x(Math.min(s.to, end))) - Math.max(0, x(s.from))}%` }} />
+      ))}
+      {tiles.map((t0) => (
+        <img key={t0} className="sc-cal-tile" loading="lazy" alt="" style={{ left: `${x(t0)}%`, width: `${x(t0 + tileMs) - x(t0)}%` }} src={`/api/recorders/${recId}/frame.jpg?at=${Math.round(t0 + tileMs / 2)}&h=72&fast=1`} onError={(e) => (e.currentTarget.style.visibility = 'hidden')} />
+      ))}
+      {holes.filter(([a, b]) => b > a).map(([a, b]) => (
+        <span key={a} className="sc-cal-hole" style={{ left: `${x(a)}%`, width: `${x(b) - x(a)}%` }} />
+      ))}
+    </>
+  );
+}
+/** The stills' durations (as in Extraction): 30 s to 4 h. */
+const TILE_STEPS = [30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 14_400_000];
 const recMode = (r: Recorder): RecMode => (r.enabled ? 'continuous' : r.slotsOff ? 'off' : 'slots');
 
 function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
@@ -577,6 +613,37 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
     };
   }, [from, to, slots]);
   const ids = recorders.map((r) => r.id).join(',');
+  // What each source really recorded (as in Extraction), asked again every 30 s.
+  const [cover, setCover] = useState<Record<string, { from: number; to: number }[]>>({});
+  useEffect(() => {
+    let dead = false;
+    const load = () =>
+      void Promise.all(
+        recorders.map((r) =>
+          api<{ spans: { from: number; to: number }[] }>('GET', `/api/recorders/${r.id}/coverage`).then(
+            (c) => [r.id, c.spans] as const,
+            () => [r.id, [] as { from: number; to: number }[]] as const,
+          ),
+        ),
+      ).then((all) => !dead && setCover(Object.fromEntries(all)));
+    load();
+    const i = setInterval(load, 30_000);
+    return () => {
+      dead = true;
+      clearInterval(i);
+    };
+  }, [ids]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The lanes' width: stills about 68 px wide, on a grid of times (the same ones from one draw to the next).
+  const grid = useRef<HTMLDivElement>(null);
+  const [laneW, setLaneW] = useState(1000);
+  useEffect(() => {
+    const el = grid.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setLaneW(Math.max(200, el.clientWidth - 290)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const tileMs = TILE_STEPS.find((s) => (s / span) * laneW >= 64) ?? TILE_STEPS[TILE_STEPS.length - 1];
   useEffect(() => {
     let dead = false;
     void Promise.all(
@@ -644,7 +711,7 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
           onChange={pick}
         />
       </div>
-      <div className="sc-cal-grid">
+      <div className="sc-cal-grid" ref={grid}>
         <div className="sc-cal-row sc-cal-axis">
           <div className="sc-cal-name" />
           <div className="sc-cal-lane">
@@ -685,29 +752,24 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
                   <span className="sc-cal-name-t" title={r.name}>
                     {r.name}
                   </span>
-                  {status[r.id]?.state === 'recording' ? (
+                  {status[r.id]?.state === 'recording' && (
                     <span className="sc-state rec">
                       <span className="sc-rec" />
                       REC
                     </span>
-                  ) : recMode(r) === 'off' ? (
-                    <span className="sc-state">{t('Not recorded (source)')}</span>
-                  ) : null}
+                  )}
                 </div>
-                {admin ? (
-                  <Segmented<RecMode>
-                    className={`sc-cal-modes ${recMode(r)}`}
-                    value={recMode(r)}
-                    options={[
-                      { value: 'continuous', label: t('Continuous'), title: t('Records all the time (the loop keeps the last hours)') },
-                      { value: 'slots', label: t('Slots'), title: t('Records only during the slots drawn on its line') },
-                      { value: 'off', label: t('Not recorded (source)'), title: t('Received only to be sent (Streamer); nothing recorded, slots paused') },
-                    ]}
-                    onChange={(v) => void setMode(r, v)}
-                  />
-                ) : (
-                  <span className="muted sc-cal-mode-ro">{t(recMode(r) === 'continuous' ? 'Continuous' : recMode(r) === 'slots' ? 'Slots' : 'Not recorded (source)')}</span>
-                )}
+                {/* REC: records all the time; Stop: only during the slots drawn on its line. */}
+                {admin &&
+                  (r.enabled ? (
+                    <button type="button" className="btn small sc-cal-stop" onClick={() => void setMode(r, 'slots')}>
+                      <Square size={11} /> {t('Stop')}
+                    </button>
+                  ) : (
+                    <button type="button" className="btn small sc-cal-rec-btn" onClick={() => void setMode(r, 'continuous')}>
+                      <span className="sc-rec" /> REC
+                    </button>
+                  ))}
               </div>
               <div
                 className={`sc-cal-lane ${admin ? 'edit' : ''}`}
@@ -762,19 +824,10 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
                     {g.name}
                   </button>
                 ))}
-                {/* Continuous: recorded until now, and on. */}
-                {recMode(r) === 'continuous' && now > from && (
-                  <span className="sc-cal-cont done" style={{ left: '0%', width: `${Math.min(100, x(now))}%` }}>
-                    <span className="sc-rec" />
-                    {t('Continuous recording')}
-                  </span>
-                )}
-                {recMode(r) === 'continuous' && now < to && (
-                  <span className="sc-cal-cont todo" style={{ left: `${Math.max(0, x(now))}%`, width: `${100 - Math.max(0, x(now))}%` }}>
-                    {t('goes on until it is changed')}
-                  </span>
-                )}
-                {recMode(r) === 'off' && <span className="sc-cal-none">{t('Received without being recorded: preview and Streamer only')}</span>}
+                {/* What it really recorded (its stills, as in Extraction), the holes in its loop, and, recording
+                    all the time, what is to come. */}
+                <Recorded spans={cover[r.id] ?? []} recId={r.id} from={from} to={to} now={now} loopFrom={now - r.loopHours * 3_600_000} tileMs={tileMs} x={x} />
+                {r.enabled && now < to && <span className="sc-cal-cont todo" style={{ left: `${Math.max(0, x(now))}%`, width: `${100 - Math.max(0, x(now))}%` }} />}
                 {mine.map((o, i) => {
                   const slot = slots.find((s) => s.id === o.slot);
                   const live = o.enabled !== false && o.start <= now && now < o.end;
@@ -788,8 +841,8 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
                       style={{
                         left: `${Math.max(0, x(o.start))}%`,
                         width: `${Math.max(0.4, Math.min(100, x(o.end)) - Math.max(0, x(o.start)))}%`,
-                        top: `calc(21px + (100% - 26px) * ${track[i] / tracks})`,
-                        height: `calc((100% - 26px) / ${tracks} - ${tracks > 1 ? 2 : 0}px)`,
+                        top: `calc(21px + (100% - 68px) * ${track[i] / tracks})`,
+                        height: `calc((100% - 68px) / ${tracks} - ${tracks > 1 ? 2 : 0}px)`,
                         bottom: 'auto',
                       }}
                       title={`${o.name || t('Programmed slot')}\n${day(o.start, timezone, locale())} ${hhmm(o.start, timezone)}–${hhmm(o.end, timezone)}\n\n${live ? t('Click: watch it in Extraction') : kept ? t('Click: open it in Extraction') : t('Click: its details')}`}

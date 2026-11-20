@@ -1296,3 +1296,13 @@ a.btn { color: inherit; }
 .server-lost-ring circle { fill: none; stroke-width: 3.5; }
 .server-lost-ring .bg { stroke: var(--panel-3); }
 .server-lost-ring .fg { stroke: var(--warn); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+
+/* Programmation: one button (REC / Stop); the line as recorded (stills, holes), as in Extraction */
+.sc-cal-row { min-height: 96px; }
+.btn.sc-cal-rec-btn { align-self: flex-start; color: var(--live); font-weight: 700; letter-spacing: 0.04em; }
+.btn.sc-cal-rec-btn .sc-rec { animation: none; }
+.btn.sc-cal-stop { align-self: flex-start; }
+.sc-cal-rec { position: absolute; bottom: 4px; height: 40px; border: 1px solid var(--live); border-radius: 4px; background: #000; box-sizing: border-box; pointer-events: none; }
+.sc-cal-tile { position: absolute; bottom: 5px; height: 38px; object-fit: cover; pointer-events: none; border-right: 1px solid rgba(0, 0, 0, 0.6); box-sizing: border-box; }
+.sc-cal-hole { position: absolute; bottom: 4px; height: 40px; border-radius: 4px; pointer-events: none; background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--warn) 22%, transparent) 6px 12px); }
+.sc-cal-row .sc-cal-cont.todo { top: auto; bottom: 4px; height: 40px; }
