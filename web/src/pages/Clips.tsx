@@ -218,49 +218,53 @@ export function Clips() {
                 </button>
               </div>
             )}
-            {byRecorder.map((g) => {
-              const allPicked = g.list.every((c) => picked.has(c.id));
-              let lastDay = '';
-              return (
-                <section key={g.id} className="sc-clip-group">
-                  <header>
-                    <label className="sc-pick-all" data-tip={t('Select the clips of this recorder')}>
-                      <input type="checkbox" checked={allPicked} ref={(el) => { if (el) el.indeterminate = !allPicked && g.list.some((c) => picked.has(c.id)); }} onChange={(e) => toggle(g.list.map((c) => c.id), e.target.checked)} />
-                    </label>
-                    <RecLogo rec={recOf(g.id)} />
-                    <h2>{g.name}</h2>
-                    <span className="muted">
-                      {tn(g.list.length, '{n} clip', '{n} clips')} · {size(g.size, locale(), fr)}
-                    </span>
-                  </header>
-                  <div className="sc-clip-table-wrap">
-                    <table className="user-table sc-clip-table">
-                      {/* The same widths for every recorder: the columns line up from one to the next. */}
-                      <colgroup>
-                        <col className="c-pick" />
-                        <col className="c-clip" />
-                        <col className="c-in" />
-                        <col className="c-dur" />
-                        <col className="c-size" />
-                        <col className="c-made" />
-                        <col className="c-until" />
-                        <col className="c-share" />
-                        <col className="c-act" />
-                      </colgroup>
-                      <thead>
-                        <tr>
-                          <th />
-                          <th>{t('Clip')}</th>
-                          <th>{t('In')}</th>
-                          <th>{t('Duration')}</th>
-                          <th>{t('Size')}</th>
-                          <th>{t('Created')}</th>
-                          <th>{t('Valid until')}</th>
-                          <th>{t('Shared with')}</th>
-                          <th />
-                        </tr>
-                      </thead>
-                      <tbody>
+            {/* One table, by source: a line with the source's name (it selects all its clips), its clips under it. */}
+            <div className="sc-clip-table-wrap">
+              <table className="user-table sc-clip-table">
+                {/* The same widths for every recorder: the columns line up from one to the next. */}
+                <colgroup>
+                  <col className="c-pick" />
+                  <col className="c-clip" />
+                  <col className="c-in" />
+                  <col className="c-dur" />
+                  <col className="c-size" />
+                  <col className="c-made" />
+                  <col className="c-until" />
+                  <col className="c-share" />
+                  <col className="c-act" />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th />
+                    <th>{t('Clip')}</th>
+                    <th>{t('In')}</th>
+                    <th>{t('Duration')}</th>
+                    <th>{t('Size')}</th>
+                    <th>{t('Created')}</th>
+                    <th>{t('Valid until')}</th>
+                    <th>{t('Shared with')}</th>
+                    <th />
+                  </tr>
+                </thead>
+                {byRecorder.map((g) => {
+                  const allPicked = g.list.every((c) => picked.has(c.id));
+                  let lastDay = '';
+                  return (
+                    <tbody key={g.id}>
+                      <tr className="sc-src-row">
+                        <td>
+                          <input type="checkbox" checked={allPicked} aria-label={t('Select the clips of this recorder')} ref={(el) => { if (el) el.indeterminate = !allPicked && g.list.some((c) => picked.has(c.id)); }} onChange={(e) => toggle(g.list.map((c) => c.id), e.target.checked)} />
+                        </td>
+                        <td colSpan={8}>
+                          <span className="sc-src-row-t">
+                            <RecLogo rec={recOf(g.id)} size="sm" />
+                            <strong>{g.name}</strong>
+                            <span className="muted">
+                              {tn(g.list.length, '{n} clip', '{n} clips')} · {size(g.size, locale(), fr)}
+                            </span>
+                          </span>
+                        </td>
+                      </tr>
                         {g.list.flatMap((c) => {
                           const fps = fpsOf(c.fpsNum, c.fpsDen);
                           const d = day(c.start, timezone, locale());
@@ -356,12 +360,11 @@ export function Clips() {
                           );
                           return rows;
                         })}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              );
-            })}
+                    </tbody>
+                  );
+                })}
+              </table>
+            </div>
           </>
         )}
         {inTab.some((c) => c.expiresAt != null) && (

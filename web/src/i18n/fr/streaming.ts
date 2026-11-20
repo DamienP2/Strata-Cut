@@ -30,6 +30,10 @@ export const streaming: Record<string, string> = {
   'choose the format of the test pattern': 'Choisissez le format de la mire.',
   'choose the test pattern': 'Choisissez la mire.',
   'the bitrate is 1 to 200 mb/s': 'Le débit va de 1 à 200\u00a0Mb/s.',
+  'Recording now': 'Enregistrement en cours',
+  'Recording (slot)': 'Enregistre (créneau)',
+  'Stopped (source)': 'Arrêtée',
+  'Lip sync (timecode)': 'Lipsync (timecode)',
   // Destinations
   '{n} destination': '{n} destination',
   '{n} destinations': '{n} destinations',

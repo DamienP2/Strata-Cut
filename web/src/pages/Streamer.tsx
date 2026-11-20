@@ -226,7 +226,7 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
             <div key={d.id} className={`st-dest ${on ? 'on' : ''} ${busy ? 'busy' : ''}`}>
               <div className="st-dest-top">
                 <ProtoTag p={d.protocol} />
-                <strong title={d.name}>{d.name}</strong>
+                <strong data-tip={`${d.host} · ${encodingOf(d)}`}>{d.name}</strong>
                 {on ? (
                   <button type="button" className="btn small st-stop-one" onClick={() => void stop(d)}>
                     <Square size={11} /> {t('Stop')}
@@ -240,9 +240,6 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
                     <Play size={11} /> {t('Go live')}
                   </button>
                 )}
-              </div>
-              <div className="st-host">
-                {d.host} · {encodingOf(d).toLowerCase()}
               </div>
               {busy && s && (
                 <div className="st-note">
@@ -314,12 +311,10 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
   );
 }
 
-/** The bandwidth going out (this source's lives), the last 10 minutes. */
+/** The bandwidth going out (this source's lives), the last 10 minutes: the lines in an SVG
+ * stretched to the width, the numbers in HTML (not stretched with it). */
 function Bandwidth({ streams, dests }: { streams: StreamInfo[]; dests: Destination[] }) {
-  const W = 1200;
-  const H = 110;
   const n = 600;
-  // Each live's history, at the right end (one value a second).
   const lines = streams.map((s) => {
     const h = s.history.slice(-n);
     return Array.from({ length: n }, (_, i) => h[i - (n - h.length)] ?? 0);
@@ -327,14 +322,14 @@ function Bandwidth({ streams, dests }: { streams: StreamInfo[]; dests: Destinati
   const total = Array.from({ length: n }, (_, i) => lines.reduce((a, l) => a + l[i], 0));
   const peak = Math.max(0, ...total);
   const max = Math.max(1000, Math.ceil((peak * 1.2) / 4000) * 4000);
-  const pts = (vals: number[]) => vals.map((v, i) => `${((i / (n - 1)) * W).toFixed(1)},${(H - (v / max) * H).toFixed(1)}`).join(' ');
+  const pts = (vals: number[]) => vals.map((v, i) => `${((i / (n - 1)) * 1000).toFixed(1)},${(100 - (v / max) * 100).toFixed(2)}`).join(' ');
   const now = total[n - 1] ?? 0;
   const name = (id: string) => dests.find((d) => d.id === id)?.name ?? id;
   return (
     <div className="st-bw-in">
       <div className="st-bw-head">
         <strong>{t('Outgoing bandwidth')}</strong>
-        <span>{streams.length ? t('{now} now · peak {peak} · last 10 minutes', { now: mbps(now, locale()), peak: mbps(peak, locale()) }) : t('Nothing sent')}</span>
+        {streams.length > 0 && <span>{t('{now} now · peak {peak} · last 10 minutes', { now: mbps(now, locale()), peak: mbps(peak, locale()) })}</span>}
         <div className="spacer" />
         {streams.length > 0 && (
           <span className="lg">
@@ -342,35 +337,40 @@ function Bandwidth({ streams, dests }: { streams: StreamInfo[]; dests: Destinati
             {t('Total')}
           </span>
         )}
-        {streams.map((s, i) => (
-          <span key={s.destination} className="lg">
-            <i style={{ background: COLORS[i % COLORS.length] }} />
-            {name(s.destination)}
-          </span>
-        ))}
+        {streams.length > 1 &&
+          streams.map((s, i) => (
+            <span key={s.destination} className="lg">
+              <i style={{ background: COLORS[i % COLORS.length] }} />
+              {name(s.destination)}
+            </span>
+          ))}
       </div>
-      <svg viewBox={`0 -8 ${W + 40} ${H + 26}`} preserveAspectRatio="none" aria-hidden="true">
-        {[0, 0.25, 0.5, 0.75, 1].map((f) => (
-          <g key={f}>
-            <line x1="0" x2={W} y1={H - f * H} y2={H - f * H} className="grid" />
-            <text x={W + 6} y={H - f * H + 3}>
-              {((max * f) / 1000).toLocaleString(locale(), { maximumFractionDigits: 1 })}
-            </text>
-          </g>
-        ))}
-        {['−10 min', '−8', '−6', '−4', '−2', t('now')].map((l, i) => (
-          <text key={l} x={(i / 5) * W} y={H + 14} textAnchor={i === 0 ? 'start' : i === 5 ? 'end' : 'middle'}>
-            {l}
-          </text>
-        ))}
-        {streams.length > 0 && (
-          <>
-            <polygon points={`0,${H} ${pts(total)} ${W},${H}`} className="area" />
-            <polyline points={pts(total)} fill="none" stroke="var(--live)" strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
-            {lines.length > 1 && lines.map((l, i) => <polyline key={i} points={pts(l)} fill="none" stroke={COLORS[i % COLORS.length]} strokeWidth="1.2" vectorEffect="non-scaling-stroke" />)}
-          </>
-        )}
-      </svg>
+      <div className="st-bw-chart">
+        <div className="st-bw-plot">
+          <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
+            {[0, 25, 50, 75, 100].map((y) => (
+              <line key={y} x1="0" x2="1000" y1={y} y2={y} className="grid" vectorEffect="non-scaling-stroke" />
+            ))}
+            {streams.length > 0 && (
+              <>
+                <polygon points={`0,100 ${pts(total)} 1000,100`} className="area" />
+                <polyline points={pts(total)} fill="none" stroke="var(--live)" strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
+                {lines.length > 1 && lines.map((l, i) => <polyline key={i} points={pts(l)} fill="none" stroke={COLORS[i % COLORS.length]} strokeWidth="1.2" vectorEffect="non-scaling-stroke" />)}
+              </>
+            )}
+          </svg>
+          <div className="st-bw-x">
+            {['−10 min', '−8', '−6', '−4', '−2', t('now')].map((l) => (
+              <span key={l}>{l}</span>
+            ))}
+          </div>
+        </div>
+        <div className="st-bw-y">
+          {[1, 0.75, 0.5, 0.25, 0].map((f) => (
+            <span key={f}>{((max * f) / 1000).toLocaleString(locale(), { maximumFractionDigits: 1 })}</span>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

@@ -127,6 +127,10 @@ async fn run(m: &Manager, c: &RecorderConfig) -> Result<Value, String> {
     args.extend(input);
     // One picture: deinterlaced, 640 wide.
     let video = program.map_or("0:v:0?".to_string(), |p| format!("0:p:{p}:v:0?"));
+    // A test pattern: half a second in (its first picture is the lip sync flash).
+    if c.protocol == Protocol::Pattern {
+        args.extend(["-ss", "0.5"].map(String::from));
+    }
     args.extend(["-map", video.as_str(), "-frames:v", "1", "-vf", "yadif=deint=interlaced,scale=640:-2", "-q:v", "4", "-f", "image2", "-c:v", "mjpeg", "pipe:1"].map(String::from));
     let mut cmd = Command::new(&m.ffmpeg);
     cmd.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);

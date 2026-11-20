@@ -40,7 +40,8 @@ interface Programme {
 
 /** The zoom: the timeline shows from 10 s to the whole loop; by default and reset: 1 h. */
 const ZOOM_MIN = 10_000;
-const ZOOM_RESET = 3_600_000;
+/** The zoom at first (and when reset): 5 minutes. */
+const ZOOM_RESET = 300_000;
 const zoomMax = (loopHours: number) => Math.max(3_600_000, loopHours * 3_600_000);
 /** Slider position 0 (whole loop) … 1000 (10 s), logarithmic. */
 const toSlider = (span: number, max: number) => Math.round((1000 * Math.log(max / span)) / Math.log(max / ZOOM_MIN));
@@ -140,7 +141,7 @@ function Editor({ rec }: { rec: Recorder }) {
   const [mIn, setIn] = useState<Mark | null>(null);
   const [mOut, setOut] = useState<Mark | null>(null);
   const [name, setName] = useState('');
-  const [span, setSpan] = useDisplayPref('extract.zoom.h', ZOOM_RESET);
+  const [span, setSpan] = useDisplayPref('extract.zoom.5m', ZOOM_RESET);
   const [spans, setSpans] = useState<Span[]>([]);
   const spansRef = useRef<Span[]>([]);
   spansRef.current = spans;

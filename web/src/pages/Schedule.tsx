@@ -752,24 +752,29 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
                   <span className="sc-cal-name-t" title={r.name}>
                     {r.name}
                   </span>
-                  {status[r.id]?.state === 'recording' && (
-                    <span className="sc-state rec">
-                      <span className="sc-rec" />
-                      REC
-                    </span>
-                  )}
                 </div>
-                {/* REC: records all the time; Stop: only during the slots drawn on its line. */}
-                {admin &&
-                  (r.enabled ? (
-                    <button type="button" className="btn small sc-cal-stop" onClick={() => void setMode(r, 'slots')}>
-                      <Square size={11} /> {t('Stop')}
-                    </button>
+                {/* Its state in words; one button with a verb (started: records all the time; stopped:
+                    only during the slots drawn on its line). */}
+                <div className="sc-cal-ctl">
+                  {status[r.id]?.state === 'recording' ? (
+                    <span className="sc-cal-status rec">
+                      <span className="sc-rec" />
+                      {r.enabled ? t('Recording now') : t('Recording (slot)')}
+                    </span>
                   ) : (
-                    <button type="button" className="btn small sc-cal-rec-btn" onClick={() => void setMode(r, 'continuous')}>
-                      <span className="sc-rec" /> REC
-                    </button>
-                  ))}
+                    <span className="sc-cal-status">{t('Stopped (source)')}</span>
+                  )}
+                  {admin &&
+                    (r.enabled ? (
+                      <button type="button" className="btn small" onClick={() => void setMode(r, 'slots')}>
+                        <Square size={11} /> {t('Stop recording')}
+                      </button>
+                    ) : (
+                      <button type="button" className="btn small sc-cal-start" onClick={() => void setMode(r, 'continuous')}>
+                        <span className="sc-rec" /> {t('Start recording')}
+                      </button>
+                    ))}
+                </div>
               </div>
               <div
                 className={`sc-cal-lane ${admin ? 'edit' : ''}`}

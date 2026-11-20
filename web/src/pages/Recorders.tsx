@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, Copy, Eraser, ImagePlus, MoreHorizontal, Pencil, Plus, RadioTower, Scissors, Search, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { CalendarClock, Copy, Eraser, ImagePlus, Pencil, Plus, RadioTower, Search, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { RecLogo } from '../ui/RecLogo';
 import { lang, locale, t, tn } from '../i18n';
@@ -12,7 +12,6 @@ import { Dropdown } from '../ui/Dropdown';
 import { NumberField, Segmented } from '../ui/fields';
 import { Field } from '../settings/ui';
 import { InfoTip } from '../ui/InfoTip';
-import { openContextMenu } from '../ui/ContextMenu';
 import type { Protocol, Recorder, RecorderStatus } from '../types';
 import { clockOf, useStreams, type StreamInfo } from '../streams';
 import { explainGuard } from '../ui/guard';
@@ -33,6 +32,7 @@ const PATTERNS: { value: string; label: string }[] = [
   { value: 'smpte', label: 'SMPTE HD bars' },
   { value: 'ebu', label: 'EBU 75 % bars' },
   { value: 'animated', label: 'Animated' },
+  { value: 'lipsync', label: 'Lip sync (timecode)' },
 ];
 const PATTERN_FORMATS = ['2160p50', '2160p25', '1080p50', '1080p25', '1080i50', '1080p5994', '1080p2997', '1080i5994', '720p50', '720p5994', '576i50', '480i5994'];
 
@@ -250,11 +250,7 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
 
   return (
     <article className="project-card">
-      <div
-        className={`sc-thumb ${st?.oldest ? 'go' : ''}`}
-        title={st?.oldest ? t('Extract') : undefined}
-        onClick={() => st?.oldest && void navigate(`/extract/${rec.id}`)}
-      >
+      <div className="sc-thumb">
         {img && state !== 'off' ? <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${recording ? tick : 0}`} alt="" onError={() => setImg(false)} /> : <div className="sc-pic lost" />}
         {state === 'nosignal' && (
           <span className="sc-onpic lostmsg">
@@ -353,44 +349,29 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
           </span>
         </div>
       </div>
-      <div className="sc-card-foot">
-        <button className="btn small" onClick={() => void navigate(`/extract/${rec.id}`)} disabled={!st?.oldest}>
-          <Scissors size={13} /> {t('Extract')}
-        </button>
-        {admin && (
-          <button className="btn small" data-tip={t('When it records: in Programmation')} onClick={() => void navigate('/schedule')}>
-            <CalendarClock size={13} /> {t('Program')}
+      {admin && (
+        <div className="sc-card-foot sc-card-icons">
+          <button className="icon-btn ghost" data-tip={t('Edit')} aria-label={t('Edit')} onClick={onEdit}>
+            <Pencil size={15} />
           </button>
-        )}
-        <div className="spacer" />
-        {admin && (
-          <>
-            <button className="icon-btn ghost" title={t('Edit')} onClick={onEdit}>
-              <Pencil size={14} />
-            </button>
-            {/* The other actions in a menu: the card stays narrow enough for four in a row. */}
-            <button
-              className="icon-btn ghost"
-              title={t('More')}
-              onClick={(e) =>
-                openContextMenu(e, [
-                  { label: t('Duplicate'), icon: <Copy size={14} />, onClick: onDuplicate },
-                  { label: t('Empty the loop'), icon: <Eraser size={14} />, onClick: () => void clearLoop(), disabled: !st?.oldest },
-                  'sep',
-                  { label: t('Delete'), icon: <Trash2 size={14} />, danger: true, onClick: () => void remove() },
-                ])
-              }
-            >
-              <MoreHorizontal size={14} />
-            </button>
-          </>
-        )}
-      </div>
+          <button className="icon-btn ghost" data-tip={t('Duplicate')} aria-label={t('Duplicate')} onClick={onDuplicate}>
+            <Copy size={15} />
+          </button>
+          <button className="icon-btn ghost" data-tip={t('Empty the loop')} aria-label={t('Empty the loop')} disabled={!st?.oldest} onClick={() => void clearLoop()}>
+            <Eraser size={15} />
+          </button>
+          <div className="spacer" />
+          <button className="icon-btn ghost danger" data-tip={t('Delete')} aria-label={t('Delete')} onClick={() => void remove()}>
+            <Trash2 size={15} />
+          </button>
+        </div>
+      )}
     </article>
   );
 }
 
-const blank: Recorder = { id: '', name: '', protocol: 'srt', url: '', mode: 'listener', port: 9000, path: 'live/stream', latency: 500, passphrase: '', iface: '', loopHours: 24, bitrate: 10, enabled: true };
+// Declarative: a new source does not record by itself (REC in Programmation).
+const blank: Recorder = { id: '', name: '', protocol: 'srt', url: '', mode: 'listener', port: 9000, path: 'live/stream', latency: 500, passphrase: '', iface: '', loopHours: 24, bitrate: 10, enabled: false };
 
 interface Space {
   capacity: number | null;
@@ -415,7 +396,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
       const listens = (from.protocol === 'rtmp' || from.protocol === 'srt') && from.mode === 'listener';
       // The copy keeps every setting; a listening one gets a free port. The passphrase is copied by the server.
       const measured = (status[from.id]?.measured ?? 0) / 1e6;
-      return { ...from, id: '', name: t('{name} (copy)', { name: from.name }), port: listens ? firstPort : from.port, bitrate: Math.round(measured * 10) / 10 || from.bitrate };
+      return { ...from, id: '', enabled: false, name: t('{name} (copy)', { name: from.name }), port: listens ? firstPort : from.port, bitrate: Math.round(measured * 10) / 10 || from.bitrate };
     }
     return { ...blank, port: firstPort, ...preset };
   });
@@ -891,7 +872,7 @@ function triable(c: Recorder): boolean {
 function useProbe(c: Recorder, on: boolean) {
   const [state, setState] = useState<{ busy: boolean; result: Probe | null; error: string }>({ busy: false, result: null, error: '' });
   const [again, setAgain] = useState(0);
-  const key = on ? JSON.stringify([c.protocol, c.url, c.mode, c.iface, c.latency, c.passphrase, (c.cookies ?? '').length, c.variant ?? '', again]) : '';
+  const key = on ? JSON.stringify([c.protocol, c.url, c.mode, c.iface, c.latency, c.passphrase, (c.cookies ?? '').length, c.variant ?? '', c.pattern ?? '', c.videoMode ?? '', c.protocol === 'pattern' ? c.name : '', again]) : '';
   useEffect(() => {
     if (!key) return setState({ busy: false, result: null, error: '' });
     let dead = false;
@@ -901,7 +882,7 @@ function useProbe(c: Recorder, on: boolean) {
         (result) => !dead && setState({ busy: false, result, error: '' }),
         (e) => !dead && setState({ busy: false, result: null, error: (e as Error).message || 'nothing received from this source' }),
       );
-    }, again ? 0 : 1200);
+    }, again || c.protocol === 'pattern' ? 0 : 1200);
     return () => {
       dead = true;
       clearTimeout(timer);
@@ -971,7 +952,11 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
                 <img src={tried.still} alt="" />
               ) : (
                 <span className={`sc-rm-note ${probe.error ? 'sc-warn-text' : 'muted'}`}>
-                  {listening
+                  {c.protocol === 'pattern'
+                    ? probe.error
+                      ? t(probe.error)
+                      : ''
+                    : listening
                     ? t('The source connects to this server: its picture shows as soon as it does, once the recorder is created.')
                     : probe.busy
                       ? c.protocol === 'web'
@@ -988,7 +973,7 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
               )}
               {tried?.still && <span className="sc-dlprev-live">{t('Preview')}</span>}
             </div>
-            {!listening && triable(cleaned(c)) && (
+            {!listening && c.protocol !== 'pattern' && triable(cleaned(c)) && (
               <span className={`sc-dlprev-state ${tried ? 'on' : ''}`}>
                 {probe.busy ? t('Trying the source…') : tried ? t('The source answers') : probe.error ? t('The source does not answer') : ''}
                 <button type="button" className="linklike" disabled={probe.busy} onClick={probe.retry} style={{ marginLeft: 8 }}>

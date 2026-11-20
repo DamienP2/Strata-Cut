@@ -1306,3 +1306,21 @@ a.btn { color: inherit; }
 .sc-cal-tile { position: absolute; bottom: 5px; height: 38px; object-fit: cover; pointer-events: none; border-right: 1px solid rgba(0, 0, 0, 0.6); box-sizing: border-box; }
 .sc-cal-hole { position: absolute; bottom: 4px; height: 40px; border-radius: 4px; pointer-events: none; background: repeating-linear-gradient(135deg, transparent 0 6px, color-mix(in srgb, var(--warn) 22%, transparent) 6px 12px); }
 .sc-cal-row .sc-cal-cont.todo { top: auto; bottom: 4px; height: 40px; }
+.sc-card-icons { gap: 4px; }
+.icon-btn.danger:hover { color: var(--live); }
+.sc-cal-ctl { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.sc-cal-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--text-3); }
+.sc-cal-status.rec { color: var(--live); }
+.sc-cal-status .sc-rec { width: 7px; height: 7px; }
+.btn.sc-cal-start .sc-rec { animation: none; }
+.sc-src-row td { background: var(--panel-2); border-top: 1px solid var(--line); padding-top: 9px; padding-bottom: 9px; }
+.sc-src-row-t { display: inline-flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.sc-src-row-t strong { font-weight: 650; }
+.sc-src-row-t .muted { font-size: 12px; }
+.st-bw-chart { flex: 1; min-height: 0; display: flex; gap: 8px; }
+.st-bw-plot { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.st-bw-plot svg { flex: 1; width: 100%; min-height: 0; display: block; }
+.st-bw-plot svg .grid { stroke: var(--line); stroke-width: 1; }
+.st-bw-plot svg .area { fill: var(--live); fill-opacity: 0.1; }
+.st-bw-x { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.st-bw-y { display: flex; flex-direction: column; justify-content: space-between; font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; padding-bottom: 18px; min-width: 26px; text-align: right; }
