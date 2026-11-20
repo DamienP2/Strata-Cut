@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, Copy, Eraser, ImagePlus, Pencil, Plus, RadioTower, Search, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { CalendarClock, Copy, Square, Eraser, ImagePlus, Pencil, Plus, RadioTower, Search, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { RecLogo } from '../ui/RecLogo';
 import { lang, locale, t, tn } from '../i18n';
@@ -229,6 +229,14 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
   const m = st?.media;
   const fmt = [scanFormat(m), m ? CODECS[m.codec] ?? m.codec.toUpperCase() : '', recording && st?.bitrate ? bitrate(st.bitrate, locale()) : ''].filter(Boolean).join(' · ');
 
+  // REC: records all the time; Stop: only during its slots (as in Programmation).
+  const setRecording = async (mode: 'continuous' | 'slots') => {
+    try {
+      await api('POST', `/api/recorders/${rec.id}/recording`, { mode });
+    } catch (e) {
+      if (!explainGuard(e)) toast(t((e as Error).message), 'error');
+    }
+  };
   const clearLoop = async () => {
     if (!(await confirmDialog({ title: t('Empty the loop of “{name}”?', { name: rec.name }), message: t('Everything recorded so far is deleted; the recording goes on. The clips stay.'), confirm: t('Empty the loop'), danger: true }))) return;
     try {
@@ -361,6 +369,15 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
             <Eraser size={15} />
           </button>
           <div className="spacer" />
+          {rec.enabled ? (
+            <button type="button" className="btn small" onClick={() => void setRecording('slots')}>
+              <Square size={11} /> {t('Stop')}
+            </button>
+          ) : (
+            <button type="button" className="btn small sc-cal-start" onClick={() => void setRecording('continuous')}>
+              <span className="sc-rec" /> REC
+            </button>
+          )}
           <button className="icon-btn ghost danger" data-tip={t('Delete')} aria-label={t('Delete')} onClick={() => void remove()}>
             <Trash2 size={15} />
           </button>
