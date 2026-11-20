@@ -13,6 +13,7 @@ pub mod probe;
 pub mod hls;
 pub mod pattern;
 pub mod logo;
+mod udp_in;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -355,6 +356,8 @@ pub struct Rec {
     pub epg_from_disk: std::sync::atomic::AtomicBool,
     /// Reception problems of the last 10 minutes (when, which), and when the log last told them.
     glitches: Mutex<(std::collections::VecDeque<(i64, Glitch)>, i64)>,
+    /// TS packets the source sent twice, dropped by the server's own UDP reception (since the last report).
+    pub dups: std::sync::atomic::AtomicU64,
     /// Where the last recording of this source ended (source time, s): what a web page gives
     /// again after a cut is not recorded twice.
     pub last_end: Mutex<Option<f64>>,
@@ -690,6 +693,13 @@ impl Manager {
         for line in glitch_lines(&recs, dropped, nic) {
             tracing::warn!("{line}");
         }
+        // Packets the source sends twice: dropped before FFmpeg (it took them for pictures: blocks).
+        for r in self.recs() {
+            let n = udp_in::take_dups(&r);
+            if n > 0 {
+                tracing::info!("{}: the source sent {n} packets twice in the last 10 minutes: dropped before recording", r.config().name);
+            }
+        }
     }
 
     fn config_path(&self) -> PathBuf {
@@ -883,6 +893,7 @@ impl Manager {
             epg_failed: false.into(),
             epg_from_disk: found_known.into(),
             glitches: Mutex::new((std::collections::VecDeque::new(), 0)),
+            dups: 0.into(),
             preview_lag: 0.into(),
             no_signal: false.into(),
             last_end: Mutex::new(None),
