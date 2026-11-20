@@ -347,7 +347,7 @@ apt_install() {
 if [ "$NO_APT" -eq 1 ]; then
   ok "installation des paquets sautée (--no-apt)"
 else
-  apt_install ca-certificates curl ffmpeg python3 cloud-guest-utils
+  apt_install ca-certificates curl ffmpeg python3 cloud-guest-utils fonts-dejavu-core
   if [ -z "$PACKAGE" ]; then apt_install git openssh-client build-essential pkg-config; fi
   ok "ffmpeg, python3 et outils de base en place"
   # Cartes DeckLink (Blackmagic) : le serveur les capture lui-même avec le SDK de Blackmagic

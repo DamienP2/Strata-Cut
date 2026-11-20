@@ -115,6 +115,9 @@ async fn run(m: &Manager, c: &RecorderConfig) -> Result<Value, String> {
             feeder = Some(web::pipe_command(m.data_dir(), c).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true).spawn().map_err(|e| format!("web: cannot start yt-dlp: {e}"))?);
         }
         web::input_args(&source)
+    } else if c.protocol == Protocol::Pattern {
+        feeder = Some(super::pattern::command(&m.ffmpeg, m.data_dir(), c).stderr(Stdio::null()).spawn().map_err(|e| format!("pattern: cannot start ffmpeg: {e}"))?);
+        super::run::input_args(c)
     } else {
         super::run::input_args(c)
     };

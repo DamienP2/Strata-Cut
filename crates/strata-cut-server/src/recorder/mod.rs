@@ -11,6 +11,7 @@ pub mod decklink;
 pub mod sdk;
 pub mod probe;
 pub mod hls;
+pub mod pattern;
 pub mod logo;
 
 use serde::{Deserialize, Serialize};
@@ -82,6 +83,8 @@ pub enum Protocol {
     Hls,
     /// An input of a Blackmagic DeckLink card (SDI, HDMI…), captured with Blackmagic's SDK.
     Decklink,
+    /// A test pattern made here (`pattern`): bars, movement, lip sync, logo, in the format chosen.
+    Pattern,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -140,6 +143,9 @@ pub struct RecorderConfig {
     /// `enabled` (continuous) false. Still received while a stream sends it somewhere.
     #[serde(default)]
     pub slots_off: bool,
+    /// Test pattern: "smpte", "ebu" or "animated" (its format: `video_mode`, its bitrate: `bitrate`).
+    #[serde(default = "smpte")]
+    pub pattern: String,
     /// HLS: the stream read when the playlist offers several (its playlist's address as written
     /// in it, see `hls`; empty: the best picture).
     #[serde(default)]
@@ -148,6 +154,9 @@ pub struct RecorderConfig {
 
 fn auto() -> String {
     "auto".into()
+}
+fn smpte() -> String {
+    "smpte".into()
 }
 fn two() -> u32 {
     2
@@ -201,6 +210,7 @@ impl RecorderConfig {
             Protocol::Srt => "srt://",
             Protocol::Web | Protocol::Hls => "https://",
             Protocol::Decklink => return decklink::validate(self),
+            Protocol::Pattern => return pattern::validate(self),
         };
         if self.protocol == Protocol::Hls {
             if !self.url.starts_with("https://") && !self.url.starts_with("http://") {

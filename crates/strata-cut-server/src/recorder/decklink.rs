@@ -971,6 +971,7 @@ mod tests {
             audio_input: "embedded".into(),
             variant: String::new(),
             slots_off: false,
+            pattern: "smpte".into(),
         }
     }
 

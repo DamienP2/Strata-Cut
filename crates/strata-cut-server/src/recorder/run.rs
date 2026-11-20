@@ -255,6 +255,11 @@ pub fn input_args(c: &RecorderConfig) -> Vec<String> {
         }
         // GStreamer's named pipe, made for each recording (record_once).
         Protocol::Decklink => String::new(),
+        // Made by its own FFmpeg, read on the standard input (record_once).
+        Protocol::Pattern => {
+            a.extend(["-f".into(), "mpegts".into()]);
+            "pipe:0".into()
+        }
     };
     a.extend(["-i".into(), url]);
     a
@@ -591,6 +596,34 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             Err(e) => {
                 finish_run(rec, &run_id);
                 return Outcome::Exited { had_data: false, message: format!("web: cannot start yt-dlp: {e}") };
+            }
+        }
+    }
+    // A test pattern: its FFmpeg feeds the receiver.
+    if cfg.protocol == Protocol::Pattern {
+        match super::pattern::command(&m.ffmpeg, m.data_dir(), cfg).spawn() {
+            Ok(mut f) => {
+                match f.stdout.take().map(TryInto::<Stdio>::try_into) {
+                    Some(Ok(out)) => stdin = out,
+                    _ => {
+                        finish_run(rec, &run_id);
+                        return Outcome::Exited { had_data: false, message: "pattern: cannot read its output".into() };
+                    }
+                }
+                if let Some(err) = f.stderr.take() {
+                    let name = cfg.name.clone();
+                    tokio::spawn(async move {
+                        let mut lines = tokio::io::BufReader::new(err).lines();
+                        while let Ok(Some(l)) = lines.next_line().await {
+                            tracing::warn!("{name}: pattern: {}", l.trim());
+                        }
+                    });
+                }
+                feeder = Some(f);
+            }
+            Err(e) => {
+                finish_run(rec, &run_id);
+                return Outcome::Exited { had_data: false, message: format!("pattern: cannot start {}: {e}", m.ffmpeg) };
             }
         }
     }
@@ -1271,7 +1304,7 @@ mod tests {
     use super::*;
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
-        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into(), variant: String::new(), slots_off: false }
+        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into(), variant: String::new(), slots_off: false, pattern: "smpte".into() }
     }
 
     #[test]

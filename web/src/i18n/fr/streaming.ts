@@ -19,6 +19,17 @@ export const streaming: Record<string, string> = {
   Program: 'Programmer',
   'Sent to {n} destination': 'Diffusée vers {n} destination',
   'Sent to {n} destinations': 'Diffusée vers {n} destinations',
+  // The test pattern
+  'Test pattern': 'Mire',
+  'lip sync': 'synchro image/son',
+  Pattern: 'Mire',
+  'SMPTE HD bars': 'Barres SMPTE HD',
+  'EBU 75 % bars': 'Barres EBU 75\u00a0%',
+  Animated: 'Animée',
+  'A flash and a beep together once a second (lip sync), something moving, a clock to the frame, the name and the logo of the source.': 'Un flash et un bip ensemble chaque seconde (synchro image/son), un élément qui bouge, une horloge à l’image près, le nom et le logo de la source.',
+  'choose the format of the test pattern': 'Choisissez le format de la mire.',
+  'choose the test pattern': 'Choisissez la mire.',
+  'the bitrate is 1 to 200 mb/s': 'Le débit va de 1 à 200\u00a0Mb/s.',
   // Destinations
   '{n} destination': '{n} destination',
   '{n} destinations': '{n} destinations',

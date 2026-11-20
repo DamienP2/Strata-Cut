@@ -1,7 +1,7 @@
 // The app's own data, as the server sends it.
 
-export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'hls' | 'web' | 'decklink';
-export const PROTOCOLS: Protocol[] = ['udp', 'rtp', 'rtmp', 'srt', 'hls', 'web'];
+export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'hls' | 'web' | 'decklink' | 'pattern';
+export const PROTOCOLS: Protocol[] = ['udp', 'rtp', 'rtmp', 'srt', 'hls', 'web', 'pattern'];
 
 /** A recorder's settings. */
 export interface Recorder {
@@ -41,6 +41,8 @@ export interface Recorder {
   audioChannels?: number;
   /** Not recorded during its slots either (Programmation: "Non enregistrée"); `enabled`: continuous. */
   slotsOff?: boolean;
+  /** Test pattern: "smpte", "ebu" or "animated" (its format: `videoMode`; its bitrate: `bitrate`). */
+  pattern?: string;
   /** HLS: the stream read when the playlist offers several (its playlist's address as written in it; empty: the best picture). */
   variant?: string;
 }

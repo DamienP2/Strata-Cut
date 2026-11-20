@@ -24,7 +24,16 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'hls', label: 'HLS stream', detail: '.m3u8' },
   { value: 'web', label: 'YouTube', detail: 'youtube.com' },
   { value: 'decklink', label: 'Hardware inputs', detail: 'SDI · HDMI' },
+  { value: 'pattern', label: 'Test pattern', detail: 'lip sync' },
 ];
+
+/** The test pattern: its styles and its formats (as the server makes them). */
+const PATTERNS: { value: string; label: string }[] = [
+  { value: 'smpte', label: 'SMPTE HD bars' },
+  { value: 'ebu', label: 'EBU 75 % bars' },
+  { value: 'animated', label: 'Animated' },
+];
+const PATTERN_FORMATS = ['2160p50', '2160p25', '1080p50', '1080p25', '1080i50', '1080p5994', '1080p2997', '1080i5994', '720p50', '720p5994', '576i50', '480i5994'];
 
 /** DeckLink: the card's inputs, the formats and the audio inputs, as the server knows them. */
 const DL_CONNECTIONS = ['auto', 'sdi', 'hdmi', 'optical-sdi', 'component', 'composite', 'svideo'];
@@ -61,6 +70,7 @@ export function sourceAddress(r: Recorder): string {
   if (r.protocol === 'rtmp' && r.mode === 'listener') return `rtmp://${host}:${r.port}/${r.path}`;
   if (r.protocol === 'srt' && r.mode === 'listener') return `srt://${host}:${r.port}`;
   if (r.protocol === 'decklink') return `${t('Input {n}', { n: (r.device ?? 0) + 1 })} · ${dlConnection(r.connection ?? 'auto')} · ${dlMode(r.videoMode ?? 'auto')}`;
+  if (r.protocol === 'pattern') return `${t(PATTERNS.find((p) => p.value === r.pattern)?.label ?? 'Test pattern')} · ${formatName(r.videoMode ?? '1080i50', lang() === 'fr')}`;
   return r.url + (r.iface && (r.protocol === 'udp' || r.protocol === 'rtp') ? ` · ${r.iface}` : '');
 }
 
@@ -496,7 +506,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label={t('Source')} group>
-            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: p.detail }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' || v === 'hls' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}) })} />
+            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: t(p.detail) }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' || v === 'hls' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}), ...(v === 'pattern' ? { pattern: c.pattern || 'smpte', videoMode: PATTERN_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080i50', bitrate: c.bitrate >= 1 && c.bitrate <= 200 ? c.bitrate : 8 } : {}) })} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
             <Field label={t('Mode')} group>
@@ -505,6 +515,18 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
           )}
           {card ? (
             <DecklinkFields c={c} set={set} info={dl} detected={detected} rec={rec} />
+          ) : c.protocol === 'pattern' ? (
+            <>
+              <Field label={t('Pattern')} group>
+                <Segmented value={c.pattern || 'smpte'} options={PATTERNS.map((p) => ({ value: p.value, label: t(p.label) }))} onChange={(v) => set({ pattern: v })} />
+              </Field>
+              <Field label={t('Format')}>
+                <Dropdown value={c.videoMode ?? '1080i50'} options={PATTERN_FORMATS.map((f) => ({ value: f, label: formatName(f, lang() === 'fr') }))} onChange={(v) => set({ videoMode: v })} />
+              </Field>
+              <Field label={t('Recording bitrate')} hint={t('A flash and a beep together once a second (lip sync), something moving, a clock to the frame, the name and the logo of the source.')}>
+                <NumberField value={c.bitrate} min={1} max={200} step={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
+              </Field>
+            </>
           ) : listens ? (
             <>
               <Field label={t('Port')}>
@@ -836,19 +858,20 @@ interface Probe {
 function sameSource(rec: Recorder | null, c: Recorder): boolean {
   if (!rec || rec.protocol !== c.protocol) return false;
   if (c.protocol === 'decklink') return rec.device === c.device;
+  if (c.protocol === 'pattern') return rec.pattern === c.pattern && rec.videoMode === c.videoMode && rec.bitrate === c.bitrate && rec.name === c.name;
   return rec.url === c.url && rec.mode === c.mode && rec.port === c.port && rec.iface === c.iface && (rec.variant ?? '') === (c.variant ?? '');
 }
 
 /** The source as written can be tried: an address of its kind, a caller (a listening one waits for its source). */
 /** How each source's address is written (shown in its field). */
-const PLACEHOLDERS: Record<Protocol, string> = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', hls: 'https://server/live/stream.m3u8', web: 'https://www.youtube.com/watch?v=…', decklink: '' };
+const PLACEHOLDERS: Record<Protocol, string> = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', hls: 'https://server/live/stream.m3u8', web: 'https://www.youtube.com/watch?v=…', decklink: '', pattern: '' };
 
 /** The address as written, made usable: no spaces around it, the scheme added when left out
  * ("1.2.3.4:9000" → "srt://1.2.3.4:9000") or written in capitals. */
 export function cleaned(c: Recorder): Recorder {
   // Spaces and invisible characters (pasted with it) are no part of an address.
   const url = c.url.replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, '');
-  if (c.protocol === 'decklink' || c.protocol === 'web') return { ...c, url };
+  if (c.protocol === 'decklink' || c.protocol === 'web' || c.protocol === 'pattern') return { ...c, url };
   if (!url) return c;
   const m = /^([a-z0-9]+):\/\//i.exec(url);
   return { ...c, url: m ? m[1].toLowerCase() + url.slice(m[1].length) : `${c.protocol === 'hls' ? 'https' : c.protocol}://${url}` };
@@ -856,6 +879,7 @@ export function cleaned(c: Recorder): Recorder {
 
 function triable(c: Recorder): boolean {
   if (c.protocol === 'decklink') return false;
+  if (c.protocol === 'pattern') return true;
   if ((c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener') return false;
   if (c.protocol === 'web') return /^https?:\/\/\S+\.\S+/.test(c.url) && platformOf(c.url) === 'youtube';
   if (c.protocol === 'hls') return /^https?:\/\/\S+\.\S+/.test(c.url);
@@ -898,7 +922,10 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
   const listening = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
   const tried = probe.result;
   const rows: [string, string][] = [];
-  if (card) {
+  if (c.protocol === 'pattern') {
+    rows.push([t('Source'), sourceAddress(c)]);
+    rows.push([t('Recording bitrate'), `${c.bitrate} Mb/s · H.264 / AAC`]);
+  } else if (card) {
     rows.push([t('Input'), input ? inputLabel(input) : t('Input {n}', { n: device + 1 })]);
     rows.push([t('Format'), detected ? formatName(detected, fr) : dlMode(c.videoMode ?? 'auto')]);
     rows.push([t('Audio'), `${dlAudioInput(c.audioInput ?? 'auto')} · ${tn((c.audioChannels ?? 2) / 2, '{n} stereo track', '{n} stereo tracks')}`]);
