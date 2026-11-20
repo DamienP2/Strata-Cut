@@ -94,7 +94,11 @@ export function Extract({ recorder }: { recorder?: string }) {
   const [last, setLast] = useDisplayPref<string | null>('extract.recorder', null);
   const known = (x?: string | null) => !!x && recorders.some((r) => r.id === x);
   const open = (x?: string | null) => known(x) && (status[x!]?.state === 'recording' || status[x!]?.oldest != null);
-  const id = known(recorder) ? recorder : open(last) ? last! : (recorders.find((r) => open(r.id)) ?? recorders[0])?.id;
+  // A source stopped with nothing recorded has nothing to show (greyed in the list): another,
+  // once the states are known.
+  const ready = Object.keys(status).length > 0;
+  const fallback = open(last) ? last! : recorders.find((r) => open(r.id))?.id;
+  const id = known(recorder) && (!ready || open(recorder) || !fallback) ? recorder : (fallback ?? recorders[0]?.id);
   useEffect(() => {
     if (id && id !== recorder) void navigate(`/extract/${id}${location.search}`, true);
     if (id && id !== last) setLast(id);
@@ -136,6 +140,12 @@ function Editor({ rec }: { rec: Recorder }) {
   const [clips, setClips] = useState<Clip[]>([]);
   const [guide, setGuide] = useState<Programme[]>([]);
   const fps = fpsOf(run?.media?.fpsNum, run?.media?.fpsDen);
+  // A live only while the source records; stopped, its last recorded frame.
+  const state = useApp((s) => s.status[rec.id]?.state);
+  const newest = useApp((s) => s.status[rec.id]?.newest ?? null);
+  const recording = state === 'recording';
+  const newestRef = useRef(newest);
+  newestRef.current = newest;
   // The source's programme guide, for the loop and a few hours ahead.
   useEffect(() => {
     let dead = false;
@@ -184,18 +194,6 @@ function Editor({ rec }: { rec: Recorder }) {
     const onPause = () => setPlaying(p.playing);
     v.addEventListener('play', onPlay);
     v.addEventListener('pause', onPause);
-    // `?at=<ms>` (from the Schedule page): that moment, else the live.
-    const at = Number(new URLSearchParams(location.search).get('at'));
-    if (at > 0) {
-      setLive(false);
-      void p.seekWall(at).then(() => {
-        if (p.run) return;
-        // That moment is no longer in the loop: the live.
-        toast(t('This moment is no longer in the loop'), 'error');
-        setLive(true);
-        void p.goLive(serverNow());
-      });
-    } else void p.goLive(serverNow());
     return () => {
       cancelAnimationFrame(frame);
       v.removeEventListener('play', onPlay);
@@ -204,6 +202,71 @@ function Editor({ rec }: { rec: Recorder }) {
       playerRef.current = null;
     };
   }, [rec.id]);
+
+  /** The newest recorded frame, paused (a source stopped: no live). */
+  const goLast = useCallback(() => {
+    const pl = playerRef.current;
+    setLive(false);
+    if (!pl || newestRef.current === null) return;
+    pl.halt();
+    // Its last frame: a moment past the end is put on it.
+    void pl.seekWall(newestRef.current);
+  }, []);
+  // Where the page starts, once the source's state is known: `?at=<ms>` (from the Schedule page),
+  // else the live while it records, else its last recorded frame.
+  const begun = useRef('');
+  // The last frame shown when the source stopped: the live again by itself when it records anew.
+  const parked = useRef<number | null>(null);
+  const was = useRef(recording);
+  useEffect(() => {
+    const pl = playerRef.current;
+    if (!pl || begun.current === rec.id || state === undefined) return;
+    begun.current = rec.id;
+    was.current = state === 'recording';
+    parked.current = null;
+    const at = Number(new URLSearchParams(location.search).get('at'));
+    if (at > 0) {
+      setLive(false);
+      void pl.seekWall(at).then(() => {
+        if (pl.run) return;
+        // That moment is no longer in the loop.
+        toast(t('This moment is no longer in the loop'), 'error');
+        if (state === 'recording') {
+          setLive(true);
+          void pl.goLive(serverNow());
+        } else goLast();
+      });
+    } else if (state === 'recording') {
+      setLive(true);
+      void pl.goLive(serverNow());
+    } else {
+      goLast();
+      // Starting, or without signal for a moment: the live, once it records.
+      if (state !== 'off') parked.current = newestRef.current;
+    }
+  }, [rec.id, state, goLast, toast]);
+  // The source stops while it is followed live: on its last frame; when it records again, back to
+  // the live by itself if the playhead was left there.
+  useEffect(() => {
+    const pl = playerRef.current;
+    if (was.current === recording || begun.current !== rec.id) {
+      was.current = recording;
+      return;
+    }
+    was.current = recording;
+    if (!pl) return;
+    if (!recording && live) {
+      goLast();
+      parked.current = newestRef.current;
+    } else if (recording && parked.current !== null) {
+      const at = parked.current;
+      parked.current = null;
+      if (pl.video.paused && Math.abs(pl.wallOf(pl.t) - at) < 2000) {
+        setLive(true);
+        void pl.goLive(serverNow());
+      }
+    }
+  }, [recording]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadSpans = useCallback(async () => {
     try {
@@ -378,6 +441,7 @@ function Editor({ rec }: { rec: Recorder }) {
     else pl.play();
   };
   const goLive = () => {
+    if (!recording) return;
     setLive(true);
     void p()?.goLive(serverNow());
   };
@@ -487,6 +551,22 @@ function Editor({ rec }: { rec: Recorder }) {
               </div>
             )}
             {run?.audio && <Meters out={audio.out} />}
+            {/* Over the picture, top left: on the live, a red badge; behind it, how far, and the way back.
+                A source that does not record has no live: nothing. */}
+            {recording && (
+              <div className="sc-live-pin">
+                {live && ago < 30_000 ? (
+                  <span className="sc-live-on" data-tip={t('The newest frames, as they are recorded')}>
+                    <span className="sc-rec" /> {t('LIVE')}
+                  </span>
+                ) : (
+                  <button className="btn sc-live-go" data-tip={t('Back to live')} data-keys="⇧ L" onClick={goLive}>
+                    <ChevronsRight size={14} /> {t('Live')}
+                    {pos && <span className="sc-live-behind">{behind(ago)}</span>}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
         <div className="sc-transport">
@@ -523,18 +603,6 @@ function Editor({ rec }: { rec: Recorder }) {
           </button>
           <div className="spacer" />
           <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
-          <div className="sc-sep" />
-          {/* As before: on the live, a red badge; behind it, how far, and the way back. */}
-          {live && ago < 30_000 ? (
-            <span className="sc-live-on" data-tip={t('The newest frames, as they are recorded')}>
-              <span className="sc-rec" /> {t('LIVE')}
-            </span>
-          ) : (
-            <button className="btn sc-live-go" data-tip={t('Back to live')} data-keys="⇧ L" onClick={goLive}>
-              <ChevronsRight size={14} /> {t('Live')}
-              {pos && <span className="sc-live-behind">{behind(ago)}</span>}
-            </button>
-          )}
         </div>
         {/* The clip: its in and out (the timeline's E and S), its length, its name. */}
         <div className="sc-clipbar">

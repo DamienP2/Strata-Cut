@@ -430,7 +430,7 @@ a.btn { text-decoration: none; }
 .sc-center { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: radial-gradient(ellipse at top, #141725 0%, #0b0c12 60%); }
 .sc-viewer-wrap { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 16px 16px 10px; }
 .sc-viewer { position: relative; height: 100%; max-height: 100%; aspect-ratio: 16 / 9; max-width: 100%; background: #000; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); color: var(--text); }
-.sc-transport { flex: none; display: flex; align-items: center; gap: 14px; padding: 4px 16px 12px; }
+.sc-transport { flex: none; display: flex; align-items: center; gap: 10px; padding: 4px 16px 12px; }
 .sc-tc-big { font: 600 22px var(--mono); letter-spacing: 0.02em; font-variant-numeric: tabular-nums; color: var(--text); }
 .sc-tc-big small { font-size: 12px; color: var(--text-3); margin-left: 6px; font-weight: 500; }
 .sc-ctrls { display: flex; align-items: center; gap: 4px; }
@@ -606,7 +606,7 @@ a.btn { color: inherit; }
 /* VU-meters over the picture, volume */
 .sc-meters { position: absolute; z-index: 1; right: 8px; top: 36px; height: calc(100% - 72px); width: 48px; border-radius: 6px; background: rgba(5, 6, 10, 0.72); backdrop-filter: blur(4px); pointer-events: none; }
 .sc-volume { display: flex; align-items: center; gap: 2px; flex: none; }
-.sc-volume input[type='range'] { width: 84px; min-height: 0; padding: 0; border: none; background: none; }
+.sc-volume input[type='range'] { width: 72px; min-height: 0; padding: 0; border: none; background: none; }
 
 /* Clip player */
 .sc-clip-modal { width: min(1040px, 100%); gap: 10px; }
@@ -844,7 +844,7 @@ a.btn { color: inherit; }
 .ctl.primary { width: 56px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .ctl.primary:hover:not(:disabled) { background: var(--accent-2); }
 .sc-live-ctl.is-live::after { content: ''; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--live); box-shadow: 0 0 6px var(--live); }
-.sc-transport .sc-ctrls { gap: 6px; }
+.sc-transport .sc-ctrls { gap: 4px; }
 .sc-transport .sc-sep { height: 26px; }
 .sc-clipbar { flex: none; display: flex; align-items: center; gap: 10px; margin: 0 16px 12px; padding: 8px 10px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
 .sc-clipbar-l { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
@@ -987,7 +987,16 @@ a.btn { color: inherit; }
 .tab-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent); color: var(--on-accent); font-size: var(--fs-11); font-weight: 700; display: inline-grid; place-items: center; }
 /* Narrow centre column: the transport goes on a second line rather than cutting the live button. */
 .sc-transport { flex-wrap: wrap; row-gap: 8px; }
-.sc-transport .sc-live-go, .sc-transport .sc-live-on { flex: none; margin-left: auto; }
+/* Small screens: the transport still holds on one line. */
+@media (max-width: 1360px) {
+  .sc-tc-big { font-size: 19px; }
+  .sc-volume input[type='range'] { width: 56px; }
+}
+/* The live badge sits on the picture: it comes and goes without moving the transport. */
+.sc-live-pin { position: absolute; z-index: 2; top: 10px; left: 10px; display: flex; }
+.sc-live-pin .sc-live-on { height: 30px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4); }
+.sc-live-pin .sc-live-go { height: 30px; background: rgba(5, 6, 10, 0.78); backdrop-filter: blur(4px); color: #fff; }
+.sc-live-pin .sc-live-go:hover:not(:disabled) { background: color-mix(in srgb, var(--live) 40%, rgba(5, 6, 10, 0.85)); }
 .sc-xbtn.busy, .sc-xbtn.busy:hover:not(:disabled) { background: var(--panel-3); color: var(--text); border-color: var(--accent); }
 .sc-xbtn.busy:hover:not(:disabled) { background: var(--accent-soft); }
 /* Système › Matériel: an adopted card the driver did not list at the last search. */

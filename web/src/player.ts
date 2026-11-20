@@ -447,7 +447,8 @@ export class LoopPlayer {
     const inRun = r && wall >= r.from && wall < r.to + (r.live ? 10_000 : 0);
     if (!inRun) {
       const runs = await this.fetchInfo(wall - 60_000, wall + 60_000);
-      const target = runs.find((x) => wall >= x.from && wall < x.to) ?? runs.find((x) => x.from > wall) ?? runs.at(-1);
+      // A moment at a recording's very end (its last frame) is still that recording's.
+      const target = runs.find((x) => wall >= x.from && wall <= x.to) ?? runs.find((x) => x.from > wall) ?? runs.at(-1);
       if (!target) return;
       await this.open(target);
       r = this.run;
@@ -475,6 +476,21 @@ export class LoopPlayer {
     if (scrub && !play && this.video.paused) this.onScrub(t);
     await this.fill(t);
     if (this.alive.dead) return;
+    // A recording's last frame can end a little before what its segment announces: past what the
+    // browser holds, the picture would stay black; the last frame it holds instead.
+    const b = this.video.buffered;
+    const at = t - this.base;
+    let held = false;
+    for (let i = 0; i < b.length; i++) if (at >= b.start(i) && at < b.end(i)) held = true;
+    if (!held && b.length) {
+      let end = -1;
+      for (let i = 0; i < b.length; i++) if (b.end(i) <= at + 1e-6 && b.end(i) > end) end = b.end(i);
+      if (end >= 0 && at - end < 0.5) {
+        t = this.snap(end - 1 / this.fps + this.base + 0.001);
+        this.t = t;
+        this.onFrame(this.wallOf(t), t);
+      }
+    }
     // A hair after the frame's start so that this very frame is shown.
     this.video.currentTime = t - this.base + 0.001;
     if (play) await this.video.play().catch(() => {});
