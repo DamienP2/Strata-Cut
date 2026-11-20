@@ -85,10 +85,11 @@ class Buffer {
 }
 
 /** A run the browser can play: its preview has a picture already, and a few seconds of it. */
-/** Live: how far behind the newest fragment it plays (s). Smooth before near: a few seconds
- * behind, within what is recorded (the playhead stays on the stills), never waiting for the
- * next fragment. It grows at each stall (a server or a network slower than that), and comes
- * back down slowly once all goes well. */
+/** Live: how far behind the newest fragment it plays (s): a time delay. Smooth before near: a
+ * few seconds behind, within what is recorded (the playhead stays on the stills), never
+ * waiting for the next fragment. It grows at each stall (a server or a network slower than
+ * that), and comes back down slowly once all goes well (taken at the next jump: the speed
+ * never changes). */
 const LIVE_DELAY = 7.0;
 const LIVE_DELAY_MIN = 6.0;
 const LIVE_DELAY_MAX = 15.0;
@@ -124,8 +125,6 @@ export class LoopPlayer {
   /** Live: when the picture last moved (server ms), to start again if it stays stuck. */
   private moved = 0;
   private lastTime = -1;
-  /** Live: its speed nudged (a few %) to hold LIVE_DELAY without a jump. */
-  private nudged = false;
   /** Live: the delay held now (s), and when it last stalled (server ms). */
   private delay = LIVE_DELAY;
   private stalledAt = 0;
@@ -339,10 +338,6 @@ export class LoopPlayer {
 
   private async refreshNow() {
     const r = this.run;
-    if (!this.live && this.nudged) {
-      this.nudged = false;
-      if (Math.abs(this.video.playbackRate - 1) < 0.1) this.video.playbackRate = 1;
-    }
     if (!r || this.alive.dead) return;
     // Live: when the source came back, the recording goes on in a new run.
     if (this.live) {
@@ -393,15 +388,16 @@ export class LoopPlayer {
       const delay = this.delay;
       const behind = edge - (this.video.currentTime + this.base);
       const stalled = this.video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA;
-      if (behind > delay + 8 || (stalled && behind > delay + 1)) {
-        this.video.playbackRate = 1;
+      // Always at its own speed: a speed changed now and then to hold the delay made the browser
+      // stretch the sound each time (the edge moves by whole fragments, so the speed changed
+      // several times a second): crackles heard in the live only. It plays at 1 and is put back
+      // LIVE_DELAY behind the edge (one jump) only when it drifted far: far behind, stalled
+      // with the edge further, or so near the edge that it would stall.
+      if (this.video.playbackRate !== 1) this.video.playbackRate = 1;
+      if (behind > delay + 6 || behind < 2.5 || (stalled && behind > delay + 1)) {
         this.seekedAt = this.now();
         this.video.currentTime = edge - delay - this.base;
         void this.video.play().catch(() => {});
-      } else {
-        // Gently: never slower than 0.95 nor faster than 1.05 (no heard change).
-        this.video.playbackRate = behind > delay + 0.5 ? 1.05 : behind < delay - 0.5 ? 0.95 : 1;
-        this.nudged = true;
       }
     }
   }
