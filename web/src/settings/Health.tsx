@@ -5,7 +5,7 @@ import { Download, Eraser, HeartPulse, Pause, Play, ScrollText, Search, Triangle
 import { locale, t, tn } from '../i18n';
 import { api, useApp } from '../store';
 import { PageHead, SubTabs } from '../pages/SidePage';
-import { Performance } from './Performance';
+import { useMetrics, watchMetrics } from '../ui/metrics';
 import { useDisplayPref } from '../displayPrefs';
 import { Dropdown } from '../ui/Dropdown';
 import { Empty } from '../ui/Empty';
@@ -36,18 +36,9 @@ export function Health() {
     });
   }, []);
 
-  const sub = health
-    ? [
-        t('Running for {time}', { time: formatDuration(health.uptimeSecs) }),
-        tn(health.crashes, '{n} crash', '{n} crashes'),
-        tn(health.errors, '{n} error', '{n} errors'),
-        tn(health.warnings, '{n} warning', '{n} warnings'),
-      ].join(' · ')
-    : undefined;
-
   return (
     <>
-      <PageHead title={t('Health')} sub={sub}>
+      <PageHead title={t('Health')}>
         <button className="btn" onClick={() => void clearJournal()}>
           <Eraser size={14} /> {t('Empty the journal')}
         </button>
@@ -55,7 +46,7 @@ export function Health() {
           <Download size={14} /> {t('Export')}
         </a>
       </PageHead>
-      <Performance />
+      <Tiles />
       <SubTabs<Tab>
         value={tab}
         onChange={setTab}
@@ -74,6 +65,48 @@ export function Health() {
 const LEVEL_CLASS: Record<Incident['level'], string> = { CRASH: 'crash', ERROR: 'bad', WARN: 'warn' };
 const LEVEL_LABEL: Record<Incident['level'], string> = { CRASH: 'Crash', ERROR: 'Error', WARN: 'Warning' };
 
+/** The server at a glance: how long it runs, what went wrong, its load. */
+function Tiles() {
+  const health = useHealth((s) => s.health);
+  const m = useMetrics((s) => s.metrics?.machine);
+  useEffect(() => watchMetrics(), []);
+  const mem = m && m.memTotal ? (m.memUsed / m.memTotal) * 100 : null;
+  const disk = health && health.disk.total ? ((health.disk.total - health.disk.free) / health.disk.total) * 100 : null;
+  const tone = (pct: number | null) => (pct === null ? '' : pct >= 90 ? 'bad' : pct >= 75 ? 'warn' : 'ok');
+  const gauge = (label: string, pct: number | null, sub?: string) => (
+    <div className={`hl-tile ${tone(pct)}`}>
+      <span className="hl-tile-l">{label}</span>
+      <b>{pct === null ? '—' : `${Math.round(pct)} %`}</b>
+      <span className="hl-bar">
+        <span style={{ width: `${Math.min(100, pct ?? 0)}%` }} />
+      </span>
+      {sub && <span className="hl-tile-s">{sub}</span>}
+    </div>
+  );
+  const count = (label: string, n: number | undefined, cls: string, sub?: string) => (
+    <div className={`hl-tile ${n ? cls : 'ok'}`}>
+      <span className="hl-tile-l">{label}</span>
+      <b>{n ?? '—'}</b>
+      {sub && <span className="hl-tile-s">{sub}</span>}
+    </div>
+  );
+  return (
+    <div className="hl-tiles">
+      <div className="hl-tile">
+        <span className="hl-tile-l">{t('Running for')}</span>
+        <b>{health ? formatDuration(health.uptimeSecs) : '—'}</b>
+        {health && <span className="hl-tile-s">{t('version {v}', { v: health.version })}</span>}
+      </div>
+      {count(t('Crashes'), health?.crashes, 'bad')}
+      {count(t('Errors'), health?.errors, 'bad', health?.lastHourErrors ? t('{n} in the last hour', { n: health.lastHourErrors }) : undefined)}
+      {count(t('Warnings'), health?.warnings, 'warn')}
+      {gauge(t('Processor'), m ? m.cpu : null, m ? tn(m.cores, '{n} core', '{n} cores') : undefined)}
+      {gauge(t('Memory'), mem)}
+      {gauge(t('Disk'), disk)}
+    </div>
+  );
+}
+
 function Incidents({ list }: { list: Incident[] | null }) {
   if (!list) return <div className="loading">{t('Loading…')}</div>;
   if (!list.length)
@@ -82,36 +115,41 @@ function Incidents({ list }: { list: Incident[] | null }) {
         <Empty icon={HeartPulse} text={t('No incident')} />
       </div>
     );
+  // The same incident told with another memory address ("[tcp @ 0x55…]") is one.
+  const merged: Incident[] = [];
+  const at = new Map<string, number>();
+  for (const i of list) {
+    const key = `${i.level}|${i.title.replace(/0x[0-9a-f]+/gi, '')}`;
+    const k = at.get(key);
+    if (k === undefined) {
+      at.set(key, merged.length);
+      merged.push({ ...i });
+    } else {
+      const m = merged[k];
+      m.count += i.count;
+      if (new Date(i.last).getTime() > new Date(m.last).getTime()) m.last = i.last;
+      if (new Date(i.first).getTime() < new Date(m.first).getTime()) m.first = i.first;
+    }
+  }
   return (
-    <table className="user-table incident-table">
-      <thead>
-        <tr>
-          <th>{t('Level')}</th>
-          <th>{t('Incident')}</th>
-          <th className="num">{t('Times')}</th>
-          <th>{t('Last')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {list.map((i, k) => (
-          <tr key={k}>
-            <td>
-              <span className={`badge ${LEVEL_CLASS[i.level] ?? ''}`}>{t(LEVEL_LABEL[i.level] ?? i.level)}</span>
-            </td>
-            <td className="incident-text">
+    <div className="hl-incs">
+      {merged.map((i, k) => {
+        const detail = i.detail && i.detail.trim() !== i.title.trim() && !i.title.includes(i.detail.trim()) ? i.detail : '';
+        return (
+          <div key={k} className={`hl-inc ${LEVEL_CLASS[i.level] ?? ''}`}>
+            <span className={`badge ${LEVEL_CLASS[i.level] ?? ''}`}>{t(LEVEL_LABEL[i.level] ?? i.level)}</span>
+            <div className="hl-inc-main">
               <strong>{i.title}</strong>
-              {i.detail && <span className="muted">{i.detail}</span>}
-            </td>
-            <td className="num">{i.count}</td>
-            <td title={i.first !== i.last ? t('First: {date}', { date: formatDateTime(i.first) }) : undefined}>
-              <span className="muted">{formatDateTime(i.last)}</span>
-              <br />
-              <span className="muted small">{timeAgo(i.last)}</span>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+              {detail && <span className="muted">{detail}</span>}
+            </div>
+            <div className="hl-inc-side" title={i.first !== i.last ? t('First: {date}', { date: formatDateTime(i.first) }) : formatDateTime(i.last)}>
+              {i.count > 1 && <b>×{i.count}</b>}
+              <span>{timeAgo(i.last)}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

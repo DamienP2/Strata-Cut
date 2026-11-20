@@ -1,12 +1,11 @@
 /* Système › Serveur › Maintenance: the updates, the restart, the system. */
 import { useState } from 'react';
-import { Cpu, RotateCcw } from 'lucide-react';
+import { RotateCcw } from 'lucide-react';
 import { t } from '../i18n';
 import { api, useApp } from '../store';
 import { PageHead } from '../pages/SidePage';
 import { formatDuration } from '../ui/format';
 import { showError } from '../ui/serverError';
-import { Card } from './ui';
 import { useServerConfig } from './serverConfig';
 import { Updates } from './Updates';
 
@@ -28,41 +27,45 @@ export function Maintenance() {
 
   return (
     <>
-      <PageHead
-        title={t('Maintenance')}
-        sub={info && t('Strata Cut {version} · {machine} · {os}/{arch} · running for {time}', { version: info.version, machine: info.hostname, os: info.os, arch: info.arch, time: formatDuration(info.uptimeSecs) })}
-      >
+      <PageHead title={t('Maintenance')}>
         <button type="button" className="btn" disabled={busy} onClick={() => void restart()}>
           <RotateCcw size={14} className={busy ? 'spin' : undefined} /> {t('Restart')}
         </button>
       </PageHead>
-      <Updates />
-      {!info ? (
-        <div className="loading">{t('Loading…')}</div>
-      ) : (
-        <Card icon={<Cpu size={16} />} title={t('System')}>
-          <dl className="sys-list">
-            <dt>{t('Version')}</dt>
-            <dd>{info.version}</dd>
-            <dt>{t('Machine')}</dt>
-            <dd>
-              {info.hostname} · {info.os}/{info.arch}
-            </dd>
-            <dt>{t('Data folder')}</dt>
-            <dd>
-              <code>{info.dataDir}</code>
-            </dd>
-            <dt>{t('Listening on')}</dt>
-            <dd>
-              <code>{info.bind}</code>
-            </dd>
-            <dt>{t('CPU threads')}</dt>
-            <dd>{info.cpus}</dd>
-            <dt>{t('Running for')}</dt>
-            <dd>{formatDuration(info.uptimeSecs)}</dd>
-          </dl>
-        </Card>
+      {/* The server at a glance, then its updates. */}
+      {info && (
+        <div className="hl-tiles mt-tiles">
+          <div className="hl-tile">
+            <span className="hl-tile-l">{t('Version')}</span>
+            <b>{info.version}</b>
+            <span className="hl-tile-s">
+              {info.os}/{info.arch}
+            </span>
+          </div>
+          <div className="hl-tile">
+            <span className="hl-tile-l">{t('Running for')}</span>
+            <b>{formatDuration(info.uptimeSecs)}</b>
+          </div>
+          <div className="hl-tile">
+            <span className="hl-tile-l">{t('Machine')}</span>
+            <b title={info.hostname}>{info.hostname}</b>
+            <span className="hl-tile-s">{t('{n} CPU threads', { n: info.cpus })}</span>
+          </div>
+          <div className="hl-tile wide">
+            <span className="hl-tile-l">{t('Listening on')}</span>
+            <b className="mono" title={info.bind}>
+              {info.bind}
+            </b>
+          </div>
+          <div className="hl-tile wide">
+            <span className="hl-tile-l">{t('Data folder')}</span>
+            <b className="mono" title={info.dataDir}>
+              {info.dataDir}
+            </b>
+          </div>
+        </div>
       )}
+      <Updates />
     </>
   );
 }
