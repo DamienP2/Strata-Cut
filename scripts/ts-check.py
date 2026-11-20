@@ -8,7 +8,7 @@ avant.
     python3 ts-check.py 239.1.1.10:1234                 # 60 s, la carte par défaut
     python3 ts-check.py 239.1.1.10:1234 -i 10.0.0.5 -t 300
 
-Aucune dépendance (Python 3.6 et plus). Toutes les 10 s : paquets manquants (en combien de
+Aucune dépendance (Python 3.6 et plus ; Linux, macOS). Toutes les 10 s : paquets manquants (en combien de
 moments, et combien au plus d'un coup), reçus deux fois, marqués en erreur par la source.
 """
 import argparse
@@ -29,7 +29,18 @@ def main():
 
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32 << 20)
+    # Le plus grand tampon que le système accepte (macOS en refuse de trop grands).
+    for size in (32 << 20, 8 << 20, 4 << 20, 2 << 20, 1 << 20):
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, size)
+            break
+        except OSError:
+            continue
+    if hasattr(socket, "SO_REUSEPORT"):
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)  # macOS : à côté de VLC
+        except OSError:
+            pass
     multicast = 224 <= int(host.split(".")[0]) <= 239
     s.bind((host if multicast else "0.0.0.0", port))
     if multicast:
