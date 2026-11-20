@@ -1249,30 +1249,35 @@ fn udp_dropped() -> Option<u64> {
     values.split_whitespace().nth(i)?.parse().ok()
 }
 
-/// The packets the network cards dropped since the system started (their receive rings full:
-/// lost before any program sees them), from /proc/net/dev ("drop" and "fifo" received, the
-/// loopback left out), with those the kernel's backlog dropped; None elsewhere.
+/// The packets the network cards dropped since the system started, their receive rings full
+/// (lost before any program sees them: "missed", "fifo" and "over" errors of each card in
+/// /sys/class/net), with those the kernel's backlog dropped; None elsewhere. Not the cards'
+/// "dropped": it also counts the frames the system ignores on purpose (the switch's own
+/// messages, protocols it does not speak).
 fn nic_dropped() -> Option<u64> {
-    let text = std::fs::read_to_string("/proc/net/dev").ok()?;
+    let cards = nic_overflows_in(Path::new("/sys/class/net"))?;
     // And the kernel's queue behind them (its backlog full: /proc/net/softnet_stat, 2nd column).
     let backlog = std::fs::read_to_string("/proc/net/softnet_stat").map(|t| softnet_dropped_in(&t)).unwrap_or(0);
-    Some(nic_dropped_in(&text) + backlog)
+    Some(cards + backlog)
 }
 
 fn softnet_dropped_in(text: &str) -> u64 {
     text.lines().filter_map(|l| l.split_whitespace().nth(1)).filter_map(|x| u64::from_str_radix(x, 16).ok()).sum()
 }
 
-fn nic_dropped_in(text: &str) -> u64 {
-    text.lines()
-        .filter_map(|l| l.split_once(':'))
-        .filter(|(name, _)| name.trim() != "lo")
-        .filter_map(|(_, v)| {
-            // Received: bytes packets errs drop fifo frame compressed multicast.
-            let f: Vec<u64> = v.split_whitespace().take(5).filter_map(|x| x.parse().ok()).collect();
-            (f.len() == 5).then(|| f[3] + f[4])
-        })
-        .sum()
+/// The ring overflows of the cards under `root` (those with a device: not the loopback, bridges, taps).
+fn nic_overflows_in(root: &Path) -> Option<u64> {
+    let mut sum = 0;
+    for e in std::fs::read_dir(root).ok()?.flatten() {
+        let dir = e.path();
+        if !dir.join("device").exists() {
+            continue;
+        }
+        for k in ["rx_missed_errors", "rx_fifo_errors", "rx_over_errors"] {
+            sum += std::fs::read_to_string(dir.join("statistics").join(k)).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(0);
+        }
+    }
+    Some(sum)
 }
 
 /// The journal's lines for the reception problems of the last 10 minutes (by recorder: when and
@@ -1339,13 +1344,22 @@ mod glitch_tests {
 
     #[test]
     fn nic_drops() {
-        let dev = "Inter-|   Receive                                                |  Transmit
- face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
-    lo: 1000 10 0 7 0 0 0 0 1000 10 0 0 0 0 0 0
-  eth0: 900000 800 0 3 2 0 0 50 1000 10 0 0 0 0 0 0
-  eth1: 900000 800 1 1 0 0 0 50 1000 10 0 0 0 0 0 0
-";
-        assert_eq!(nic_dropped_in(dev), 6);
+        let root = std::env::temp_dir().join(format!("sc-nic-{}", std::process::id()));
+        let card = |name: &str, device: bool, missed: &str| {
+            let d = root.join(name).join("statistics");
+            std::fs::create_dir_all(&d).unwrap();
+            if device {
+                std::fs::create_dir_all(root.join(name).join("device")).unwrap();
+            }
+            std::fs::write(d.join("rx_missed_errors"), missed).unwrap();
+            std::fs::write(d.join("rx_fifo_errors"), "1\n").unwrap();
+            std::fs::write(d.join("rx_dropped"), "939\n").unwrap();
+        };
+        card("ens18", true, "4\n");
+        card("lo", false, "50\n");
+        // The ignored frames ("dropped") and the cards without a device are not counted.
+        assert_eq!(nic_overflows_in(&root), Some(5));
+        let _ = std::fs::remove_dir_all(&root);
         assert_eq!(softnet_dropped_in("0001a2b3 00000010 00000000\n0001a2b3 00000002 00000001\n"), 18);
     }
 }
