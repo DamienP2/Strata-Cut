@@ -40,18 +40,21 @@ pub enum Role {
     Admin,
     /// Cuts clips and manages them.
     Operator,
+    /// Sends the sources live to the destinations (Streamer).
+    Streamer,
     /// Watches the loops and downloads clips.
     Viewer,
 }
 
 impl Role {
-    pub const ALL: [Role; 3] = [Role::Admin, Role::Operator, Role::Viewer];
+    pub const ALL: [Role; 4] = [Role::Admin, Role::Operator, Role::Streamer, Role::Viewer];
 
-    /// Higher is more rights (admin > operator > viewer).
+    /// Higher is more rights (admin > operator > streamer > viewer).
     pub fn rank(self) -> u8 {
         match self {
-            Role::Admin => 3,
-            Role::Operator => 2,
+            Role::Admin => 4,
+            Role::Operator => 3,
+            Role::Streamer => 2,
             Role::Viewer => 1,
         }
     }
@@ -59,6 +62,7 @@ impl Role {
         match self {
             Role::Admin => "admin",
             Role::Operator => "operator",
+            Role::Streamer => "streamer",
             Role::Viewer => "viewer",
         }
     }
@@ -102,9 +106,13 @@ impl User {
     pub fn is_admin(&self) -> bool {
         self.role == Role::Admin
     }
-    /// Admins and operators cut clips.
+    /// May this account do this (`crate::roles::PERMS`)? An admin may do everything.
+    pub fn can(&self, perm: &str) -> bool {
+        crate::roles::allowed(self.role, perm)
+    }
+    /// Makes clips.
     pub fn can_extract(&self) -> bool {
-        matches!(self.role, Role::Admin | Role::Operator)
+        self.can("extract.cut")
     }
     pub fn name(&self) -> &str {
         if self.display_name.is_empty() { &self.username } else { &self.display_name }
@@ -142,6 +150,8 @@ pub struct PublicUser {
     pub theme: String,
     pub sso: bool,
     pub role_fixed: bool,
+    /// What its role lets it do (the interface shows only that).
+    pub perms: Vec<String>,
 }
 
 impl From<&User> for PublicUser {
@@ -156,6 +166,7 @@ impl From<&User> for PublicUser {
             theme: u.theme.clone(),
             sso: !u.sso.is_empty(),
             role_fixed: u.role_fixed,
+            perms: crate::roles::of(u.role),
         }
     }
 }

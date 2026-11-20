@@ -443,7 +443,6 @@ function Editor({ rec }: { rec: Recorder }) {
     return () => removeEventListener('keydown', onKey);
   });
 
-  const admin = can.admin(user);
   const frames = mIn && mOut && mIn.run === mOut.run && mOut.t >= mIn.t ? Math.round((mOut.t - mIn.t) * fps) + 1 : 0;
   const canCut = can.extract(user) && (kind === 'image' ? !!pos && !hole && !!pos.run : frames > 0);
   const cut = async () => {
@@ -589,7 +588,7 @@ function Editor({ rec }: { rec: Recorder }) {
       {previewing && mIn && mOut && (
         <ClipPreview recId={rec.id} name={name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}`} from={mIn} to={mOut} fps={fps} timezone={timezone} sound={kind === 'audio'} onClose={() => setPreviewing(false)} />
       )}
-      <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={admin} act={act} />
+      <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={can.has(user, 'schedule.edit')} act={act} />
     </>
   );
 }

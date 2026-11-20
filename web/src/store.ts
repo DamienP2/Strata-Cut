@@ -4,8 +4,8 @@ import { pickedByHand, lang, setLang } from './i18n';
 import { setTheme } from './theme';
 import type { Recorder, RecorderStatus, Job } from './types';
 
-export type Role = 'admin' | 'operator' | 'viewer';
-export const ROLES: Role[] = ['admin', 'operator', 'viewer'];
+export type Role = 'admin' | 'operator' | 'streamer' | 'viewer';
+export const ROLES: Role[] = ['admin', 'operator', 'streamer', 'viewer'];
 
 export interface PublicUser {
   id: string;
@@ -17,6 +17,8 @@ export interface PublicUser {
   theme: string;
   sso: boolean;
   roleFixed: boolean;
+  /** What its role lets it do (Système › Accès › Rôles): "extract.cut", "stream.run"… */
+  perms?: string[];
 }
 
 export interface AuthState {
@@ -36,7 +38,9 @@ export interface Toast {
 /** What a role may do (mirrors the server's checks). */
 export const can = {
   admin: (u: PublicUser | null | undefined) => u?.role === 'admin',
-  extract: (u: PublicUser | null | undefined) => u?.role === 'admin' || u?.role === 'operator',
+  /** A right of its role (an admin has them all). */
+  has: (u: PublicUser | null | undefined, perm: string) => u?.role === 'admin' || !!u?.perms?.includes(perm),
+  extract: (u: PublicUser | null | undefined) => u?.role === 'admin' || !!u?.perms?.includes('extract.cut'),
 };
 
 export class ApiError extends Error {

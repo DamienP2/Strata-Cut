@@ -4,7 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { loadDisplayPrefs, useDisplayPrefs } from './displayPrefs';
 import { t, useLang } from './i18n';
 import { navigate, useRoute, type Route } from './router';
-import { can, useApp } from './store';
+import { api, can, useApp, useChanged, type AuthState } from './store';
 import { Brand } from './ui/Brand';
 import { ContextMenuHost } from './ui/ContextMenu';
 import { CrashBanner } from './ui/CrashBanner';
@@ -81,7 +81,17 @@ function Shell({ route }: { route: Route }) {
   const admin = can.admin(user);
   const health = useHealth((s) => s.health);
   const system = visibleSystem(user).length > 0;
-  const streamer = can.extract(user);
+  // The pages its role opens (Système › Accès › Rôles).
+  const pages = {
+    schedule: can.has(user, 'schedule.view'),
+    extract: can.has(user, 'extract.view'),
+    streamer: can.has(user, 'stream.view'),
+    clips: can.has(user, 'clips.view'),
+  };
+  const home = pages.extract ? '/extract' : pages.schedule ? '/schedule' : pages.streamer ? '/streamer' : pages.clips ? '/clips' : '/help';
+  const streamer = pages.streamer;
+  // Its rights changed (Système › Accès › Rôles): its account asked again.
+  useChanged('roles', () => void api<AuthState>('GET', '/api/auth/state').then((a) => useApp.setState({ auth: a }), () => {}));
   // The extractions under way, on the Clips tab (seen from every page).
   const extracting = useApp((s) => s.jobs.filter((j) => j.state === 'queued' || j.state === 'running').length);
 
@@ -91,12 +101,12 @@ function Shell({ route }: { route: Route }) {
 
   // A page this user may not open goes back home.
   useEffect(() => {
-    if (route.page === 'system' && !system) void navigate('/extract', true);
-    else if (route.page === 'streamer' && !streamer) void navigate('/extract', true);
-    // The sources are in Système now; the home is Extraction.
-    else if (route.page === 'recorders') void navigate(system ? '/system/sources' : '/extract', true);
-    else if (route.page === 'home') void navigate('/extract', true);
-  }, [route.page, system, streamer]);
+    const closed = (route.page === 'system' && !system) || (route.page in pages && !pages[route.page as keyof typeof pages]);
+    if (closed) void navigate(home, true);
+    // The sources are in Système now; the home: the first page its role opens.
+    else if (route.page === 'recorders') void navigate(system ? '/system/sources' : home, true);
+    else if (route.page === 'home') void navigate(home, true);
+  }, [route.page, system, home]); // eslint-disable-line react-hooks/exhaustive-deps
 
   let page: React.ReactNode;
   switch (route.page) {
@@ -127,10 +137,10 @@ function Shell({ route }: { route: Route }) {
       <nav className="topbar">
         <Brand />
         <div className="tabs home-tabs">
-          <Tab on={route.page === 'schedule'} icon={<CalendarClock size={14} />} label={t('Schedule')} path="/schedule" />
-          <Tab on={route.page === 'extract'} icon={<Scissors size={14} />} label={t('Extraction')} path="/extract" />
+          {pages.schedule && <Tab on={route.page === 'schedule'} icon={<CalendarClock size={14} />} label={t('Schedule')} path="/schedule" />}
+          {pages.extract && <Tab on={route.page === 'extract'} icon={<Scissors size={14} />} label={t('Extraction')} path="/extract" />}
           {streamer && <Tab on={route.page === 'streamer'} icon={<Radio size={14} />} label={t('Streamer')} path="/streamer" />}
-          <Tab on={route.page === 'clips'} icon={<Clapperboard size={14} />} label={t('Clips')} path="/clips" count={extracting} />
+          {pages.clips && <Tab on={route.page === 'clips'} icon={<Clapperboard size={14} />} label={t('Clips')} path="/clips" count={extracting} />}
           {system && <Tab on={route.page === 'system'} icon={<Server size={14} />} label={t('System')} path="/system" dot={admin && needsLook(health)} />}
         </div>
         <div className="spacer" />

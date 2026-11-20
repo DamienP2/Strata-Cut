@@ -515,6 +515,10 @@ pub fn routes() -> Router<Shared> {
 /// The clips this account sees: its own, those shared with it (an admin: all), each with who
 /// made it, whether it is this account's, whether it is shared with it, and until when it is kept.
 async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<Value> {
+    // Not allowed to see the clips: none.
+    if !me.can("clips.view") {
+        return Json(Value::Array(Vec::new()));
+    }
     let groups = crate::groups::of(&s, &me.id);
     let users = s.auth.users();
     let keep = s.clips.keep_days.load(std::sync::atomic::Ordering::Relaxed) as i64;
@@ -561,6 +565,7 @@ fn seen(s: &Shared, me: &crate::auth::User, id: &str) -> ApiResult<Clip> {
 
 /// Shares a clip with everyone, or with groups (empty: with nobody).
 async fn share(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Share>) -> ApiResult<StatusCode> {
+    require(me.can("clips.share"))?;
     owned(&s, &me, &id)?;
     let known: Vec<String> = crate::groups::list(&s).into_iter().map(|g| g.id).collect();
     let mut groups: Vec<String> = b.groups.into_iter().filter(|g| known.contains(g)).collect();
@@ -583,7 +588,7 @@ async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(req)
 }
 
 async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
-    require(me.can_extract())?;
+    require(me.can("clips.delete"))?;
     owned(&s, &me, &id)?;
     s.clips.delete(&id).await.ok_or_else(|| not_found("clip"))?;
     Ok(StatusCode::NO_CONTENT)

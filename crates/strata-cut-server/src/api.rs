@@ -34,6 +34,7 @@ pub fn router() -> Router<Shared> {
         .merge(crate::auth::routes())
         .merge(crate::users::routes())
         .merge(crate::groups::routes())
+        .merge(crate::roles::routes())
         .merge(crate::prefs::routes())
         .merge(crate::system::routes())
         .merge(crate::health::routes())

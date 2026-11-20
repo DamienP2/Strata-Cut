@@ -220,7 +220,7 @@ struct Enabled {
 }
 
 async fn set_enabled(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Enabled>) -> ApiResult<Json<Value>> {
-    require(me.is_admin())?;
+    require(me.can("schedule.edit"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut c = rec.config();
     if b.enabled && !c.enabled && !matches!(rec.status.lock().unwrap().state, super::State::Recording) {
@@ -238,7 +238,7 @@ struct Recording {
 
 /// Programmation: how a source is recorded (all the time, during its slots, not at all).
 async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Recording>) -> ApiResult<Json<Value>> {
-    require(me.is_admin())?;
+    require(me.can("schedule.edit"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut c = rec.config();
     // Recording all the time from now: is there room for it (unless it records already)?
@@ -255,13 +255,15 @@ async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, Ur
 }
 
 /// The programmed slots, each with its next occurrence.
-async fn schedules(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> ApiResult<Json<Value>> {
+async fn schedules(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
+    require(me.can("schedule.view"))?;
     let m = &s.recorders;
     Ok(Json(json!({ "slots": m.schedules.json(&m.tz(), super::now_ms()), "timezone": m.tz().iana_name().unwrap_or("UTC") })))
 }
 
 /// Every occurrence of the slots between two server times (the calendar).
-async fn occurrences(State(s): State<Shared>, CurrentUser(_): CurrentUser, Query(q): Query<Window>) -> ApiResult<Json<Value>> {
+async fn occurrences(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Window>) -> ApiResult<Json<Value>> {
+    require(me.can("schedule.view"))?;
     let m = &s.recorders;
     let tz = m.tz();
     let (from, to) = (q.from as i64, q.to as i64);
@@ -284,12 +286,12 @@ fn schedules_changed(s: &Shared) {
 }
 
 async fn put_slot(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(slot): Json<super::schedule::Slot>) -> ApiResult<Json<Value>> {
-    require(me.is_admin())?;
+    require(me.can("schedule.edit"))?;
     save_slot(&s, slot)
 }
 
 async fn put_slot_id(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(mut slot): Json<super::schedule::Slot>) -> ApiResult<Json<Value>> {
-    require(me.is_admin())?;
+    require(me.can("schedule.edit"))?;
     slot.id = id;
     save_slot(&s, slot)
 }
@@ -314,7 +316,7 @@ fn save_slot(s: &Shared, slot: super::schedule::Slot) -> ApiResult<Json<Value>> 
 }
 
 async fn delete_slot(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
-    require(me.is_admin())?;
+    require(me.can("schedule.edit"))?;
     s.recorders.schedules.delete(&id).map_err(bad)?;
     schedules_changed(&s);
     Ok(Json(json!({ "ok": true })))
@@ -351,7 +353,8 @@ struct Window {
 
 /// What the player needs between two server times: per run, the proxy
 /// fragments and the original segments' clock (`map`: [t0, t1, wall0]).
-async fn media(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>, Query(w): Query<Window>) -> ApiResult<Json<Value>> {
+async fn media(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Query(w): Query<Window>) -> ApiResult<Json<Value>> {
+    require(me.can("extract.view") || me.can("stream.view"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut out = Vec::new();
     let mut inits: Vec<(usize, PathBuf, PathBuf)> = Vec::new();

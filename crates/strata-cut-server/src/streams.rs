@@ -580,7 +580,7 @@ pub fn routes() -> Router<Shared> {
 
 /// Admins: the destinations (their secrets masked). Operators: what the Streamer shows.
 async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
-    require(me.can_extract())?;
+    require(me.can("stream.view"))?;
     let all = s.streams.list();
     Ok(Json(Value::Array(all.iter().map(|d| if me.is_admin() { d.public() } else { d.for_operator() }).collect())))
 }
@@ -645,17 +645,17 @@ async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
 }
 
 async fn test(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(o): Json<Overrides>) -> ApiResult<Json<Value>> {
-    require(me.can_extract())?;
+    require(me.can("stream.run"))?;
     s.streams.test(&id, &o).await.map(Json).map_err(bad)
 }
 
 async fn streams(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
-    require(me.can_extract())?;
+    require(me.can("stream.view") || me.is_admin())?;
     Ok(Json(s.streams.json()))
 }
 
 async fn start(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<StartBody>) -> ApiResult<Json<Value>> {
-    require(me.can_extract())?;
+    require(me.can("stream.run"))?;
     if let Some(cost) = s.streams.cost(&b.destination, &b.source, &b.overrides).map_err(bad)? {
         crate::limits::check(&s, &cost)?;
     }
@@ -664,7 +664,7 @@ async fn start(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): J
 }
 
 async fn stop(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(dest): UrlPath<String>) -> ApiResult<Json<Value>> {
-    require(me.can_extract())?;
+    require(me.can("stream.run"))?;
     if s.streams.end(&dest) {
         tracing::info!("{} stops the stream to {dest}", me.username);
     }
@@ -673,7 +673,7 @@ async fn stop(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(des
 
 /// Every stream of a source ("Tout arrêter").
 async fn stop_source(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<StopSource>) -> ApiResult<Json<Value>> {
-    require(me.can_extract())?;
+    require(me.can("stream.run"))?;
     let dests: Vec<String> = s.streams.sessions.lock().unwrap().values().filter(|x| x.source == b.source).map(|x| x.dest.clone()).collect();
     for d in dests {
         s.streams.end(&d);

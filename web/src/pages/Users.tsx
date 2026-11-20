@@ -1,6 +1,6 @@
 /* Système › Accès › Utilisateurs. */
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
-import { Ban, Eye, KeyRound, Pencil, Plus, Scissors, Search, SearchX, ShieldCheck, Trash2, X } from 'lucide-react';
+import { Ban, Eye, KeyRound, Pencil, Plus, Radio, Scissors, Search, SearchX, ShieldCheck, Trash2, X } from 'lucide-react';
 import { t, tc, tn } from '../i18n';
 import { api, ROLES, useApp, useChanged, type PublicUser, type Role } from '../store';
 import { confirmDialog, promptDialog } from '../ui/dialogs';
@@ -10,14 +10,15 @@ import { Field, Switch } from '../settings/ui';
 import { PageHead } from './SidePage';
 import { loadUsers, useUserList } from './userList';
 
-export const ROLE_ICON: Record<Role, ComponentType<{ size?: number }>> = { admin: ShieldCheck, operator: Scissors, viewer: Eye };
+export const ROLE_ICON: Record<Role, ComponentType<{ size?: number }>> = { admin: ShieldCheck, operator: Scissors, streamer: Radio, viewer: Eye };
 /** What each role does (English, translated where shown). */
 const ROLE_DOES: Record<Role, string> = {
   admin: 'Everything: recorders, users, system',
   operator: 'Cuts clips and manages them',
+  streamer: 'Sends the sources live (Streamer)',
   viewer: 'Watches the recordings, downloads clips',
 };
-const ROLE_PLURAL: Record<Role, string> = { admin: 'Admins', operator: 'Operators', viewer: 'Viewers' };
+const ROLE_PLURAL: Record<Role, string> = { admin: 'Admins', operator: 'Operators', streamer: 'Streamers', viewer: 'Viewers' };
 
 type Filter = 'all' | Role | 'disabled';
 

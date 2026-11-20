@@ -34,7 +34,8 @@ const hhmm = (ms: number, tz: string) => clock(ms, tz).slice(0, 5);
 
 export function Schedule() {
   const { recorders, user, timezone, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, timezone: s.timezone, toast: s.toast })));
-  const admin = can.admin(user);
+  // Starting, stopping, programming: as the role allows.
+  const admin = can.has(user, 'schedule.edit');
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [q, setQ] = useDisplayPref('schedule.q', '');
   const [only, setOnly] = useDisplayPref<string | null>('schedule.recorder', null);

@@ -92,7 +92,9 @@ export function Clips() {
   const shown = inTab.filter((c) => (!source || c.recorder === source) && (!q || `${c.name} ${c.recorderName} ${c.createdBy}`.toLowerCase().includes(q.toLowerCase())));
   const total = inTab.reduce((a, c) => a + c.size, 0);
   const recOf = (id: string) => recorders.find((r) => r.id === id);
-  const mayChange = (c: Clip) => admin || (!!c.mine && can.extract(user));
+  // Its own clips, as its role allows (an admin: any).
+  const mayShare = (c: Clip) => admin || (!!c.mine && can.has(user, 'clips.share'));
+  const mayDelete = (c: Clip) => admin || (!!c.mine && can.has(user, 'clips.delete'));
 
   // By recorder (the one with the newest clip first), then by day, the newest first.
   const byRecorder = [...new Set(shown.map((c) => c.recorder))]
@@ -109,7 +111,7 @@ export function Clips() {
     });
   const pickedClips = inTab.filter((c) => picked.has(c.id));
   const removeMany = async () => {
-    const list = pickedClips.filter(mayChange);
+    const list = pickedClips.filter(mayDelete);
     const n = list.length;
     if (!n || !(await confirmDialog({ title: tn(n, 'Delete {n} clip?', 'Delete {n} clips?'), confirm: t('Delete'), danger: true }))) return;
     let failed = 0;
@@ -203,12 +205,12 @@ export function Clips() {
                 <button type="button" className="btn small" onClick={downloadMany}>
                   <Download size={13} /> {t('Download')}
                 </button>
-                {pickedClips.some(mayChange) && (
-                  <button type="button" className="btn small" onClick={() => setSharing(pickedClips.filter(mayChange))}>
+                {pickedClips.some(mayShare) && (
+                  <button type="button" className="btn small" onClick={() => setSharing(pickedClips.filter(mayShare))}>
                     <Share2 size={13} /> {t('Share')}
                   </button>
                 )}
-                {pickedClips.some(mayChange) && (
+                {pickedClips.some(mayDelete) && (
                   <button type="button" className="btn small danger" onClick={() => void removeMany()}>
                     <Trash2 size={13} /> {t('Delete')}
                   </button>
@@ -331,7 +333,7 @@ export function Clips() {
                                 )}
                               </td>
                               <td>
-                                {mayChange(c) ? (
+                                {mayShare(c) ? (
                                   <button type="button" className={`sc-share-chip ${c.share?.all ? 'all' : c.share?.groups.length ? 'groups' : ''}`} title={t('Share')} onClick={() => setSharing([c])}>
                                     {c.share?.all ? <Globe2 size={12} /> : c.share?.groups.length ? <UsersRound size={12} /> : <Lock size={12} />}
                                     <span>{shareText(c, groups)}</span>
@@ -350,7 +352,7 @@ export function Clips() {
                                 <a className="icon-btn ghost" title={t('Download')} href={`/api/clips/${c.id}/download`}>
                                   <Download size={14} />
                                 </a>
-                                {mayChange(c) && (
+                                {mayDelete(c) && (
                                   <button className="icon-btn ghost" title={t('Delete')} onClick={() => void remove(c)}>
                                     <Trash2 size={14} />
                                   </button>

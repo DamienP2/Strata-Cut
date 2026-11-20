@@ -1350,3 +1350,11 @@ a.btn { color: inherit; }
 .update-more summary { cursor: pointer; color: var(--accent-2); font-size: 13px; margin-bottom: 10px; }
 .mt-tiles { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
 .set-card .update-offline { border-top: none; padding-top: 0; margin-top: 0; }
+
+/* Système › Accès › Rôles: the rights × the roles. */
+.rl-table th.rl-role { text-align: center; white-space: nowrap; }
+.rl-table th.rl-role svg { vertical-align: -2px; margin-right: 4px; }
+.rl-table td.rl-cell { text-align: center; width: 120px; }
+.rl-table td.rl-cell input { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+.rl-table .rl-always { color: var(--text-3); }
+.rl-table tr.rl-part td { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; background: var(--panel-2, rgba(255,255,255,0.02)); padding-top: 14px; }

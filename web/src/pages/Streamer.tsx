@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Square, Upload } from 'lucide-react';
 import { useDisplayPref } from '../displayPrefs';
-import { api, serverNow, useApp } from '../store';
+import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer } from '../player';
@@ -74,6 +74,8 @@ function SourceItem({ r, on, air }: { r: Recorder; on: boolean; air: number }) {
 
 /** The picture of the source, live; what it receives; the lives of this source. */
 function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
+  // May start, stop, test the streams (Système › Accès › Rôles).
+  const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const { st, timezone, toast } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone, toast: s.toast })));
   const video = useRef<HTMLVideoElement>(null);
   const audio = useAudioOut(video);
@@ -129,9 +131,11 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
               <Upload size={12} /> <b>{mbps(out, locale())}</b> {t('going out')}
             </span>
             <div className="spacer" />
-            <button className="btn st-stop" onClick={() => void stopAll()}>
-              <Square size={13} /> {t('Stop all')}
-            </button>
+            {run && (
+              <button className="btn st-stop" onClick={() => void stopAll()}>
+                <Square size={13} /> {t('Stop all')}
+              </button>
+            )}
           </>
         ) : (
           <span className="muted">{t('Not sent anywhere: switch a destination on, on the right.')}</span>
@@ -150,6 +154,7 @@ interface Draft {
 }
 
 function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[] | null; streams: StreamInfo[] }) {
+  const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const { recorders, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast })));
   const [starting, setStarting] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
@@ -201,7 +206,7 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
         <span>{t('Destinations')}</span>
         {mine.length > 0 && <em>{`${tn(mine.length, '{n} live', '{n} live')} · ${mbps(out, locale())}`}</em>}
       </header>
-      {ready.length > 1 && (
+      {run && ready.length > 1 && (
         <button type="button" className="btn primary st-all" disabled={starting} onClick={() => void startAll()}>
           <Play size={13} /> {t('Start all ({n})', { n: ready.length })}
         </button>
@@ -227,7 +232,7 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
               <div className="st-dest-top">
                 <ProtoTag p={d.protocol} />
                 <strong data-tip={`${d.host} · ${encodingOf(d)}`}>{d.name}</strong>
-                {on ? (
+                {!run ? null : on ? (
                   <button type="button" className="btn small st-stop-one" onClick={() => void stop(d)}>
                     <Square size={11} /> {t('Stop')}
                   </button>
@@ -275,7 +280,7 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
                   )}
                 </>
               )}
-              {!on && !busy && (
+              {run && !on && !busy && (
                 <>
                   {d.keyLive && (
                     <label className="st-field">

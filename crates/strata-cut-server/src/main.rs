@@ -11,6 +11,7 @@ mod cli;
 mod clips;
 mod config;
 mod groups;
+mod roles;
 mod limits;
 mod streams;
 mod guard;
@@ -251,6 +252,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     update::startup_guard(&data_dir);
     update::confirm_after(data_dir.clone(), Duration::from_secs(60));
     update::spawn_auto_check(data_dir.clone());
+    roles::load(&data_dir);
     let auth = Arc::new(auth::Auth::load(&data_dir)); // outside the loop: sessions survive
     if auth.needs_setup() {
         let port = args.bind.map(|b| b.port()).unwrap_or(8080);

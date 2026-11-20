@@ -29,6 +29,7 @@ export const common: Record<string, string> = {
   'theme|System': 'Système',
   'role|admin': 'Administrateur',
   'role|operator': 'Opérateur',
+  'role|streamer': 'Streamer',
   'role|viewer': 'Lecteur',
 
   // Top bar, connection pill, user menu
