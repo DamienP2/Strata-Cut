@@ -5,6 +5,8 @@ Enregistre des flux vidéo en continu, en boucle (24 h par défaut, réglable pa
 - Sources : UDP, RTP (MPEG-TS), RTMP et SRT (écoute ou appel), flux HLS (m3u8), directs YouTube, cartes Blackmagic DeckLink, UltraStudio et Intensity (SDI, HDMI, du PAL au 8K). NDI et ST 2110 viendront plus tard.
 - Enregistrement : le flux tel quel, sans réencodage (segments MPEG-TS de 6 s), plus un proxy léger pour le navigateur. Une carte DeckLink donne des images brutes : elles sont encodées en H.264 au débit choisi (25 Mb/s par défaut).
 - Extraits : MP4 H.264 haute qualité (CRF 16) + AAC 256 kb/s, coupés sur l'image exacte de l'entrée, téléchargeables.
+- Programmation : chaque source s'enregistre en continu, pendant ses créneaux, ou pas du tout (elle reste reçue pour l'aperçu et la diffusion).
+- Streamer : une source diffusée en direct vers une ou plusieurs destinations (RTMP, RTMPS, SRT), en copie du flux ou réencodée ; clé de stream fixe ou donnée par l'opérateur à chaque direct, test avant la mise en ligne. La diffusion ne touche jamais l'enregistrement.
 - Serveur Rust (axum) qui embarque l'interface web (React). Linux.
 
 ## Installer sur un serveur Ubuntu

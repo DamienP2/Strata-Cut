@@ -37,8 +37,6 @@ export interface Toast {
 export const can = {
   admin: (u: PublicUser | null | undefined) => u?.role === 'admin',
   extract: (u: PublicUser | null | undefined) => u?.role === 'admin' || u?.role === 'operator',
-  /** The Recorders page: not for the operators (they work in Extraction). */
-  recorders: (u: PublicUser | null | undefined) => u?.role !== 'operator',
 };
 
 export class ApiError extends Error {

@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 
 /** The pages of the app, from the URL. */
 export type Route =
+  | { page: 'home' }
   | { page: 'recorders' }
+  | { page: 'streamer'; source?: string }
   | { page: 'schedule' }
   | { page: 'extract'; recorder?: string }
   | { page: 'clips' }
@@ -22,8 +24,13 @@ export function parseRoute(path: string): Route {
       return { page: 'system', section: p[1] };
     case 'help':
       return { page: 'help' };
-    default:
+    case 'streamer':
+      return { page: 'streamer', source: p[1] ? decodeURIComponent(p[1]) : undefined };
+    // Former address: the sources are in Système now.
+    case 'recorders':
       return { page: 'recorders' };
+    default:
+      return { page: 'home' };
   }
 }
 

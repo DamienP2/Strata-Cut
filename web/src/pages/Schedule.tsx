@@ -538,7 +538,19 @@ function startOfDay(ms: number, tz: string): number {
  * details; a click or a drag on an empty place makes a new one there; the source's guide
  * shows above each row (a click on a programme makes a slot for it).
  */
+type RecMode = 'continuous' | 'slots' | 'off';
+const recMode = (r: Recorder): RecMode => (r.enabled ? 'continuous' : r.slotsOff ? 'off' : 'slots');
+
 function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
+  const { status, toast } = useApp(useShallow((s) => ({ status: s.status, toast: s.toast })));
+  // How each source is recorded: chosen on its line.
+  const setMode = async (r: Recorder, mode: RecMode) => {
+    try {
+      await api('POST', `/api/recorders/${r.id}/recording`, { mode });
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
   // 6 h by default (from an hour ago), 12 h, a day, a week.
   const [view, setView] = useDisplayPref<View>('schedule.view', '6h');
   const [anchor, setAnchor] = useState(() => anchorFor(view, serverNow(), timezone));
@@ -665,10 +677,36 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
           const guide = guides[r.id] ?? [];
           return (
             <div key={r.id} className="sc-cal-row">
-              <div className="sc-cal-name" title={r.enabled ? `${r.name}\n${t('This recorder already records all the time: its slots change nothing while it runs.')}` : r.name}>
-                <span className={`nav-dot ${r.enabled ? 'ok' : ''}`} />
-                <RecLogo rec={r} size="sm" />
-                <span className="sc-cal-name-t">{r.name}</span>
+              <div className="sc-cal-name sc-cal-mode">
+                <div className="sc-cal-mode-top">
+                  <span className={`nav-dot ${status[r.id]?.state === 'recording' ? 'ok' : ''}`} />
+                  <RecLogo rec={r} size="sm" />
+                  <span className="sc-cal-name-t" title={r.name}>
+                    {r.name}
+                  </span>
+                  {status[r.id]?.state === 'recording' ? (
+                    <span className="sc-state rec">
+                      <span className="sc-rec" />
+                      REC
+                    </span>
+                  ) : recMode(r) === 'off' ? (
+                    <span className="sc-state">{t('Not recorded (source)')}</span>
+                  ) : null}
+                </div>
+                {admin ? (
+                  <Segmented<RecMode>
+                    className={`sc-cal-modes ${recMode(r)}`}
+                    value={recMode(r)}
+                    options={[
+                      { value: 'continuous', label: t('Continuous'), title: t('Records all the time (the loop keeps the last hours)') },
+                      { value: 'slots', label: t('Slots'), title: t('Records only during the slots drawn on its line') },
+                      { value: 'off', label: t('Not recorded (source)'), title: t('Received only to be sent (Streamer); nothing recorded, slots paused') },
+                    ]}
+                    onChange={(v) => void setMode(r, v)}
+                  />
+                ) : (
+                  <span className="muted sc-cal-mode-ro">{t(recMode(r) === 'continuous' ? 'Continuous' : recMode(r) === 'slots' ? 'Slots' : 'Not recorded (source)')}</span>
+                )}
               </div>
               <div
                 className={`sc-cal-lane ${admin ? 'edit' : ''}`}
@@ -723,6 +761,19 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
                     {g.name}
                   </button>
                 ))}
+                {/* Continuous: recorded until now, and on. */}
+                {recMode(r) === 'continuous' && now > from && (
+                  <span className="sc-cal-cont done" style={{ left: '0%', width: `${Math.min(100, x(now))}%` }}>
+                    <span className="sc-rec" />
+                    {t('Continuous recording')}
+                  </span>
+                )}
+                {recMode(r) === 'continuous' && now < to && (
+                  <span className="sc-cal-cont todo" style={{ left: `${Math.max(0, x(now))}%`, width: `${100 - Math.max(0, x(now))}%` }}>
+                    {t('goes on until it is changed')}
+                  </span>
+                )}
+                {recMode(r) === 'off' && <span className="sc-cal-none">{t('Received without being recorded: preview and Streamer only')}</span>}
                 {mine.map((o, i) => {
                   const slot = slots.find((s) => s.id === o.slot);
                   const live = o.enabled !== false && o.start <= now && now < o.end;
@@ -732,7 +783,7 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
                     <button
                       key={`${o.slot}-${o.start}`}
                       type="button"
-                      className={`sc-cal-slot ${live ? 'live' : ''} ${o.end < now ? 'past' : ''} ${slot?.date ? '' : 'repeat'} ${o.enabled === false ? 'paused' : ''}`}
+                      className={`sc-cal-slot ${live ? 'live' : ''} ${o.end < now ? 'past' : ''} ${slot?.date ? '' : 'repeat'} ${o.enabled === false || recMode(r) !== 'slots' ? 'paused' : ''}`}
                       style={{
                         left: `${Math.max(0, x(o.start))}%`,
                         width: `${Math.max(0.4, Math.min(100, x(o.end)) - Math.max(0, x(o.start)))}%`,

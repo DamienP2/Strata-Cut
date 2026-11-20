@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { CalendarClock, CircleHelp, Clapperboard, RadioTower, Scissors, Server } from 'lucide-react';
+import { CalendarClock, CircleHelp, Clapperboard, Radio, Scissors, Server } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { loadDisplayPrefs, useDisplayPrefs } from './displayPrefs';
 import { t, useLang } from './i18n';
@@ -18,7 +18,7 @@ import { UserMenu } from './ui/UserMenu';
 import { Login } from './pages/Login';
 import { SystemPage, visibleSystem } from './pages/SystemPage';
 
-const Recorders = lazy(() => import('./pages/Recorders').then((m) => ({ default: m.Recorders })));
+const Streamer = lazy(() => import('./pages/Streamer').then((m) => ({ default: m.Streamer })));
 const Extract = lazy(() => import('./pages/Extract').then((m) => ({ default: m.Extract })));
 const Schedule = lazy(() => import('./pages/Schedule').then((m) => ({ default: m.Schedule })));
 const Clips = lazy(() => import('./pages/Clips').then((m) => ({ default: m.Clips })));
@@ -79,7 +79,7 @@ function Shell({ route }: { route: Route }) {
   const admin = can.admin(user);
   const health = useHealth((s) => s.health);
   const system = visibleSystem(user).length > 0;
-  const recorders = can.recorders(user);
+  const streamer = can.extract(user);
   // The extractions under way, on the Clips tab (seen from every page).
   const extracting = useApp((s) => s.jobs.filter((j) => j.state === 'queued' || j.state === 'running').length);
 
@@ -89,10 +89,12 @@ function Shell({ route }: { route: Route }) {
 
   // A page this user may not open goes back home.
   useEffect(() => {
-    if (route.page === 'system' && !system) void navigate(recorders ? '/' : '/extract', true);
-    // The operators' home: Extraction.
-    else if (route.page === 'recorders' && !recorders) void navigate('/extract', true);
-  }, [route.page, system, recorders]);
+    if (route.page === 'system' && !system) void navigate('/extract', true);
+    else if (route.page === 'streamer' && !streamer) void navigate('/extract', true);
+    // The sources are in Système now; the home is Extraction.
+    else if (route.page === 'recorders') void navigate(system ? '/system/sources' : '/extract', true);
+    else if (route.page === 'home') void navigate('/extract', true);
+  }, [route.page, system, streamer]);
 
   let page: React.ReactNode;
   switch (route.page) {
@@ -111,8 +113,11 @@ function Shell({ route }: { route: Route }) {
     case 'help':
       page = <Help />;
       break;
+    case 'streamer':
+      page = streamer ? <Streamer source={route.source} /> : null;
+      break;
     default:
-      page = recorders ? <Recorders /> : null;
+      page = null;
   }
 
   return (
@@ -120,9 +125,9 @@ function Shell({ route }: { route: Route }) {
       <nav className="topbar">
         <Brand />
         <div className="tabs home-tabs">
-          {recorders && <Tab on={route.page === 'recorders'} icon={<RadioTower size={14} />} label={t('Recorders')} path="/" />}
           <Tab on={route.page === 'schedule'} icon={<CalendarClock size={14} />} label={t('Schedule')} path="/schedule" />
           <Tab on={route.page === 'extract'} icon={<Scissors size={14} />} label={t('Extraction')} path="/extract" />
+          {streamer && <Tab on={route.page === 'streamer'} icon={<Radio size={14} />} label={t('Streamer')} path="/streamer" />}
           <Tab on={route.page === 'clips'} icon={<Clapperboard size={14} />} label={t('Clips')} path="/clips" count={extracting} />
           {system && <Tab on={route.page === 'system'} icon={<Server size={14} />} label={t('System')} path="/system" dot={admin && needsLook(health)} />}
         </div>

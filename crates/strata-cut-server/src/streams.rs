@@ -173,7 +173,7 @@ fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
     let mut note = String::new();
     if d.encode == "h264" || must {
         if must && d.encode == "copy" {
-            note = format!("encoded again: the source is in {}", video_codec.to_uppercase());
+            note = "encoded again: rtmp does not carry this source's video".into();
         }
         let k = if d.video_kbps > 0 { d.video_kbps } else { 6000 };
         let scale = if d.height > 0 { format!(",scale=-2:{}", d.height) } else { String::new() };
@@ -510,7 +510,8 @@ fn hide(msg: &str, d: &Destination) -> String {
 /// The usual reasons, said plainly (from all FFmpeg said; `why`: its most telling line).
 fn explain(all: &str, why: &str) -> String {
     let w = all.to_ascii_lowercase();
-    if w.contains("connection refused") || w.contains("timed out") || w.contains("no route") || w.contains("failed to resolve") || w.contains("name or service") || w.contains("connection setup failure") {
+    let link_failed = w.contains("connection to") && w.contains("failed");
+    if link_failed || w.contains("connection refused") || w.contains("timed out") || w.contains("no route") || w.contains("failed to resolve") || w.contains("name or service") || w.contains("connection setup failure") {
         "no answer from the server (address or firewall)".into()
     } else if ["badname", "unauthorized", "forbidden", "returned 401", "returned 403", "closed by the server", "connection reset", "broken pipe", "wrong passphrase", "authentication"].iter().any(|k| w.contains(k)) {
         "the server refuses the stream: check the stream key".into()
@@ -519,7 +520,8 @@ fn explain(all: &str, why: &str) -> String {
     } else if why.is_empty() {
         "the server refused the stream".into()
     } else {
-        why.to_string()
+        // FFmpeg's line without its "[srt @ 0x…]".
+        why.split_once("] ").filter(|_| why.starts_with('[')).map(|(_, r)| r).unwrap_or(why).to_string()
     }
 }
 
@@ -690,6 +692,15 @@ mod tests {
         // SRT carries anything as it is.
         let (a, _) = output_args(&dest("srt", "srt://h:1"), "mpeg2video");
         assert!(a.windows(2).any(|w| w == ["-c:a", "copy"]) && a.contains(&"mpegts".to_string()));
+    }
+
+    #[test]
+    fn reasons() {
+        // A port holding "401" is not a refused key.
+        assert_eq!(explain("[tcp @ 0x1] Connection to tcp://127.0.0.1:19401?tcp_nodelay=0 failed: Connection refused", ""), "no answer from the server (address or firewall)");
+        assert_eq!(explain("[srt @ 0x5] Connection to 127.0.0.1:19501 failed: Input/output error", ""), "no answer from the server (address or firewall)");
+        assert_eq!(explain("Error in the pull function. NetStream.Publish.BadName", ""), "the server refuses the stream: check the stream key");
+        assert_eq!(explain("x", "[flv @ 0x2] Something odd"), "Something odd");
     }
 
     #[test]

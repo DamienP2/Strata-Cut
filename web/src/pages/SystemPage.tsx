@@ -1,7 +1,7 @@
 /* /system/<section>: the list of sections on the left, the open one on the right. */
 import { useDisplayPref } from '../displayPrefs';
 import { lazy, Suspense, useEffect, type ComponentType, type LazyExoticComponent } from 'react';
-import { Cpu, HardDrive, HeartPulse, Lock, SlidersHorizontal, Users as UsersIcon, UsersRound, MonitorPlay, Wrench } from 'lucide-react';
+import { Cpu, HardDrive, HeartPulse, Lock, Radio, RadioTower, SlidersHorizontal, Users as UsersIcon, UsersRound, MonitorPlay, Wrench } from 'lucide-react';
 import { t } from '../i18n';
 import { navigate } from '../router';
 import { can, useApp, useChanged, type PublicUser } from '../store';
@@ -34,6 +34,14 @@ export const SYSTEM: Group[] = [
     sections: [
       // The machine's load at the top of it.
       { id: 'health', label: 'Health', icon: HeartPulse, admin: true, page: page(() => import('../settings/Health'), 'Health') },
+    ],
+  },
+  {
+    // What the server receives (and records), where it can send it.
+    title: 'Streams',
+    sections: [
+      { id: 'sources', label: 'Sources', icon: RadioTower, admin: true, page: page(() => import('./Recorders'), 'Recorders') },
+      { id: 'destinations', label: 'Destinations', icon: Radio, admin: true, page: page(() => import('../settings/Destinations'), 'Destinations') },
     ],
   },
   {
@@ -89,7 +97,7 @@ export function SystemPage({ section }: { section?: string }) {
   return (
     <SidePage
       className="sys-page"
-      wide={false}
+      wide={open?.id === 'sources' || open?.id === 'destinations'}
       nav={groups.map((g) => (
         <div key={g.title} className="sys-group">
           <NavSection title={t(g.title)} />

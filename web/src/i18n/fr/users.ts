@@ -50,7 +50,7 @@ export const users: Record<string, string> = {
   'Create the user': 'Créer l’utilisateur',
   'User created': 'Utilisateur créé',
   'User saved': 'Utilisateur enregistré',
-  'Everything: recorders, users, system': 'Tout : enregistreurs, utilisateurs, système',
+  'Everything: recorders, users, system': 'Tout : sources, destinations, utilisateurs, système',
   'Cuts clips and manages them': 'Découpe et gère les extraits',
   'Watches the recordings, downloads clips': 'Regarde les enregistrements, télécharge les extraits',
   'You cannot delete your own account': 'Vous ne pouvez pas supprimer votre propre compte',

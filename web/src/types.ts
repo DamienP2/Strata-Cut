@@ -39,6 +39,8 @@ export interface Recorder {
   videoMode?: string;
   audioInput?: string;
   audioChannels?: number;
+  /** Not recorded during its slots either (Programmation: "Non enregistrée"); `enabled`: continuous. */
+  slotsOff?: boolean;
   /** HLS: the stream read when the playlist offers several (its playlist's address as written in it; empty: the best picture). */
   variant?: string;
 }

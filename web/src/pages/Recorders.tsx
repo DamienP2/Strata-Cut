@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, Copy, Eraser, ImagePlus, MoreHorizontal, Pencil, Plus, RadioTower, Scissors, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { CalendarClock, Copy, Eraser, ImagePlus, MoreHorizontal, Pencil, Plus, RadioTower, Scissors, Search, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { RecLogo } from '../ui/RecLogo';
 import { lang, locale, t, tn } from '../i18n';
@@ -14,6 +14,7 @@ import { Field } from '../settings/ui';
 import { InfoTip } from '../ui/InfoTip';
 import { openContextMenu } from '../ui/ContextMenu';
 import type { Protocol, Recorder, RecorderStatus } from '../types';
+import { clockOf, useStreams, type StreamInfo } from '../streams';
 
 const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'udp', label: 'UDP', detail: 'udp://' },
@@ -113,7 +114,7 @@ export function Recorders() {
     if (device === null) return;
     const format = q.get('format') ?? '';
     setEdit({ rec: null, preset: { name: q.get('name') ?? '', protocol: 'decklink', device: Number(device), connection: 'auto', videoMode: DL_MODES.includes(format) ? format : 'auto', audioInput: 'auto', audioChannels: 2, bitrate: DL_MODES.includes(format) && format !== 'auto' ? advisedBitrate(format) : 25 } });
-    void navigate('/recorders', true);
+    void navigate('/system/sources', true);
   }, []);
   const counts = {
     all: recorders.length,
@@ -126,9 +127,11 @@ export function Recorders() {
     if (chip === 'nosignal') return r.enabled && ['nosignal', 'error'].includes(status[r.id]?.state ?? '');
     return true;
   });
+  // Which destinations each source is sent to now.
+  const streams = useStreams(3000);
   return (
-    <div className="library">
-      <div className="library-inner wide">
+    <>
+      <div>
         <div className="settings-head">
           <div>
             <h1>{t('Recorders')}</h1>
@@ -166,7 +169,7 @@ export function Recorders() {
         )}
         <div className="project-grid">
           {shown.map((r) => (
-            <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
+            <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} streams={streams.filter((x) => x.source === r.id)} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
           ))}
           {shown.length === 0 && (q || chip !== 'all') && (
             <div className="empty big">
@@ -189,14 +192,20 @@ export function Recorders() {
         </div>
       </div>
       {edit && <RecorderModal rec={edit.rec} from={edit.from} preset={edit.preset} onClose={() => setEdit(null)} />}
-    </div>
+    </>
   );
 }
 
+/** How a source is recorded (set in Programmation). */
+export function recordingMode(r: Recorder): 'continuous' | 'slots' | 'off' {
+  return r.enabled ? 'continuous' : r.slotsOff ? 'off' : 'slots';
+}
+
 const STATE_LABEL: Record<string, string> = { recording: 'Recording', nosignal: 'No signal', starting: 'Connecting…', off: 'Stopped', error: 'Error', waiting: 'Programmed' };
+const RECORDING_LABEL: Record<string, string> = { continuous: 'Continuous', slots: 'Slots', off: 'Not recorded (source)' };
 const STATE_TONE: Record<string, string> = { recording: 'ok', nosignal: 'warn', starting: 'warn', off: '', error: 'bad', waiting: 'plan' };
 
-function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; st?: RecorderStatus; admin: boolean; onEdit: () => void; onDuplicate: () => void }) {
+function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: Recorder; st?: RecorderStatus; admin: boolean; streams: StreamInfo[]; onEdit: () => void; onDuplicate: () => void }) {
   const { toast, timezone } = useApp(useShallow((s) => ({ toast: s.toast, timezone: s.timezone })));
   const tick = useTick(2000);
   const [img, setImg] = useState(true);
@@ -209,15 +218,6 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
   const m = st?.media;
   const fmt = [scanFormat(m), m ? CODECS[m.codec] ?? m.codec.toUpperCase() : '', recording && st?.bitrate ? bitrate(st.bitrate, locale()) : ''].filter(Boolean).join(' · ');
 
-  const toggle = async () => {
-    if (rec.enabled && !(await confirmDialog({ title: t('Stop recording “{name}”?', { name: rec.name }), message: t('The loop already recorded is kept.'), confirm: t('Stop'), danger: true }))) return;
-    try {
-      await api('POST', `/api/recorders/${rec.id}/enabled`, { enabled: !rec.enabled });
-    } catch (e) {
-      toast(t((e as Error).message), 'error');
-    }
-    void reloadRecorders();
-  };
   const clearLoop = async () => {
     if (!(await confirmDialog({ title: t('Empty the loop of “{name}”?', { name: rec.name }), message: t('Everything recorded so far is deleted; the recording goes on. The clips stay.'), confirm: t('Empty the loop'), danger: true }))) return;
     try {
@@ -245,12 +245,6 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
         onClick={() => st?.oldest && void navigate(`/extract/${rec.id}`)}
       >
         {img && state !== 'off' ? <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${recording ? tick : 0}`} alt="" onError={() => setImg(false)} /> : <div className="sc-pic lost" />}
-        {recording && (
-          <span className="sc-onpic tl">
-            <span className="sc-rec" />
-            REC
-          </span>
-        )}
         {state === 'nosignal' && (
           <span className="sc-onpic lostmsg">
             <WifiOff size={14} /> {t('No signal')}
@@ -275,7 +269,25 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
           <span className={`nav-dot ${recording ? 'ok' : state === 'off' || state === 'waiting' ? '' : state === 'error' ? 'bad' : 'warn'}`} />
           <RecLogo rec={rec} />
           <strong title={[sourceAddress(rec), fmt].filter(Boolean).join('\n')}>{rec.name}</strong>
-          <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
+          {recording ? (
+            <span className="sc-state rec">
+              <span className="sc-rec" />
+              REC
+            </span>
+          ) : (
+            <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
+          )}
+        </div>
+        {streams.length > 0 && (
+          <div className="sc-onair-line">
+            <span className="sc-rec" />
+            {tn(streams.length, 'Sent to {n} destination', 'Sent to {n} destinations')}
+            {streams[0].liveSince ? ` · ${clockOf(serverNow() - streams[0].liveSince)}` : ''}
+          </div>
+        )}
+        <div className="sc-recmode">
+          {t('Recording mode')}&nbsp;: <b>{t(RECORDING_LABEL[recordingMode(rec)])}</b>
+          {recordingMode(rec) === 'slots' && st?.nextSlot && !st.slot ? ` · ${t('next: {when}', { when: `${clock(st.nextSlot.start, timezone).slice(0, 5)} ${st.nextSlot.name}` })}` : ''}
         </div>
         {/* The alerts (reception, server load, disk space, why no signal) go to Système › Santé, not here. */}
         {st?.onAir && (
@@ -334,16 +346,11 @@ function RecorderCard({ rec, st, admin, onEdit, onDuplicate }: { rec: Recorder; 
         <button className="btn small" onClick={() => void navigate(`/extract/${rec.id}`)} disabled={!st?.oldest}>
           <Scissors size={13} /> {t('Extract')}
         </button>
-        {admin &&
-          (rec.enabled ? (
-            <button className="btn small" title={t('Stop recording')} onClick={() => void toggle()}>
-              <Square size={12} /> {t('Stop')}
-            </button>
-          ) : (
-            <button className="btn small sc-start" title={t('Start recording')} onClick={() => void toggle()}>
-              <span className="sc-rec" /> {t('Record')}
-            </button>
-          ))}
+        {admin && (
+          <button className="btn small" data-tip={t('When it records: in Programmation')} onClick={() => void navigate('/schedule')}>
+            <CalendarClock size={13} /> {t('Program')}
+          </button>
+        )}
         <div className="spacer" />
         {admin && (
           <>
@@ -594,11 +601,6 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
                 ))}
               </div>
             </div>
-          </Field>
-          <Field label={t('State')} group>
-            <label className="check">
-              <input type="checkbox" checked={c.enabled} onChange={(e) => set({ enabled: e.target.checked })} /> {t('Record')}
-            </label>
           </Field>
         </div>
         <aside className="sc-rm-side">
