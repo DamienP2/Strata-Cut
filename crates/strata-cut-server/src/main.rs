@@ -114,6 +114,10 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
     // back (it made each restart, after an update, wait several seconds).
     rt.shutdown_timeout(Duration::from_millis(500));
     tracing::info!("stopped");
+    // Stopped to start again (an update installed, a version put back).
+    if update::RESTART.load(std::sync::atomic::Ordering::SeqCst) {
+        update::relaunch();
+    }
     done
 }
 

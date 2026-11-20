@@ -92,9 +92,12 @@ pub fn args(data_dir: &Path, c: &RecorderConfig) -> Vec<String> {
         "lipsync" => format!("color=c=0x15161c:size={w}x{h}:rate={rate}"),
         _ => format!("smptehdbars=size={w}x{h}:rate={rate}"),
     };
-    // A beep of one frame, once a second, on both channels: with the flash.
+    // A beep of one frame, once a second, on both channels: with the flash. Half a second after
+    // the key frames (one a second from the first frame, as the preview's): the stills of the
+    // timelines, taken on key frames, never show the flash (a white picture with the lip sync one).
     let beep_len = 1.0 / f.fps();
-    let beep = format!("if(lt(mod(t\\,1)\\,{beep_len:.4})\\,0.5*sin(2*PI*1000*t)\\,0)");
+    let phase = 1.0 - (fps / 2) as f64 / f.fps() + 0.0005;
+    let beep = format!("if(lt(mod(t+{phase:.5}\\,1)\\,{beep_len:.4})\\,0.5*sin(2*PI*1000*t)\\,0)");
     let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-re", "-f", "lavfi", "-i"].map(String::from).to_vec();
     a.push(base);
     a.extend(["-f", "lavfi", "-i"].map(String::from));
@@ -125,8 +128,9 @@ pub fn args(data_dir: &Path, c: &RecorderConfig) -> Vec<String> {
         (720, 480) => ",setsar=32/27",
         _ => ",setsar=1",
     };
-    let clock = format!("%{{localtime\\:%H\\\\\\:%M\\\\\\:%S}}\\:%{{eif\\:mod(n\\,{fps})\\:d\\:2}}");
-    let flash = format!("enable='lt(mod(t\\,1)\\,{beep_len:.4})'");
+    // The frame count: 00 on the flash.
+    let clock = format!("%{{localtime\\:%H\\\\\\:%M\\\\\\:%S}}\\:%{{eif\\:mod(n+{}\\,{fps})\\:d\\:2}}", fps - fps / 2);
+    let flash = format!("enable='lt(mod(t+{phase:.5}\\,1)\\,{beep_len:.4})'");
     // 1. The picture, and what moves over it.
     let mut v = if lipsync { "[0:v]drawgrid=w=iw/10:h=ih:t=2:c=gray@0.55[g];[g][2:v]".to_string() } else { "[0:v][2:v]".to_string() };
     v.push_str(&format!("overlay=x='mod(t*W/4\\,W-w)':y=H-{band}-h-{gap}:shortest=1[m]"));

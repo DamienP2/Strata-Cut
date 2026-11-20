@@ -578,5 +578,5 @@ export const business: Record<string, string> = {
   'srcgroup|Stopped': 'Stoppées',
   'srcgroup|Available': 'Disponibles',
   'srcgroup|Not available': 'Non disponibles',
-  'To start in {page}': 'À lancer dans la {page}',
+  'Source stopped': 'Source arrêtée',
 };

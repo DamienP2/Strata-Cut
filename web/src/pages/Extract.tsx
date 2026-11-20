@@ -88,11 +88,13 @@ function useSettled<T>(value: T, ms: number): T {
 }
 
 export function Extract({ recorder }: { recorder?: string }) {
-  const recorders = useApp((s) => s.recorders);
-  // The recorder asked, else the last one opened, else the first.
+  const { recorders, status } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status })));
+  // The recorder asked, else the last one opened, else the first with something to show (it
+  // records, or its loop holds something).
   const [last, setLast] = useDisplayPref<string | null>('extract.recorder', null);
   const known = (x?: string | null) => !!x && recorders.some((r) => r.id === x);
-  const id = known(recorder) ? recorder : known(last) ? last! : recorders[0]?.id;
+  const open = (x?: string | null) => known(x) && (status[x!]?.state === 'recording' || status[x!]?.oldest != null);
+  const id = known(recorder) ? recorder : open(last) ? last! : (recorders.find((r) => open(r.id)) ?? recorders[0])?.id;
   useEffect(() => {
     if (id && id !== recorder) void navigate(`/extract/${id}${location.search}`, true);
     if (id && id !== last) setLast(id);

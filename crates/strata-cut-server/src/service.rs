@@ -46,6 +46,7 @@ Group={user}
 ExecStart=\"{exe}\" run --default-bind {bind} --data-dir \"{data}\"
 Restart=always
 RestartSec=2
+TimeoutStopSec=15
 NoNewPrivileges=yes
 ProtectSystem=full
 ReadWritePaths={data}

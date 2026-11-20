@@ -26,12 +26,14 @@ import { SourceGroups } from '../ui/SourceGroups';
 const COLORS = ['var(--accent)', 'var(--pvw)', 'var(--warn)', '#c084fc', '#38bdf8'];
 
 export function Streamer({ source }: { source?: string }) {
-  const recorders = useApp((s) => s.recorders);
+  const { recorders, status } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status })));
   const streams = useStreams(1000);
   const [dests] = useDestinations();
   const [last, setLast] = useDisplayPref<string | null>('streamer.source', null);
   const known = (x?: string | null) => !!x && recorders.some((r) => r.id === x);
-  const id = known(source) ? source : known(last) ? last! : recorders[0]?.id;
+  // The source asked for; else the last one seen if it is received now, else the first received.
+  const available = (x?: string | null) => known(x) && status[x!]?.state === 'recording';
+  const id = known(source) ? source : available(last) ? last! : recorders.find((r) => available(r.id))?.id;
   useEffect(() => {
     if (id && id !== source) void navigate(`/streamer/${id}`, true);
     if (id && id !== last) setLast(id);
@@ -71,15 +73,21 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   const video = useRef<HTMLVideoElement>(null);
   const audio = useAudioOut(video);
   const [wall, setWall] = useState<number | null>(null);
+  const received = st?.state === 'recording';
+  // Only what is received now is shown: a stopped source shows nothing (not what is left of
+  // its last recording).
   useEffect(() => {
+    if (!received) {
+      setWall(null);
+      return;
+    }
     const p = new LoopPlayer(video.current!, rec.id, serverNow);
     p.onFrame = (w) => setWall(w);
     void p.goLive(serverNow());
     return () => p.destroy();
-  }, [rec.id]);
+  }, [rec.id, received]);
   const m = st?.media;
   const fps = fpsOf(m?.fpsNum, m?.fpsDen);
-  const received = st?.state === 'recording';
   const live = streams.filter((s) => s.state === 'live');
   const since = Math.min(...streams.map((s) => s.liveSince ?? Infinity));
   const out = streams.reduce((a, s) => a + s.kbps, 0);
@@ -94,9 +102,9 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
     <div className="sc-center">
       <div className="sc-viewer-wrap">
         <div className="sc-viewer">
-          <video ref={video} className="sc-video" playsInline />
-          {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Not received now: it will be as soon as a destination is switched on.')}</span>}
-          <Meters out={audio.out} />
+          <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
+          {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
+          {received && <Meters out={audio.out} />}
         </div>
       </div>
       <div className="sc-transport">
@@ -104,15 +112,14 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
         <div className="sc-sep" />
         <span className="st-info">
           <b>{rec.name}</b>
-          {m ? ` · ${m.width}×${m.height} · ${formatName(scanFormat(m), lang() === 'fr')}` : ''}
+          {received && m ? ` · ${m.width}×${m.height} · ${formatName(scanFormat(m), lang() === 'fr')}` : ''}
           {received && st?.bitrate ? ` · ${t('{b} received', { b: mbps(st.bitrate / 1000, locale()) })}` : ''}
         </span>
         <div className="spacer" />
         <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
       </div>
-      <div className={`st-status ${streams.length ? 'on' : ''}`}>
-        {streams.length ? (
-          <>
+      {streams.length > 0 && (
+        <div className="st-status on">
             <span className="st-live-pic">
               <span className="sc-rec" />
               {live.length ? `${t('LIVE')} · ${clockOf(Number.isFinite(since) ? serverNow() - since : 0)}` : t('Connecting…')}
@@ -127,11 +134,8 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
                 <Square size={13} /> {t('Stop all')}
               </button>
             )}
-          </>
-        ) : (
-          <span className="muted">{t('Not sent anywhere: switch a destination on, on the right.')}</span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

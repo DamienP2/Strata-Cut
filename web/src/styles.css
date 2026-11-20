@@ -1360,8 +1360,8 @@ a.btn { color: inherit; }
 .rl-table tr.rl-part td { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; background: var(--panel-2, rgba(255,255,255,0.02)); padding-top: 14px; }
 
 /* Programmation: the timeline on the left (each source's picture at the head of its line), the slots on the right. */
-.sc-plan { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 380px; background: radial-gradient(ellipse at top, #141725 0%, #0b0c12 60%); }
-.sc-plan-main { min-width: 0; overflow: auto; padding: 24px 24px 60px; display: flex; flex-direction: column; gap: 16px; }
+.sc-plan { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 380px; grid-template-rows: minmax(0, 1fr); background: radial-gradient(ellipse at top, #141725 0%, #0b0c12 60%); }
+.sc-plan-main { min-width: 0; min-height: 0; overflow: auto; padding: 24px 24px 60px; display: flex; flex-direction: column; gap: 16px; }
 .sc-plan-main .sc-cal { margin-bottom: 0; }
 .sc-plan .sc-cal-row.sc-cal-axis { min-height: 28px; }
 .sc-plan .sc-cal-row { grid-template-columns: 300px 1fr; min-height: 104px; }
@@ -1398,7 +1398,7 @@ a.btn { color: inherit; }
 .sc-slot-acts { display: flex; gap: 2px; visibility: hidden; }
 .sc-slot-it:hover .sc-slot-acts { visibility: visible; }
 .sc-slot-acts .icon-btn { width: 24px; height: 24px; }
-@media (max-width: 1100px) { .sc-plan { grid-template-columns: 1fr; height: auto; } .sc-plan-slots { border-left: none; border-top: 1px solid var(--line); } .sc-plan .sc-cal-row { grid-template-columns: 200px 1fr; } .sc-cal-pic { width: 80px; } }
+@media (max-width: 1100px) { .sc-plan { grid-template-columns: 1fr; grid-template-rows: auto; height: 100%; overflow: auto; } .sc-plan-main { overflow: visible; } .sc-plan-slots { border-left: none; border-top: 1px solid var(--line); } .sc-plan .sc-cal-row { grid-template-columns: 200px 1fr; } .sc-cal-pic { width: 80px; } }
 
 /* Extraction, Streamer: the sources in two groups (the group says the state). */
 .sc-grp { display: flex; flex-direction: column; gap: 1px; margin-bottom: 6px; }
@@ -1415,3 +1415,5 @@ a.btn { color: inherit; }
 .sc-grp-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sc-grp-air { display: inline-flex; align-items: center; gap: 3px; font: 700 11px var(--mono); color: #ff8aa0; flex: none; }
 .segmented.sc-rec-mode { margin: 0 0 14px; }
+.sc-plan-main > * { flex: none; }
+.sc-grp-it.locked { cursor: default; pointer-events: none; }

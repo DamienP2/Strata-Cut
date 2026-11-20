@@ -484,10 +484,38 @@ fn install_bytes(data: &Path, bytes: &[u8], allow_older: bool) -> Result<String,
     Ok(version)
 }
 
+/// The process starts again once it has stopped cleanly (see `restart_soon`).
+pub static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Kills what this process started and still runs (the recorders' FFmpeg). Left behind, they
+/// stay in the service's group: one of them (the preview, waiting for a stream that no longer
+/// comes) does not end on the service manager's signal, which then waits 90 s before it starts
+/// the server again: a hole of a minute and a half in every recording, at each update.
+fn kill_children() {
+    let me = std::process::id();
+    let Ok(dir) = std::fs::read_dir("/proc") else { return };
+    for e in dir.flatten() {
+        let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<i32>().ok()) else { continue };
+        let Ok(stat) = std::fs::read_to_string(e.path().join("stat")) else { continue };
+        // "pid (name) state ppid …": the name may hold spaces and parentheses.
+        let ppid = stat.rsplit_once(") ").and_then(|(_, rest)| rest.split_whitespace().nth(1)).and_then(|p| p.parse::<u32>().ok());
+        if ppid == Some(me) {
+            // SAFETY: a signal sent to a process this one started.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+    }
+}
+
 /// Restarts the process: supervised → exit(75) (the service manager starts it again);
 /// in the foreground → starts the same program with the same arguments, then exit(0).
 pub fn restart_process() -> ! {
     crate::health::stopped();
+    relaunch()
+}
+
+/// The same, once the server has stopped by itself (its stop already written).
+pub fn relaunch() -> ! {
+    kill_children();
     if crate::supervised() {
         std::process::exit(75);
     }
@@ -508,6 +536,13 @@ fn restart_soon() {
     });
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_millis(800));
+        // Stopped as the system would: the recorders close their files and their FFmpeg end,
+        // then the process starts again (`main`). Should that hang: by force after 20 s.
+        RESTART.store(true, std::sync::atomic::Ordering::SeqCst);
+        // SAFETY: a signal sent to this very process.
+        unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+        std::thread::sleep(Duration::from_secs(20));
+        tracing::warn!("update: the server did not stop by itself in 20 s: restarted by force");
         restart_process();
     });
 }
