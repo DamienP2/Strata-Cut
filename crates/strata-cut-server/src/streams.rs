@@ -189,6 +189,11 @@ fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
         a.extend(s(&["-c:a", "aac", "-b:a", &format!("{ak}k"), "-ar", "48000", "-ac", "2"]));
         a.extend(s(&["-f", if d.srt() { "mpegts" } else { "flv" }]));
     }
+    // A server that stops taking what is sent (10 s): FFmpeg ends and the link is made again,
+    // instead of waiting forever while the destination receives nothing.
+    if !d.srt() {
+        a.extend(s(&["-rw_timeout", "10000000"]));
+    }
     a.push(target(d));
     (a, note)
 }
@@ -224,6 +229,15 @@ pub struct Streams {
     recorders: Arc<Manager>,
     events: Events,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    /// Lives that could not start (the destination never took them), by destination: shown
+    /// with their reason until another start, a stop, or 10 minutes.
+    failed: Mutex<HashMap<String, Failed>>,
+}
+
+struct Failed {
+    source: String,
+    message: String,
+    at: i64,
 }
 
 fn path(data_dir: &Path) -> PathBuf {
@@ -234,7 +248,7 @@ static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl Streams {
     pub fn start(data_dir: &Path, recorders: Arc<Manager>, events: Events) -> Arc<Streams> {
-        Arc::new(Streams { data_dir: data_dir.to_path_buf(), recorders, events, sessions: Mutex::new(HashMap::new()) })
+        Arc::new(Streams { data_dir: data_dir.to_path_buf(), recorders, events, sessions: Mutex::new(HashMap::new()), failed: Mutex::new(HashMap::new()) })
     }
 
     pub fn list(&self) -> Vec<Destination> {
@@ -300,6 +314,13 @@ impl Streams {
                         "history": st.history.iter().map(|k| k.round()).collect::<Vec<_>>(),
                     })
                 })
+                .chain({
+                    let mut f = self.failed.lock().unwrap();
+                    f.retain(|_, x| now - x.at < 600_000);
+                    f.iter()
+                        .map(|(dest, x)| json!({ "destination": dest, "source": x.source, "started": x.at, "state": "failed", "message": x.message, "note": "", "liveSince": null, "duration": null, "bytes": 0, "kbps": 0, "history": [] }))
+                        .collect::<Vec<_>>()
+                })
                 .collect(),
         )
     }
@@ -315,6 +336,7 @@ impl Streams {
                 return if s.source == source { Ok(()) } else { Err("this destination already sends another source".into()) };
             }
         }
+        self.failed.lock().unwrap().remove(dest_id);
         let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), stop: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
         self.sessions.lock().unwrap().insert(dest_id.to_string(), session.clone());
         // The source is received while it is sent (recorded meanwhile, whatever its programme).
@@ -333,6 +355,9 @@ impl Streams {
     }
 
     pub fn end(&self, dest_id: &str) -> bool {
+        if self.failed.lock().unwrap().remove(dest_id).is_some() {
+            self.changed();
+        }
         match self.sessions.lock().unwrap().get(dest_id) {
             Some(s) => {
                 let _ = s.stop.send(true);
@@ -355,10 +380,14 @@ impl Streams {
         }
     }
 
-    /// One FFmpeg after another until stopped: a link that falls is made again (3 s, then up to 30 s).
+    /// One FFmpeg after another until stopped. A live that never started (the destination did
+    /// not take it: its key, its address) ends there, with why; a live lost on the way is made
+    /// again until it is stopped (2 s, then every 5 s).
     async fn run(&self, s: Arc<Session>, d: Destination) {
         let mut stop = s.stop.subscribe();
         let mut failures = 0u32;
+        // Live at least once: a link lost on the way is made again.
+        let mut ever_live = false;
         let ffmpeg = self.recorders.ffmpeg.clone();
         loop {
             if *stop.borrow() {
@@ -396,9 +425,14 @@ impl Streams {
                 tokio::spawn(async move {
                     let mut lines = tokio::io::BufReader::new(err).lines();
                     while let Ok(Some(l)) = lines.next_line().await {
+                        // The decoder's complaints about the source (a damaged picture) say nothing
+                        // of the link, and came so many that its own error was pushed out.
+                        if decoder_noise(&l) {
+                            continue;
+                        }
                         let mut q = last.lock().unwrap();
                         q.push_back(l);
-                        if q.len() > 20 {
+                        if q.len() > 40 {
                             q.pop_front();
                         }
                     }
@@ -407,6 +441,7 @@ impl Streams {
             let progress = child.stdout.take().map(|o| tokio::io::BufReader::new(o).lines());
             let started = std::time::Instant::now();
             let ended = self.follow(&s, &mut child, progress, &mut stop).await;
+            ever_live |= s.stats.lock().unwrap().live_since.is_some();
             rec.taps.lock().unwrap().retain(|t| t.0 != key);
             if ended {
                 crate::recorder::run::stop_within(&mut child, Duration::from_secs(1)).await;
@@ -415,6 +450,13 @@ impl Streams {
             // The link fell: why, and again a little later.
             let lines: Vec<String> = last.lock().unwrap().iter().cloned().collect();
             let why = if lines.iter().all(|l| l.trim().is_empty()) { "the link fell: connecting again".to_string() } else { explain(&lines.join("\n"), &hide(&crate::recorder::run::best_line(&lines), &d)) };
+            // Never live: it did not start, there is nothing to make again.
+            if !ever_live {
+                let why = why.replace(": connecting again", "").replace(": trying again", "");
+                tracing::warn!("streaming to {}: could not start: {why}", d.name);
+                self.failed.lock().unwrap().insert(s.dest.clone(), Failed { source: s.source.clone(), message: why, at: now_ms() });
+                break;
+            }
             if started.elapsed() > Duration::from_secs(60) {
                 failures = 0;
             }
@@ -426,7 +468,9 @@ impl Streams {
                 st.live_since = None;
                 st.kbps = 0.0;
             });
-            let wait = Duration::from_secs((3 * failures as u64).min(30));
+            // Again soon: while the link is down the destination receives nothing (its player
+            // plays its last seconds over and over). 2 s, then 5 s at most.
+            let wait = Duration::from_secs(if failures <= 1 { 2 } else { 5 });
             tokio::select! {
                 _ = tokio::time::sleep(wait) => {}
                 _ = stop.changed() => {}
@@ -537,13 +581,26 @@ fn hide(msg: &str, d: &Destination) -> String {
 }
 
 /// The usual reasons, said plainly (from all FFmpeg said; `why`: its most telling line).
+/// A line of the decoder about the source's pictures or sound (a damaged packet), not about the link.
+fn decoder_noise(line: &str) -> bool {
+    let l = line.trim_start();
+    ["[h264 @", "[hevc @", "[mpeg2video @", "[aac @", "[mp2 @", "[ac3 @", "[eac3 @", "[aac_latm @"].iter().any(|p| l.starts_with(p))
+        || ["Consider increasing the value for the 'analyzeduration'", "Increasing reorder buffer", "corrupt input packet", "Packet corrupt", "PES packet size mismatch", "Non-monotonic DTS", "changing to"].iter().any(|k| l.contains(k))
+}
+
 fn explain(all: &str, why: &str) -> String {
     let w = all.to_ascii_lowercase();
     let link_failed = w.contains("connection to") && w.contains("failed");
     if link_failed || w.contains("connection refused") || w.contains("timed out") || w.contains("no route") || w.contains("failed to resolve") || w.contains("name or service") || w.contains("connection setup failure") {
         "no answer from the server (address or firewall)".into()
-    } else if ["badname", "unauthorized", "forbidden", "returned 401", "returned 403", "closed by the server", "connection reset", "broken pipe", "wrong passphrase", "authentication"].iter().any(|k| w.contains(k)) {
+    } else if w.contains("badname") || w.contains("already publishing") || w.contains("already in use") {
+        "the server still holds the previous link (same stream key): trying again".into()
+    } else if ["unauthorized", "forbidden", "returned 401", "returned 403", "wrong passphrase", "authentication"].iter().any(|k| w.contains(k)) {
         "the server refuses the stream: check the stream key".into()
+    } else if ["closed by the server", "connection reset", "broken pipe", "end of file"].iter().any(|k| w.contains(k)) {
+        "the server closed the link: connecting again".into()
+    } else if w.contains("timed out") || w.contains("timeout") {
+        "the server stopped taking the stream: connecting again".into()
     } else if w.contains("protocol not found") {
         "this server's ffmpeg cannot send there (rtmps / srt not built in)".into()
     } else if why.is_empty() {
@@ -731,7 +788,10 @@ mod tests {
         // A port holding "401" is not a refused key.
         assert_eq!(explain("[tcp @ 0x1] Connection to tcp://127.0.0.1:19401?tcp_nodelay=0 failed: Connection refused", ""), "no answer from the server (address or firewall)");
         assert_eq!(explain("[srt @ 0x5] Connection to 127.0.0.1:19501 failed: Input/output error", ""), "no answer from the server (address or firewall)");
-        assert_eq!(explain("Error in the pull function. NetStream.Publish.BadName", ""), "the server refuses the stream: check the stream key");
+        assert_eq!(explain("Error in the pull function. NetStream.Publish.BadName", ""), "the server still holds the previous link (same stream key): trying again");
+        assert_eq!(explain("[rtmp @ 0x1] Server error: Unauthorized", ""), "the server refuses the stream: check the stream key");
+        assert_eq!(explain("av_interleaved_write_frame(): Broken pipe", ""), "the server closed the link: connecting again");
+        assert!(decoder_noise("[h264 @ 0x55] mmco: unref short failure") && decoder_noise("[mpegts @ 0x1] Packet corrupt (stream = 0, dts = 1).") && !decoder_noise("[rtmp @ 0x1] Server error: x"));
         assert_eq!(explain("x", "[flv @ 0x2] Something odd"), "Something odd");
     }
 

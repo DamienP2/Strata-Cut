@@ -32,7 +32,7 @@ export interface StreamInfo {
   destination: string;
   source: string;
   started: number;
-  state: 'connecting' | 'live' | 'retrying';
+  state: 'connecting' | 'live' | 'retrying' | 'failed';
   message: string;
   note: string;
   liveSince: number | null;
@@ -72,9 +72,10 @@ export function useDestinations(): [Destination[] | null, () => void] {
 }
 
 /** The lives under way, every `ms` (and at once when one starts or stops). */
-export function useStreams(ms = 1000): StreamInfo[] {
+/** The lives under way (`failed`: also those that could not start, with why). */
+export function useStreams(ms = 1000, failed = false): StreamInfo[] {
   const [list, setList] = useState<StreamInfo[]>([]);
-  const load = () => void api<StreamInfo[]>('GET', '/api/streams').then(setList, () => {});
+  const load = () => void api<StreamInfo[]>('GET', '/api/streams').then((all) => setList(failed ? all : all.filter((s) => s.state !== 'failed')), () => {});
   useEffect(() => {
     load();
     const i = setInterval(load, ms);

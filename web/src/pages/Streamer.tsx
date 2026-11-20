@@ -27,7 +27,9 @@ const COLORS = ['var(--accent)', 'var(--pvw)', 'var(--warn)', '#c084fc', '#38bdf
 
 export function Streamer({ source }: { source?: string }) {
   const { recorders, status } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status })));
-  const streams = useStreams(1000);
+  // With the lives that could not start (said on their destination, with why).
+  const all = useStreams(1000, true);
+  const streams = all.filter((s) => s.state !== 'failed');
   const [dests] = useDestinations();
   const [last, setLast] = useDisplayPref<string | null>('streamer.source', null);
   const known = (x?: string | null) => !!x && recorders.some((r) => r.id === x);
@@ -57,7 +59,7 @@ export function Streamer({ source }: { source?: string }) {
         }}
       />
       {rec ? <Center key={rec.id} rec={rec} streams={mine} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
-      <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} streams={streams} />}</aside>
+      <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} streams={streams} failed={all.filter((s) => s.state === 'failed')} />}</aside>
       <div className="st-bw">
         <Bandwidth streams={mine} dests={dests ?? []} />
       </div>
@@ -148,7 +150,7 @@ interface Draft {
   test?: { busy: boolean; ok?: boolean; text?: string };
 }
 
-function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[] | null; streams: StreamInfo[] }) {
+function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Destination[] | null; streams: StreamInfo[]; failed: StreamInfo[] }) {
   const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const { recorders, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast })));
   const [starting, setStarting] = useState(false);
@@ -222,6 +224,8 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
           const busy = !!s && s.source !== rec.id;
           const on = !!s && !busy;
           const x = draft(d);
+          // Started from here and refused by the destination: why (no new try by itself).
+          const refused = !s ? failed.find((f) => f.destination === d.id && f.source === rec.id) : undefined;
           return (
             <div key={d.id} className={`st-dest ${on ? 'on' : ''} ${busy ? 'busy' : ''}`}>
               <div className="st-dest-top">
@@ -241,6 +245,11 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
                   </button>
                 )}
               </div>
+              {refused && (
+                <div className="st-note bad">
+                  <AlertTriangle size={11} /> {t('Could not start: {why}', { why: t(refused.message) })}
+                </div>
+              )}
               {busy && s && (
                 <div className="st-note">
                   {t('Busy: sends {source}', { source: nameOf(s.source) })}

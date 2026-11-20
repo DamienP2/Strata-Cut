@@ -94,6 +94,26 @@ const LIVE_DELAY = 7.0;
 const LIVE_DELAY_MIN = 6.0;
 const LIVE_DELAY_MAX = 15.0;
 
+/**
+ * A tick every `ms` that the browser does not slow down when the tab is in the background (a
+ * page's own timers run once a minute at most after a few minutes hidden: the live then stopped
+ * following its fragments, played what it had, and jumped): a worker's timer, which is not held
+ * back. A page timer when a worker cannot be made.
+ */
+function steadyTicker(ms: number, fn: () => void): () => void {
+  try {
+    const src = `setInterval(() => postMessage(0), ${ms});`;
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    const w = new Worker(url);
+    URL.revokeObjectURL(url);
+    w.onmessage = fn;
+    return () => w.terminate();
+  } catch {
+    const i = window.setInterval(fn, ms);
+    return () => clearInterval(i);
+  }
+}
+
 const playable = (r: RunInfo) => !!r.video?.codec && r.video.segs.length > 0 && r.to - r.from > 4000;
 /** The newest run that can be played (else the newest at all). */
 function newest(runs: RunInfo[]): RunInfo | null {
@@ -119,7 +139,7 @@ export class LoopPlayer {
   private audioBuf: Buffer | null = null;
   private map = new Map<number, [number, number, number]>();
   private alive = { dead: false };
-  private timer = 0;
+  private stopTicker: () => void = () => {};
   private reverse = 0;
   private frameCb = 0;
   /** Live: when the picture last moved (server ms), to start again if it stays stuck. */
@@ -153,15 +173,22 @@ export class LoopPlayer {
     this.video.addEventListener('timeupdate', this.onTime);
     this.video.addEventListener('waiting', this.onWaiting);
     // Live: every half second (the new fragments, the distance to the edge); else every 2 s.
-    this.timer = window.setInterval(() => {
+    this.stopTicker = steadyTicker(500, () => {
       this.ticks++;
       if (this.live || this.ticks % 4 === 0) void this.refresh();
-    }, 500);
+    });
+    document.addEventListener('visibilitychange', this.onVisible);
   }
+
+  /** Back on the page while live: at the live at once, whatever happened while it was hidden. */
+  private onVisible = () => {
+    if (document.visibilityState === 'visible' && this.live && !this.alive.dead) void this.goLive(this.now());
+  };
 
   destroy() {
     this.alive.dead = true;
-    clearInterval(this.timer);
+    this.stopTicker();
+    document.removeEventListener('visibilitychange', this.onVisible);
     clearInterval(this.reverse);
     const v = this.video as HTMLVideoElement & { cancelVideoFrameCallback?: (h: number) => void };
     v.cancelVideoFrameCallback?.(this.frameCb);

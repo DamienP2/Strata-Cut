@@ -177,4 +177,12 @@ export const streaming: Record<string, string> = {
   'no such destination': 'Cette destination n’existe plus.',
   'no such source': 'Cette source n’existe plus.',
   'the recording is continuous, by slots or off': 'L’enregistrement est continu, aux heures programmées ou arrêté.',
+  'Could not start: {why}': 'N’a pas pu démarrer\u00a0: {why}',
+  'the server still holds the previous link (same stream key): trying again': 'Le serveur garde encore la liaison précédente (même clé de stream)\u00a0: nouvel essai',
+  'the server still holds the previous link (same stream key)': 'Le serveur garde encore la liaison précédente (même clé de stream)',
+  'the server closed the link: connecting again': 'Le serveur a fermé la liaison\u00a0: reconnexion',
+  'the server closed the link': 'Le serveur a fermé la liaison',
+  'the server stopped taking the stream: connecting again': 'Le serveur ne prend plus le flux\u00a0: reconnexion',
+  'the server stopped taking the stream': 'Le serveur ne prend plus le flux',
+  'the link fell': 'La liaison est tombée',
 };
