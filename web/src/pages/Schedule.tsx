@@ -6,7 +6,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, ChevronLeft, ChevronRight, Pencil, Plus, Scissors, Search, Square, Trash2, TriangleAlert, Tv, X } from 'lucide-react';
+import { CalendarClock, Check, ChevronLeft, ChevronRight, Pause, Play, Plus, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { Empty } from '../ui/Empty';
 import { api, can, serverEvents, serverNow, useApp } from '../store';
 import { locale, t, tn } from '../i18n';
 import { navigate } from '../router';
@@ -33,11 +34,10 @@ function dateIn(ms: number, tz: string): string {
 const hhmm = (ms: number, tz: string) => clock(ms, tz).slice(0, 5);
 
 export function Schedule() {
-  const { recorders, user, timezone, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, timezone: s.timezone, toast: s.toast })));
+  const { recorders, user, timezone, toast, status } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, timezone: s.timezone, toast: s.toast, status: s.status })));
   // Starting, stopping, programming: as the role allows.
   const admin = can.has(user, 'schedule.edit');
   const [slots, setSlots] = useState<Slot[] | null>(null);
-  const [q, setQ] = useDisplayPref('schedule.q', '');
   const [only, setOnly] = useDisplayPref<string | null>('schedule.recorder', null);
   const [edit, setEdit] = useState<{ slot: Slot | null; initial?: Partial<Slot> } | null>(null);
   const load = useCallback(async () => {
@@ -61,15 +61,72 @@ export function Schedule() {
 
   // Every recorder can be programmed: a stopped one records during its slots.
   const programmed = recorders;
-  const nameOf = (id: string) => recorders.find((r) => r.id === id)?.name ?? '—';
   const names = useMemo(dayNames, []);
   if (!slots) return <div className="loading">{t('Loading…')}</div>;
-  // The list: what is to come (an ended slot is no longer shown), the paused ones last.
-  const shown = slots
-    .filter((s) => s.next && (!only || s.recorder === only) && (!q || `${s.name} ${nameOf(s.recorder)}`.toLowerCase().includes(q.toLowerCase())))
-    .sort((a, b) => Number(!a.enabled) - Number(!b.enabled) || a.next!.start - b.next!.start);
-  const upcoming = slots.filter((s) => s.next && s.enabled).sort((a, b) => a.next!.start - b.next!.start)[0];
+  const recording = recorders.filter((r) => status[r.id]?.state === 'recording').length;
+
+  return (
+    <div className="sc-plan">
+      <div className="sc-plan-main">
+        <div className="settings-head">
+          <div>
+            <h1>{t('Schedule')}</h1>
+            <p className="muted">
+              {tn(recorders.length, '{n} recorder', '{n} recorders')} · {tn(recording, '{n} recording now', '{n} recording now')}
+            </p>
+          </div>
+        </div>
+        {programmed.length === 0 ? (
+          <div className="empty big">
+            <CalendarClock size={22} />
+            <p>{t('No recorder yet.')}</p>
+          </div>
+        ) : (
+          <>
+            <TzWarning timezone={timezone} admin={admin} />
+            <Calendar recorders={programmed} slots={slots} timezone={timezone} admin={admin} onOpen={(slot) => setEdit({ slot })} onNew={(initial) => setEdit({ slot: null, initial })} />
+          </>
+        )}
+      </div>
+      <SlotPanel slots={slots} recorders={recorders} names={names} timezone={timezone} admin={admin} only={only} setOnly={setOnly} onOpen={(slot) => setEdit({ slot })} onNew={() => setEdit({ slot: null })} />
+      {edit && <SlotModal slot={edit.slot} initial={edit.initial} recorders={programmed} preset={only} names={names} timezone={timezone} admin={admin} onClose={() => setEdit(null)} />}
+    </div>
+  );
+}
+
+/** "every day", "Mon → Fri", "Mon, Wed", "once". */
+function repeatOf(s: Slot, names: string[]): string {
+  if (s.date) return t('once');
+  const d = [...s.days].sort();
+  if (d.length === 7) return t('every day');
+  if (d.length > 2 && d.every((x, i) => i === 0 || x === d[i - 1] + 1)) return `${names[d[0] - 1]} → ${names[d[d.length - 1] - 1]}`;
+  return d.map((x) => names[x - 1]).join(', ');
+}
+
+/**
+ * On the right: the slots programmed, by day (today, tomorrow, later), each with its state;
+ * then those finished over the last days (what was recorded of each, to extract).
+ */
+function SlotPanel({ slots, recorders, names, timezone, admin, only, setOnly, onOpen, onNew }: { slots: Slot[]; recorders: Recorder[]; names: string[]; timezone: string; admin: boolean; only: string | null; setOnly: (id: string | null) => void; onOpen: (s: Slot) => void; onNew: () => void }) {
+  const toast = useApp((s) => s.toast);
+  const done = useFinished();
   const now = serverNow();
+  const nameOf = (id: string) => recorders.find((r) => r.id === id)?.name ?? '—';
+  const mine = (id: string) => !only || id === only;
+  const coming = slots.filter((s) => s.next && mine(s.recorder)).sort((a, b) => a.next!.start - b.next!.start);
+  const today = startOfDay(now, timezone);
+  const dayOf = (ms: number) => Math.round((startOfDay(ms, timezone) - today) / DAY);
+  const groups: [string, Slot[]][] = [];
+  for (const s of coming) {
+    const g = dayOf(s.next!.start);
+    const label = g <= 0 ? t('Today') : g === 1 ? t('Tomorrow') : t('Later');
+    const last = groups[groups.length - 1];
+    if (last && last[0] === label) last[1].push(s);
+    else groups.push([label, [s]]);
+  }
+  // Ended today (the days before: in the timeline, Day or Week).
+  const finished = (done ?? []).filter((x) => mine(x.recorder) && x.start >= today);
+  const count = (id: string) => slots.filter((s) => s.next && s.recorder === id).length;
 
   const remove = async (s: Slot) => {
     if (!(await confirmDialog({ title: t('Delete the slot “{name}”?', { name: s.name || nameOf(s.recorder) }), message: t('What it recorded stays.'), confirm: t('Delete'), danger: true }))) return;
@@ -88,151 +145,117 @@ export function Schedule() {
   };
 
   return (
-    <div className="library">
-      <div className="library-inner wide">
-        <div className="settings-head">
-          <div>
-            <h1>{t('Schedule')}</h1>
-            <p className="muted">
-              {tn(slots.length, '{n} slot', '{n} slots')}
-              {upcoming?.next && ` · ${t('next: {when}', { when: `${day(upcoming.next.start, timezone, locale())} ${hhmm(upcoming.next.start, timezone)} ${upcoming.name || nameOf(upcoming.recorder)}` })}`}
-            </p>
-          </div>
-          <div className="spacer" />
-          {admin && programmed.length > 0 && (
-            <button className="btn primary" onClick={() => setEdit({ slot: null })}>
-              <Plus size={14} /> {t('New slot')}
+    <aside className="sc-plan-slots">
+      <div className="sc-plan-slots-head">
+        <div className="sc-plan-slots-title">
+          <h2>{t('Programmed slots')}</h2>
+          {admin && recorders.length > 0 && (
+            <button className="btn primary small" onClick={onNew}>
+              <Plus size={13} /> {t('New slot')}
             </button>
           )}
         </div>
-
-        {programmed.length === 0 ? (
-          <div className="empty big">
-            <CalendarClock size={22} />
-            <p>{t('No recorder yet.')}</p>
-            <button className="btn" onClick={() => void navigate('/')}>
-              {t('Recorders')}
+        {recorders.length > 1 && (
+          <div className="asr-chips">
+            <button className={`asr-chip ${only === null ? 'on' : ''}`} onClick={() => setOnly(null)}>
+              {t('All')} <span className="asr-chip-n">{slots.filter((s) => s.next).length}</span>
             </button>
+            {recorders.map((r) => (
+              <button key={r.id} className={`asr-chip ${only === r.id ? 'on' : ''}`} onClick={() => setOnly(only === r.id ? null : r.id)}>
+                {r.name} {count(r.id) > 0 && <span className="asr-chip-n">{count(r.id)}</span>}
+              </button>
+            ))}
           </div>
-        ) : (
-          <>
-            <div className="media-toolbar">
-              <label className="search">
-                <Search size={14} />
-                <input value={q} placeholder={t('Search slots')} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
-              </label>
-              <div className="asr-chips">
-                <button className={`asr-chip ${only === null ? 'on' : ''}`} onClick={() => setOnly(null)}>
-                  {t('All recorders')} <span className="asr-chip-n">{slots.length}</span>
-                </button>
-                {programmed.map((r) => (
-                  <button key={r.id} className={`asr-chip ${only === r.id ? 'on' : ''}`} onClick={() => setOnly(r.id)}>
-                    <RecLogo rec={r} size="sm" />
-                    {r.name} <span className="asr-chip-n">{slots.filter((s) => s.recorder === r.id).length}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <TzWarning timezone={timezone} admin={admin} />
-            <Calendar
-              recorders={programmed.filter((r) => !only || r.id === only)}
-              slots={slots}
-              timezone={timezone}
-              admin={admin}
-              onOpen={(slot) => setEdit({ slot })}
-              onNew={(initial) => setEdit({ slot: null, initial })}
-            />
-            {shown.length === 0 ? (
-              <div className="empty big">
-                <CalendarClock size={22} />
-                <p>{q || only ? t('No match') : t('No slot yet')}</p>
-              </div>
-            ) : (
-              <div className="sc-slot-list">
-                {shown.map((s) => {
-                  const n = s.next!;
-                  const live = s.enabled && !!s.active;
-                  const rec = recorders.find((r) => r.id === s.recorder);
-                  const dayGap = Math.round((startOfDay(n.start, timezone) - startOfDay(now, timezone)) / DAY);
-                  const dayLabel = dayGap === 0 ? t('Today') : dayGap === 1 ? t('Tomorrow') : day(n.start, timezone, locale());
-                  return (
-                    <div key={s.id} className={`sc-slot-row ${s.enabled ? '' : 'paused'} ${live ? 'live' : ''}`}>
-                      <button type="button" className="sc-slot-when" onClick={() => setEdit({ slot: s })} title={t('Edit')}>
-                        <span className="sc-slot-day">{dayLabel}</span>
-                        <span className="sc-slot-time">{hhmm(n.start, timezone)}</span>
-                      </button>
-                      <div className="sc-slot-main">
-                        <strong>{s.name || t('Programmed slot')}</strong>
-                        <span className="sc-slot-meta">
-                          <span className={`nav-dot ${rec?.enabled ? 'ok' : ''}`} title={rec?.enabled ? t('This recorder already records all the time: its slots change nothing while it runs.') : undefined} />
-                          <RecLogo rec={rec} size="sm" />
-                          {nameOf(s.recorder)}
-                          <span className="sc-slot-sep">·</span>
-                          {s.date ? (
-                            t('Once')
-                          ) : (
-                            <span className="sc-slot-days">
-                              {names.map((nm, k) => (
-                                <i key={k} className={s.days.includes(k + 1) ? 'on' : ''}>
-                                  {nm.charAt(0).toUpperCase()}
-                                </i>
-                              ))}
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                      <div className="sc-slot-hours">
-                        <span>
-                          {s.start} – {s.end}
-                        </span>
-                        <span className="muted">{until(n.end - n.start)}</span>
-                      </div>
-                      <div className="sc-slot-state">
-                        {!s.enabled ? (
-                          <span className="sc-pill">{t('Paused')}</span>
-                        ) : live ? (
-                          <button type="button" className="sc-pill live link" title={t('Click: watch it in Extraction')} onClick={() => void navigate(`/extract/${s.recorder}`)}>
-                            <span className="sc-rec" /> {t('Recording until {h}', { h: hhmm(n.end, timezone) })}
-                          </button>
-                        ) : (
-                          <span className="sc-pill soon">{t('in {d}', { d: until(n.start - now) })}</span>
-                        )}
-                      </div>
-                      <div className="sc-slot-actions">
-                        {admin && (
-                          <>
-                            <label className="check sc-slot-on" title={t('Paused: the slot records nothing until it is active again (nothing is deleted).')}>
-                              <input type="checkbox" checked={s.enabled} onChange={() => void toggle(s)} />
-                              <span>{s.enabled ? t('Active') : t('Paused')}</span>
-                            </label>
-                            <button className="icon-btn ghost" title={t('Edit')} onClick={() => setEdit({ slot: s })}>
-                              <Pencil size={14} />
-                            </button>
-                            <button className="icon-btn ghost" title={t('Delete')} onClick={() => void remove(s)}>
-                              <Trash2 size={14} />
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-            <Finished recorders={recorders} only={only} q={q} timezone={timezone} />
-          </>
         )}
       </div>
-      {edit && <SlotModal slot={edit.slot} initial={edit.initial} recorders={programmed} preset={only} names={names} timezone={timezone} admin={admin} onClose={() => setEdit(null)} />}
-    </div>
+      <div className="sc-plan-slots-list">
+        {coming.length === 0 && finished.length === 0 && <Empty icon={CalendarClock} text={t('No slot yet')} />}
+        {groups.map(([label, list]) => (
+          <div key={label} className="sc-plan-slots-group">
+            <div className="sc-plan-slots-day">{label}</div>
+            {list.map((s) => {
+              const n = s.next!;
+              const live = s.enabled && !!s.active;
+              return (
+                <div key={s.id} className={`sc-slot-it ${live ? 'live' : ''} ${s.enabled ? '' : 'paused'}`} onClick={() => (live ? void navigate(`/extract/${s.recorder}`) : onOpen(s))}>
+                  <span className="sc-slot-bar" />
+                  <div className="sc-slot-txt">
+                    <span className="sc-slot-hm">
+                      {dayOf(n.start) > 1 ? `${day(n.start, timezone, locale())} · ` : ''}
+                      {hhmm(n.start, timezone)} → {hhmm(n.end, timezone)}
+                    </span>
+                    <b>{s.name || t('Programmed slot')}</b>
+                    <small>
+                      {nameOf(s.recorder)} · {repeatOf(s, names)}
+                    </small>
+                  </div>
+                  <div className="sc-slot-side">
+                    {!s.enabled ? (
+                      <span className="sc-pill">{t('Paused')}</span>
+                    ) : live ? (
+                      <span className="sc-pill live">
+                        <span className="sc-rec" /> {t('In progress')}
+                      </span>
+                    ) : (
+                      <span className="sc-pill soon">{t('in {d}', { d: until(n.start - now) })}</span>
+                    )}
+                    {admin && (
+                      <span className="sc-slot-acts" onClick={(e) => e.stopPropagation()}>
+                        <button className="icon-btn ghost" data-tip={s.enabled ? t('Pause') : t('Resume')} aria-label={s.enabled ? t('Pause') : t('Resume')} onClick={() => void toggle(s)}>
+                          {s.enabled ? <Pause size={13} /> : <Play size={13} />}
+                        </button>
+                        <button className="icon-btn ghost danger" data-tip={t('Delete')} aria-label={t('Delete')} onClick={() => void remove(s)}>
+                          <Trash2 size={13} />
+                        </button>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+        {finished.length > 0 && (
+          <div className="sc-plan-slots-group">
+            <div className="sc-plan-slots-day">{t('Finished today')}</div>
+            {finished.map((x) => {
+              const usable = x.share > 0;
+              return (
+                <div key={`${x.slot}-${x.start}`} className={`sc-slot-it done ${usable ? '' : 'gone'}`} onClick={() => usable && void navigate(`/extract/${x.recorder}?at=${Math.round(x.start)}`)} title={usable ? t('Click: open it in Extraction') : undefined}>
+                  <span className="sc-slot-bar" />
+                  <div className="sc-slot-txt">
+                    <span className="sc-slot-hm">
+                      {hhmm(x.start, timezone)} → {hhmm(x.end, timezone)}
+                    </span>
+                    <b>{x.name || t('Programmed slot')}</b>
+                    <small>{nameOf(x.recorder)}</small>
+                  </div>
+                  <div className="sc-slot-side">
+                    {x.share >= 0.98 ? (
+                      <span className="sc-pill ok">
+                        <Check size={11} /> {t('Recorded')}
+                      </span>
+                    ) : usable ? (
+                      <span className="sc-pill soon">{t('Partly recorded {p} %', { p: Math.round(x.share * 100) })}</span>
+                    ) : (
+                      <span className="sc-pill">{x.gone ? t('No longer in the loop') : t('Not recorded')}</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
 
 /**
- * The slots that ended over the last days, the newest first: what was recorded of each
- * (from the loop), and the way to it in Extraction while the loop still has it.
+ * The slots that ended over the last 7 days, the newest first: what was recorded of each
+ * (from the loop).
  */
-function Finished({ recorders, only, q, timezone }: { recorders: Recorder[]; only: string | null; q: string; timezone: string }) {
+function useFinished() {
   const [done, setDone] = useState<(Occurrence & { share: number; gone: boolean })[] | null>(null);
   useEffect(() => {
     let dead = false;
@@ -271,58 +294,7 @@ function Finished({ recorders, only, q, timezone }: { recorders: Recorder[]; onl
       clearInterval(i);
     };
   }, []);
-  const nameOf = (id: string) => recorders.find((r) => r.id === id)?.name ?? '—';
-  const shown = (done ?? []).filter((x) => (!only || x.recorder === only) && (!q || `${x.name} ${nameOf(x.recorder)}`.toLowerCase().includes(q.toLowerCase()))).slice(0, 60);
-  if (!done || shown.length === 0) return null;
-  return (
-    <section className="sc-done">
-      <h2>{t('Finished recordings')}</h2>
-      <p className="muted">{t('The slots of the last 7 days. What is still in the loop can be extracted.')}</p>
-      <div className="sc-slot-list">
-        {shown.map((x) => {
-          const pct = Math.round(x.share * 100);
-          const usable = x.share > 0;
-          return (
-            <div key={`${x.slot}-${x.start}`} className="sc-slot-row done">
-              <div className="sc-slot-when">
-                <span className="sc-slot-day">{day(x.start, timezone, locale())}</span>
-                <span className="sc-slot-time">{hhmm(x.start, timezone)}</span>
-              </div>
-              <div className="sc-slot-main">
-                <strong>{x.name || t('Programmed slot')}</strong>
-                <span className="sc-slot-meta">
-                  <RecLogo rec={recorders.find((r) => r.id === x.recorder)} size="sm" />
-                  {nameOf(x.recorder)}
-                </span>
-              </div>
-              <div className="sc-slot-hours">
-                <span>
-                  {hhmm(x.start, timezone)} – {hhmm(x.end, timezone)}
-                </span>
-                <span className="muted">{until(x.end - x.start)}</span>
-              </div>
-              <div className="sc-slot-state">
-                {x.share >= 0.98 ? (
-                  <span className="sc-pill ok">{t('Recorded')}</span>
-                ) : usable ? (
-                  <span className="sc-pill soon">{t('Partly recorded {p} %', { p: pct })}</span>
-                ) : (
-                  <span className="sc-pill">{x.gone ? t('No longer in the loop') : t('Not recorded')}</span>
-                )}
-              </div>
-              <div className="sc-slot-actions">
-                {usable && (
-                  <button className="btn small" onClick={() => void navigate(`/extract/${x.recorder}?at=${Math.round(x.start)}`)}>
-                    <Scissors size={13} /> {t('Extract')}
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </section>
-  );
+  return done;
 }
 
 /** "2 h 05", "12 min", "3 j" */
@@ -579,8 +551,71 @@ function Recorded({ spans, recId, from, to, now, loopFrom, tileMs, x }: { spans:
 const TILE_STEPS = [30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 14_400_000];
 const recMode = (r: Recorder): RecMode => (r.enabled ? 'continuous' : r.slotsOff ? 'off' : 'slots');
 
+/** A source at the head of its line: its picture, its state in words, one button (REC / Stop). */
+function SourceHead({ rec, admin, timezone, onMode }: { rec: Recorder; admin: boolean; timezone: string; onMode: (m: RecMode) => void }) {
+  const st = useApp((s) => s.status[rec.id]);
+  const state = st?.state ?? 'off';
+  const recording = state === 'recording';
+  const [n, setN] = useState(0);
+  const [img, setImg] = useState(true);
+  useEffect(() => {
+    if (!recording) return;
+    const i = setInterval(() => {
+      setN((x) => x + 1);
+      setImg(true);
+    }, 4000);
+    return () => clearInterval(i);
+  }, [recording]);
+  const what = recording
+    ? rec.enabled
+      ? t('Records all the time')
+      : st?.slot
+        ? t('Slot “{name}” until {h}', { name: st.slot.name || t('Programmed slot'), h: hhmm(st.slot.end, timezone) })
+        : t('Recording (slot)')
+    : state === 'nosignal'
+      ? t('No signal')
+      : st?.nextSlot
+        ? t('Next: {when}', { when: `${hhmm(st.nextSlot.start, timezone)} ${st.nextSlot.name}`.trim() })
+        : t('Stopped (source)');
+  return (
+    <div className="sc-cal-name sc-cal-src">
+      <div className="sc-cal-pic">
+        {img && (recording || state === 'starting') ? <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${n}`} alt="" onError={() => setImg(false)} /> : <div className="sc-pic lost" />}
+        {recording && (
+          <span className="sc-onpic tl">
+            <span className="sc-rec" />
+            REC
+          </span>
+        )}
+        {state === 'nosignal' && (
+          <span className="sc-cal-pic-msg">
+            <WifiOff size={13} />
+          </span>
+        )}
+      </div>
+      <div className="sc-cal-info">
+        <span className="sc-cal-info-name">
+          <RecLogo rec={rec} size="sm" />
+          <b title={rec.name}>{rec.name}</b>
+        </span>
+        <small className={recording ? 'rec' : ''}>{what}</small>
+        {admin &&
+          (rec.enabled ? (
+            <button type="button" className="btn small" onClick={() => onMode('slots')}>
+              <Square size={11} /> {t('Stop')}
+            </button>
+          ) : (
+            <button type="button" className="btn small sc-cal-start" onClick={() => onMode('continuous')}>
+              <span className="sc-rec" /> REC
+            </button>
+          ))}
+      </div>
+    </div>
+  );
+}
+
 function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
-  const { status, toast } = useApp(useShallow((s) => ({ status: s.status, toast: s.toast })));
+  const toast = useApp((s) => s.toast);
   // How each source is recorded: chosen on its line.
   const setMode = async (r: Recorder, mode: RecMode) => {
     try {
@@ -640,7 +675,7 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
   useEffect(() => {
     const el = grid.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setLaneW(Math.max(200, el.clientWidth - 290)));
+    const ro = new ResizeObserver(() => setLaneW(Math.max(200, el.clientWidth - 300)));
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -700,7 +735,6 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
         </button>
         <strong className="sc-cal-range">{label}</strong>
         <div className="spacer" />
-        {admin && <span className="muted sc-cal-tip">{t('Click or drag on a row to programme; click a slot for its details.')}</span>}
         <Segmented
           value={view}
           options={[
@@ -746,37 +780,7 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
           const guide = guides[r.id] ?? [];
           return (
             <div key={r.id} className="sc-cal-row">
-              <div className="sc-cal-name sc-cal-mode">
-                <div className="sc-cal-mode-top">
-                  <span className={`nav-dot ${status[r.id]?.state === 'recording' ? 'ok' : ''}`} />
-                  <RecLogo rec={r} size="sm" />
-                  <span className="sc-cal-name-t" title={r.name}>
-                    {r.name}
-                  </span>
-                </div>
-                {/* Its state in words; one button with a verb (started: records all the time; stopped:
-                    only during the slots drawn on its line). */}
-                <div className="sc-cal-ctl">
-                  {status[r.id]?.state === 'recording' ? (
-                    <span className="sc-cal-status rec">
-                      <span className="sc-rec" />
-                      {r.enabled ? t('Recording now') : t('Recording (slot)')}
-                    </span>
-                  ) : (
-                    <span className="sc-cal-status">{t('Stopped (source)')}</span>
-                  )}
-                  {admin &&
-                    (r.enabled ? (
-                      <button type="button" className="btn small" onClick={() => void setMode(r, 'slots')}>
-                        <Square size={11} /> {t('Stop recording')}
-                      </button>
-                    ) : (
-                      <button type="button" className="btn small sc-cal-start" onClick={() => void setMode(r, 'continuous')}>
-                        <span className="sc-rec" /> {t('Start recording')}
-                      </button>
-                    ))}
-                </div>
-              </div>
+              <SourceHead rec={r} admin={admin} timezone={timezone} onMode={(m) => void setMode(r, m)} />
               <div
                 className={`sc-cal-lane ${admin ? 'edit' : ''}`}
                 onPointerDown={(e) => {

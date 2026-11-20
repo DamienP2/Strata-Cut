@@ -42,7 +42,6 @@ export const streaming: Record<string, string> = {
   '{n} in the last hour': '{n} dans la dernière heure',
   'version {v}': 'version {v}',
   '{n} core': '{n} cœur',
-  '{n} cores': '{n} cœurs',
   '{n} CPU threads': '{n} threads processeur',
   'Other versions': 'Autres versions',
   'See the {n} version published': 'Voir la version publiée',
@@ -159,7 +158,6 @@ export const streaming: Record<string, string> = {
   'Start all ({n})': 'Tout lancer ({n})',
   'No destination': 'Aucune destination',
   // The server lost
-  'The server does not answer': 'Le serveur ne répond plus',
   'Reconnecting… signed out in {s}': 'Reconnexion… déconnexion dans {s}',
   'Sign out now': 'Se déconnecter maintenant',
   'The server did not answer for a minute: you were signed out.': 'Le serveur n’a pas répondu pendant une minute\u00a0: vous avez été déconnecté.',

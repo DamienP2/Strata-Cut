@@ -557,4 +557,15 @@ export const business: Record<string, string> = {
   'decklink: the encoder stopped': 'DeckLink\u00a0: l’encodeur s’est arrêté',
   'decklink: this server was built without DeckLink support': 'DeckLink\u00a0: ce serveur a été compilé sans la prise en charge DeckLink',
   'a folder is written as an absolute path': 'Un dossier s’écrit en chemin absolu.',
+  // Programmation: the slots on the right, the sources at the head of their lines
+  'Programmed slots': 'Créneaux programmés',
+  Later: 'Plus tard',
+  'Finished today': 'Terminés aujourd’hui',
+  'In progress': 'En cours',
+  once: 'une fois',
+  'every day': 'tous les jours',
+  '{n} recording now': '{n} en enregistrement',
+  'Records all the time': 'Enregistre en continu',
+  'Slot “{name}” until {h}': 'Créneau «\u00a0{name}\u00a0» jusqu’à {h}',
+  'Next: {when}': 'Prochain\u00a0: {when}',
 };
