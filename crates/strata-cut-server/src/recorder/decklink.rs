@@ -612,7 +612,7 @@ fn open_writer(path: &Path, stop: &AtomicBool) -> Option<std::fs::File> {
 
 /// A thread writing what it receives into a named pipe (until the channel closes or the pipe
 /// breaks: the encoder stopped).
-fn writer(path: PathBuf, rx: std::sync::mpsc::Receiver<Vec<u8>>, stop: Arc<AtomicBool>, broken: Arc<AtomicBool>) {
+pub(super) fn writer(path: PathBuf, rx: std::sync::mpsc::Receiver<Vec<u8>>, stop: Arc<AtomicBool>, broken: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         use std::io::Write;
         let Some(mut f) = open_writer(&path, &stop) else {
@@ -970,6 +970,7 @@ mod tests {
             audio_channels: 8,
             audio_input: "embedded".into(),
             variant: String::new(),
+            host: String::new(),
             slots_off: false,
             pattern: "smpte".into(),
         }

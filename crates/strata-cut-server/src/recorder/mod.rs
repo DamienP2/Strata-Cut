@@ -13,6 +13,7 @@ pub mod probe;
 pub mod hls;
 pub mod pattern;
 pub mod logo;
+pub mod ndi;
 mod udp_in;
 
 use serde::{Deserialize, Serialize};
@@ -86,6 +87,8 @@ pub enum Protocol {
     Decklink,
     /// A test pattern made here (`pattern`): bars, movement, lip sync, logo, in the format chosen.
     Pattern,
+    /// An NDI source of the network (`url`: its name), received with the NDI library (`ndi`).
+    Ndi,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -151,6 +154,39 @@ pub struct RecorderConfig {
     /// in it, see `hls`; empty: the best picture).
     #[serde(default)]
     pub variant: String,
+    /// NDI: addresses where to look for the source when the network does not announce it
+    /// (comma separated; empty: the local network).
+    #[serde(default)]
+    pub host: String,
+}
+
+/// Empty settings (to fill a few of them: a preview, a test).
+pub fn blank_config() -> RecorderConfig {
+    RecorderConfig {
+        id: String::new(),
+        name: String::new(),
+        protocol: Protocol::Udp,
+        url: String::new(),
+        mode: Mode::Caller,
+        port: 0,
+        path: String::new(),
+        latency: default_latency(),
+        passphrase: String::new(),
+        iface: String::new(),
+        cookies: String::new(),
+        loop_hours: default_loop(),
+        bitrate: 0.0,
+        enabled: false,
+        device: 0,
+        connection: auto(),
+        video_mode: auto(),
+        audio_channels: 2,
+        audio_input: auto(),
+        slots_off: false,
+        pattern: smpte(),
+        variant: String::new(),
+        host: String::new(),
+    }
 }
 
 fn auto() -> String {
@@ -182,11 +218,15 @@ impl RecorderConfig {
         self.url = self.url.trim().to_string();
         self.path = self.path.trim().trim_matches('/').to_string();
         self.iface = self.iface.trim().to_string();
+        self.host = self.host.split(',').map(str::trim).filter(|h| !h.is_empty()).collect::<Vec<_>>().join(",");
         if self.path.is_empty() && self.protocol == Protocol::Rtmp {
             self.path = "live/stream".into();
         }
         if self.protocol == Protocol::Decklink && self.bitrate == 0.0 {
             self.bitrate = decklink::DEFAULT_BITRATE;
+        }
+        if self.protocol == Protocol::Ndi && self.bitrate == 0.0 {
+            self.bitrate = ndi::DEFAULT_BITRATE;
         }
     }
 
@@ -212,6 +252,7 @@ impl RecorderConfig {
             Protocol::Web | Protocol::Hls => "https://",
             Protocol::Decklink => return decklink::validate(self),
             Protocol::Pattern => return pattern::validate(self),
+            Protocol::Ndi => return ndi::validate(self),
         };
         if self.protocol == Protocol::Hls {
             if !self.url.starts_with("https://") && !self.url.starts_with("http://") {

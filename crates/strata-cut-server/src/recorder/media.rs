@@ -26,6 +26,7 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/recorders", get(list).post(create))
         .route("/api/decklink", get(decklink))
+        .route("/api/ndi", get(ndi))
         .route("/api/system/hardware", get(hardware))
         .route("/api/system/hardware/name", axum::routing::put(hardware_name))
         .route("/api/system/hardware/search", axum::routing::post(hardware_search))
@@ -54,6 +55,27 @@ pub fn routes() -> Router<Shared> {
 /// DeckLink cards: what the server has (GStreamer's module, Blackmagic's driver) and the cards seen.
 async fn decklink(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Value> {
     Json(super::decklink::status(&s.recorders).await)
+}
+
+#[derive(Deserialize)]
+struct NdiQuery {
+    /// Addresses to ask too (comma separated).
+    #[serde(default)]
+    host: String,
+}
+
+/// NDI: whether its library is installed, and the sources found on the network now.
+async fn ndi(CurrentUser(me): CurrentUser, Query(q): Query<NdiQuery>) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    let host = q.host.split(',').map(str::trim).filter(|h| h.parse::<std::net::Ipv4Addr>().is_ok()).collect::<Vec<_>>().join(",");
+    let found = tokio::task::spawn_blocking(move || {
+        let installed = super::ndi::installed();
+        let sources = if installed { super::ndi::sources(&host, std::time::Duration::from_millis(1800)).unwrap_or_default() } else { Vec::new() };
+        json!({ "installed": installed, "version": super::ndi::version(), "sources": sources })
+    })
+    .await
+    .map_err(internal)?;
+    Ok(Json(found))
 }
 
 #[derive(Deserialize)]

@@ -80,6 +80,7 @@ pub fn recording(c: &RecorderConfig) -> Cost {
     let (extra, why) = match c.protocol {
         Protocol::Decklink => (encode_cores(if c.video_mode == "auto" { 1080 } else { h }, fast), "the card's pictures encoded in H.264"),
         Protocol::Pattern => (encode_cores(h, fast) * 0.8, "the test pattern made and encoded in H.264"),
+        Protocol::Ndi => (encode_cores(1080, false) + 0.5, "the NDI source's pictures decoded and encoded in H.264"),
         _ => (0.0, "its preview encoded for the browser"),
     };
     Cost { what: "recording", label: c.name.clone(), cores: 0.45 + extra, kbps: 0.0, why }

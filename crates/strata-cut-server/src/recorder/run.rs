@@ -19,9 +19,12 @@ const SEGMENT: u32 = 6;
 /// Length of the proxy segments, seconds: short, so that the live plays a second or two
 /// behind the source (a fragment is read once it is whole).
 const PROXY_SEGMENT: u32 = 1;
-/// Sound kept on its timestamps: a hole of more than 10 ms is filled with silence, an
+/// Sound kept on its timestamps: a hole of more than 100 ms is filled with silence, an
 /// overlap cut (by default FFmpeg joins the samples and the sound drifts ahead after a loss).
-pub const AUDIO_SYNC: &str = "aresample=async=1:min_hard_comp=0.01";
+/// Not less: the times of the sound jump by a frame or so (some tens of ms) where a stream is
+/// made of fragments (a YouTube live, HLS), and each jump "put right" is a click: measured on
+/// jumps of 11 ms a second, 26 clicks in 20 s at 10 ms, none at 50 or 100 ms.
+pub const AUDIO_SYNC: &str = "aresample=async=1:min_hard_comp=0.1";
 
 enum Outcome {
     /// The settings changed: start again at once.
@@ -89,6 +92,8 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                     let broken = ["Address already in use", "Cannot assign requested address", "Permission denied", "Protocol not found", "Invalid argument", "cannot start", "Error opening output", "No space left", "not installed", "javascript runtime"].iter().any(|k| message.contains(k))
                         // A card that cannot be captured (missing module, card not found, settings refused).
                         || (cfg.protocol == Protocol::Decklink && message.starts_with("decklink: "));
+                    // NDI: a source not there yet is looked for again; the library missing is an error.
+                    let broken = broken || message.contains("ndi library") || message.contains("cannot run the ndi");
                     if broken {
                         // Two recorders on the same UDP address and port: only one can receive it.
                         let message = if matches!(cfg.protocol, Protocol::Udp | Protocol::Rtp) && message.contains("Address already in use") { "udp: this address and port are already received by another recorder".to_string() } else { message };
@@ -275,7 +280,7 @@ pub fn input_args_as(c: &RecorderConfig, rtp: bool) -> Vec<String> {
             c.url.clone()
         }
         // GStreamer's named pipe, made for each recording (record_once).
-        Protocol::Decklink => String::new(),
+        Protocol::Decklink | Protocol::Ndi => String::new(),
         // Made by its own FFmpeg, read on the standard input (record_once).
         Protocol::Pattern => {
             a.extend(["-f".into(), "mpegts".into()]);
@@ -532,6 +537,61 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             }
             vec!["-f".into(), "mpegts".into(), "-i".into(), ts.to_string_lossy().into_owned()]
         }
+        // An NDI source: its pictures and sound (the NDI library) go to FFmpeg, which encodes
+        // them into a named pipe the receiver reads, as for a card.
+        None if cfg.protocol == Protocol::Ndi => {
+            let opened = {
+                let c = cfg.clone();
+                tokio::task::spawn_blocking(move || super::ndi::open(&c)).await.unwrap_or_else(|e| Err(e.to_string()))
+            };
+            let r = match opened {
+                Ok(r) => r,
+                Err(e) => {
+                    finish_run(rec, &run_id);
+                    return Outcome::Exited { had_data: false, message: e };
+                }
+            };
+            let pipes = ["ts", "raw", "f32"].map(|ext| super::decklink::fifo(m.data_dir(), &rec.id, ext));
+            let [Ok(ts), Ok(video), Ok(sound)] = pipes else {
+                finish_run(rec, &run_id);
+                let e = pipes.into_iter().find_map(|p| p.err()).map(|e| e.to_string()).unwrap_or_default();
+                return Outcome::Exited { had_data: false, message: format!("ndi: {e}") };
+            };
+            tracing::info!("{}: receiving {} from the NDI source{}", cfg.name, r.format.name(), if r.format.silent { " (no sound)" } else { "" });
+            let args = super::ndi::encoder_args(cfg, &r.format, &video, &sound, &ts);
+            tracing::debug!("{}: encoder: ffmpeg {}", cfg.name, args.join(" "));
+            let spawned = Command::new(&m.ffmpeg).args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
+            match spawned {
+                Ok(mut encoder) => {
+                    if let Some(err) = encoder.stderr.take() {
+                        let (clog, name) = (clog.clone(), cfg.name.clone());
+                        tokio::spawn(async move {
+                            let mut lines = tokio::io::BufReader::new(err).lines();
+                            while let Ok(Some(l)) = lines.next_line().await {
+                                tracing::debug!("{name}: encoder: {l}");
+                                let mut q = clog.lock().unwrap();
+                                q.push_back(l);
+                                if q.len() > 30 {
+                                    q.pop_front();
+                                }
+                            }
+                        });
+                    }
+                    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let (tx, done) = tokio::sync::oneshot::channel();
+                    let stop2 = stop.clone();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(super::ndi::pump(r, video, sound, stop2));
+                    });
+                    capture = Some(CardCapture { encoder, stop, done });
+                }
+                Err(e) => {
+                    finish_run(rec, &run_id);
+                    return Outcome::Exited { had_data: false, message: format!("ndi: cannot start the encoder (FFmpeg): {e}") };
+                }
+            }
+            vec!["-f".into(), "mpegts".into(), "-i".into(), ts.to_string_lossy().into_owned()]
+        }
         None => {
             // A source given as UDP may send RTP (most IPTV head-ends do): its first datagram says.
             let rtp = cfg.protocol == Protocol::Udp && {
@@ -783,17 +843,18 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 // The capture ended: the signal changed format, the card is gone, or the encoder stopped.
                 stop_child(&mut child).await;
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                let what = if cfg.protocol == Protocol::Ndi { "ndi" } else { "decklink" };
                 match end {
                     super::decklink::End::FormatChanged(f) => {
-                        tracing::info!("{}: the card's input is now {f}: the capture starts again in it", cfg.name);
+                        tracing::info!("{}: the source is now {f}: the capture starts again in it", cfg.name);
                         break Outcome::Restart;
                     }
                     super::decklink::End::Failed(why) => {
                         let detail = clog.lock().unwrap().iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
                         tracing::warn!("{}: the capture stopped: {why}{}", cfg.name, if detail.is_empty() { String::new() } else { format!(" ({detail})") });
-                        break Outcome::Exited { had_data: scan.had_data, message: format!("decklink: {why}") };
+                        break Outcome::Exited { had_data: scan.had_data, message: format!("{what}: {why}") };
                     }
-                    super::decklink::End::Stopped => break Outcome::Exited { had_data: scan.had_data, message: "decklink: the capture stopped".into() },
+                    super::decklink::End::Stopped => break Outcome::Exited { had_data: scan.had_data, message: format!("{what}: the capture stopped") },
                 }
             }
             status = preview.wait() => {
@@ -1380,7 +1441,7 @@ mod tests {
     use super::*;
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
-        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into(), variant: String::new(), slots_off: false, pattern: "smpte".into() }
+        RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into(), variant: String::new(), host: String::new(), slots_off: false, pattern: "smpte".into() }
     }
 
     #[test]

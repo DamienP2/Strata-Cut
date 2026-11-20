@@ -146,7 +146,7 @@ Si le serveur ne sort pas sur Internet, préparez le code ailleurs puis copiez-l
 
 ## 4. Ajouter les sources
 
-**Enregistreurs › + Nouvel enregistreur.** Réglez la durée de la boucle (24 h par défaut), puis selon le protocole :
+**Système › Sources › + Nouvelle source.** Réglez la durée de la boucle (24 h par défaut), puis selon le protocole :
 
 ### UDP / RTP multicast (MPEG-TS)
 
@@ -212,6 +212,22 @@ Ensuite :
 La carte fournit des images brutes, lues avec le SDK de Blackmagic : FFmpeg les encode en H.264 (entrelacé conservé), ce qui demande environ 1 à 2 cœurs de processeur par entrée HD. Sans signal sur l'entrée, la carte affiche **Sans signal** et l'enregistrement continue (image noire) jusqu'au retour du signal. Une entrée ne sert qu'à un enregistreur.
 
 Une seule source par enregistreur, et un port par enregistreur en écoute.
+
+### NDI
+
+Une source NDI du réseau s'ajoute comme les autres : **Nouvelle source › NDI**, puis choisissez-la dans la liste des sources trouvées (ou écrivez son nom, `MACHINE (Canal 1)`). Ses images et son son sont reçus par la bibliothèque NDI, puis encodés en H.264 / AAC au débit choisi (comme pour une carte) : comptez environ deux à trois cœurs par source HD.
+
+La bibliothèque NDI n'est pas fournie avec Strata Cut (sa licence ne le permet pas) : elle s'installe une fois.
+
+1. Téléchargez le **NDI SDK pour Linux** sur [ndi.video](https://ndi.video/for-developers/ndi-sdk/) et acceptez sa licence en lançant son installateur (`Install_NDI_SDK_v6_Linux.sh`).
+2. Copiez la bibliothèque de votre architecture sur le serveur, puis relancez le script d'installation (il la trouve dans le dossier courant, `/root` ou `/tmp`, l'installe dans `/usr/local/lib` et installe Avahi pour la découverte) :
+   ```bash
+   cp "NDI SDK for Linux/lib/x86_64-linux-gnu/libndi.so.6" /tmp/
+   sudo ~/Strata-Cut/scripts/install-ubuntu.sh --no-pull
+   ```
+   À la main : `sudo install -m 644 libndi.so.6 /usr/local/lib/ && sudo ldconfig && sudo apt install avahi-daemon && sudo systemctl restart strata-cut`.
+
+Les sources s'annoncent sur le réseau local (mDNS, port UDP 5353) ; le flux passe en TCP à partir du port 5960. Pour une source d'un autre sous-réseau, écrivez son **adresse IP** dans le champ « Adresse » de la source ; un *NDI Discovery Server* se déclare dans `~/.ndi/ndi-config.v1.json` du compte `strata-cut` (`/var/lib/strata-cut/.ndi/`).
 
 Dès qu'une source envoie, sa carte passe en **REC** et la boucle se remplit. Si la source s'arrête, la carte indique **Sans signal** et l'enregistrement reprend tout seul à son retour.
 

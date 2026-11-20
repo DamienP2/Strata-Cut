@@ -1,7 +1,7 @@
 // The app's own data, as the server sends it.
 
-export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'hls' | 'web' | 'decklink' | 'pattern';
-export const PROTOCOLS: Protocol[] = ['udp', 'rtp', 'rtmp', 'srt', 'hls', 'web', 'pattern'];
+export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'hls' | 'web' | 'decklink' | 'pattern' | 'ndi';
+export const PROTOCOLS: Protocol[] = ['udp', 'rtp', 'rtmp', 'srt', 'hls', 'web', 'pattern', 'ndi'];
 
 /** A recorder's settings. */
 export interface Recorder {
@@ -22,6 +22,8 @@ export interface Recorder {
   passphrase: string;
   /** Network interface address for multicast (udp / rtp), empty = any. */
   iface: string;
+  /** ndi: addresses where to look for the source (comma separated), empty = the local network. `url`: its NDI name. */
+  host?: string;
   /** web: cookies.txt of a signed-in account ("••••••••" when set). */
   cookies?: string;
   /** web: the platform found from the address (sent by the server). */

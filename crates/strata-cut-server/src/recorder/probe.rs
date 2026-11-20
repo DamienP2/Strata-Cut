@@ -92,6 +92,22 @@ pub async fn probe(m: &Manager, mut c: RecorderConfig) -> Result<Value, String> 
     if c.protocol == Protocol::Decklink {
         return Err("a card's input has its own preview".into());
     }
+    // An NDI source: a picture of what it sends now, and its format.
+    if c.protocol == Protocol::Ndi {
+        if c.url.trim().is_empty() {
+            return Err("choose the ndi source".into());
+        }
+        let _one = TRIES.acquire().await.map_err(|e| e.to_string())?;
+        let (jpeg, f) = super::ndi::preview(&m.ffmpeg, c.url.trim(), &c.host).await?;
+        return Ok(json!({
+            "still": format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&jpeg)),
+            "video": { "codec": "ndi", "width": f.width, "height": f.height, "fps": f.fps_n as f64 / f.fps_d.max(1) as f64 * if f.interlaced { 2.0 } else { 1.0 }, "interlaced": f.interlaced },
+            "audio": if f.silent { 0 } else { f.channels.div_ceil(2).max(1) },
+            "epg": false,
+            "services": [],
+            "variants": [],
+        }));
+    }
     if c.listens() {
         return Err("listener".into());
     }

@@ -24,6 +24,7 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'hls', label: 'HLS stream', detail: '.m3u8' },
   { value: 'web', label: 'YouTube', detail: 'youtube.com' },
   { value: 'decklink', label: 'Hardware inputs', detail: 'SDI · HDMI' },
+  { value: 'ndi', label: 'NDI', detail: 'NDI®' },
   { value: 'pattern', label: 'Test pattern', detail: 'lip sync' },
 ];
 
@@ -71,6 +72,7 @@ export function sourceAddress(r: Recorder): string {
   if (r.protocol === 'rtmp' && r.mode === 'listener') return `rtmp://${host}:${r.port}/${r.path}`;
   if (r.protocol === 'srt' && r.mode === 'listener') return `srt://${host}:${r.port}`;
   if (r.protocol === 'decklink') return `${t('Input {n}', { n: (r.device ?? 0) + 1 })} · ${dlConnection(r.connection ?? 'auto')} · ${dlMode(r.videoMode ?? 'auto')}`;
+  if (r.protocol === 'ndi') return r.url + (r.host ? ` · ${r.host}` : '');
   if (r.protocol === 'pattern') return `${t(PATTERNS.find((p) => p.value === r.pattern)?.label ?? 'Test pattern')} · ${formatName(r.videoMode ?? '1080i50', lang() === 'fr')}`;
   return r.url + (r.iface && (r.protocol === 'udp' || r.protocol === 'rtp') ? ` · ${r.iface}` : '');
 }
@@ -505,7 +507,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label={t('Source')} group>
-            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: t(p.detail) }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' || v === 'hls' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}), ...(v === 'pattern' ? { pattern: c.pattern || 'smpte', videoMode: PATTERN_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080i50', bitrate: c.bitrate >= 1 && c.bitrate <= 200 ? c.bitrate : 8 } : {}) })} />
+            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: t(p.detail) }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' || v === 'hls' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}), ...(v === 'pattern' ? { pattern: c.pattern || 'smpte', videoMode: PATTERN_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080i50', bitrate: c.bitrate >= 1 && c.bitrate <= 200 ? c.bitrate : 8 } : {}), ...(v === 'ndi' ? { mode: 'caller' as const, url: c.protocol === 'ndi' ? c.url : '', bitrate: c.bitrate >= 5 && c.bitrate <= 200 ? c.bitrate : 25 } : {}), ...(c.protocol === 'ndi' && v !== 'ndi' ? { url: '' } : {}) })} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
             <Field label={t('Mode')} group>
@@ -514,6 +516,8 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
           )}
           {card ? (
             <DecklinkFields c={c} set={set} info={dl} detected={detected} rec={rec} />
+          ) : c.protocol === 'ndi' ? (
+            <NdiFields c={c} set={set} />
           ) : c.protocol === 'pattern' ? (
             <>
               <Field label={t('Pattern')} group>
@@ -682,6 +686,55 @@ function inputLabel(d: DecklinkDevice): string {
 }
 
 /** A hardware input: the card's input (only those receiving a signal, free), the format, the sound and the recording's bitrate. */
+/** An NDI source: chosen among those the network announces (or its name written), an address
+ * where to look for it when it is not announced here, and the bitrate it is recorded at. */
+function NdiFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder>) => void }) {
+  const [info, setInfo] = useState<{ installed: boolean; sources: { name: string; address: string }[] } | null>(null);
+  const [n, setN] = useState(0);
+  const host = c.host ?? '';
+  useEffect(() => {
+    let dead = false;
+    // A moment after the address is written; again every 5 s (the sources come and go).
+    const load = () => api<{ installed: boolean; sources: { name: string; address: string }[] }>('GET', `/api/ndi?host=${encodeURIComponent(host)}`).then((i) => !dead && setInfo(i), () => {});
+    const first = setTimeout(load, 400);
+    const again = setInterval(load, 5000);
+    return () => {
+      dead = true;
+      clearTimeout(first);
+      clearInterval(again);
+    };
+  }, [host, n]);
+  const found = info?.sources ?? [];
+  const options = [...found.map((s) => ({ value: s.name, label: s.name, detail: s.address })), ...(c.url && !found.some((s) => s.name === c.url) ? [{ value: c.url, label: c.url, detail: t('not found now') }] : [])];
+  return (
+    <>
+      {info && !info.installed && (
+        <div className="sc-alert span2">
+          <TriangleAlert size={14} />
+          <span>{t('The NDI library is not installed on this server (see the installation guide, “NDI”).')}</span>
+        </div>
+      )}
+      <Field label={t('NDI source')} group className="span2">
+        <div className="sc-ndi-pick">
+          {options.length > 0 ? <Dropdown value={c.url} options={options} onChange={(v) => set({ url: v })} /> : <span className="muted">{info ? t('No NDI source found on the network') : t('Looking for the NDI sources…')}</span>}
+          <button type="button" className="icon-btn" data-tip={t('Search again')} aria-label={t('Search again')} onClick={() => setN((x) => x + 1)}>
+            <Search size={14} />
+          </button>
+        </div>
+      </Field>
+      <Field label={t('Name of the source')}>
+        <input value={c.url} placeholder="MACHINE (Canal 1)" spellCheck={false} onChange={(e) => set({ url: e.target.value })} />
+      </Field>
+      <Field label={t('Address (optional)')}>
+        <input value={host} placeholder="192.168.1.50" spellCheck={false} onChange={(e) => set({ host: e.target.value })} />
+      </Field>
+      <Field label={t('Recording bitrate')}>
+        <NumberField value={c.bitrate} min={5} max={200} step={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
+      </Field>
+    </>
+  );
+}
+
 function DecklinkFields({ c, set, info, detected, rec }: { c: Recorder; set: (patch: Partial<Recorder>) => void; info: DecklinkInfo | null; detected: string; rec: Recorder | null }) {
   const device = c.device ?? 0;
   const channels = c.audioChannels ?? 2;
@@ -858,12 +911,13 @@ function sameSource(rec: Recorder | null, c: Recorder): boolean {
   if (!rec || rec.protocol !== c.protocol) return false;
   if (c.protocol === 'decklink') return rec.device === c.device;
   if (c.protocol === 'pattern') return rec.pattern === c.pattern && rec.videoMode === c.videoMode && rec.bitrate === c.bitrate && rec.name === c.name;
+  if (c.protocol === 'ndi') return rec.url === c.url && (rec.host ?? '') === (c.host ?? '');
   return rec.url === c.url && rec.mode === c.mode && rec.port === c.port && rec.iface === c.iface && (rec.variant ?? '') === (c.variant ?? '');
 }
 
 /** The source as written can be tried: an address of its kind, a caller (a listening one waits for its source). */
 /** How each source's address is written (shown in its field). */
-const PLACEHOLDERS: Record<Protocol, string> = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', hls: 'https://server/live/stream.m3u8', web: 'https://www.youtube.com/watch?v=…', decklink: '', pattern: '' };
+const PLACEHOLDERS: Record<Protocol, string> = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', hls: 'https://server/live/stream.m3u8', web: 'https://www.youtube.com/watch?v=…', decklink: '', pattern: '', ndi: '' };
 
 /** The address as written, made usable: no spaces around it, the scheme added when left out
  * ("1.2.3.4:9000" → "srt://1.2.3.4:9000") or written in capitals. */
@@ -871,6 +925,8 @@ export function cleaned(c: Recorder): Recorder {
   // Spaces and invisible characters (pasted with it) are no part of an address.
   const url = c.url.replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, '');
   if (c.protocol === 'decklink' || c.protocol === 'web' || c.protocol === 'pattern') return { ...c, url };
+  // An NDI name is kept as written ("MACHINE (Channel 1)").
+  if (c.protocol === 'ndi') return { ...c, url: c.url.trim() };
   if (!url) return c;
   const m = /^([a-z0-9]+):\/\//i.exec(url);
   return { ...c, url: m ? m[1].toLowerCase() + url.slice(m[1].length) : `${c.protocol === 'hls' ? 'https' : c.protocol}://${url}` };
@@ -879,6 +935,7 @@ export function cleaned(c: Recorder): Recorder {
 function triable(c: Recorder): boolean {
   if (c.protocol === 'decklink') return false;
   if (c.protocol === 'pattern') return true;
+  if (c.protocol === 'ndi') return c.url.trim().length > 0;
   if ((c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener') return false;
   if (c.protocol === 'web') return /^https?:\/\/\S+\.\S+/.test(c.url) && platformOf(c.url) === 'youtube';
   if (c.protocol === 'hls') return /^https?:\/\/\S+\.\S+/.test(c.url);
@@ -889,7 +946,7 @@ function triable(c: Recorder): boolean {
 function useProbe(c: Recorder, on: boolean) {
   const [state, setState] = useState<{ busy: boolean; result: Probe | null; error: string }>({ busy: false, result: null, error: '' });
   const [again, setAgain] = useState(0);
-  const key = on ? JSON.stringify([c.protocol, c.url, c.mode, c.iface, c.latency, c.passphrase, (c.cookies ?? '').length, c.variant ?? '', c.pattern ?? '', c.videoMode ?? '', c.protocol === 'pattern' ? c.name : '', again]) : '';
+  const key = on ? JSON.stringify([c.protocol, c.url, c.mode, c.iface, c.latency, c.passphrase, (c.cookies ?? '').length, c.variant ?? '', c.pattern ?? '', c.videoMode ?? '', c.host ?? '', c.protocol === 'pattern' ? c.name : '', again]) : '';
   useEffect(() => {
     if (!key) return setState({ busy: false, result: null, error: '' });
     let dead = false;
@@ -921,8 +978,8 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
   const listening = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
   const tried = probe.result;
   const rows: [string, string][] = [];
-  if (c.protocol === 'pattern') {
-    rows.push([t('Source'), sourceAddress(c)]);
+  if (c.protocol === 'pattern' || c.protocol === 'ndi') {
+    rows.push([t('Source'), sourceAddress(c) || '—']);
     rows.push([t('Recording bitrate'), `${c.bitrate} Mb/s · H.264 / AAC`]);
   } else if (card) {
     rows.push([t('Input'), input ? inputLabel(input) : t('Input {n}', { n: device + 1 })]);

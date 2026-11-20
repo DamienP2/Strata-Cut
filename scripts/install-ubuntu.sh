@@ -642,6 +642,32 @@ if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then
   useradd --system --no-create-home --home-dir "$DATA_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
   ok "compte de service « $SERVICE_USER » créé"
 fi
+# Sources NDI : la bibliothèque NDI (libndi.so) n'est pas fournie avec ce programme : elle vient
+# du SDK NDI pour Linux (ndi.video, licence à accepter). Trouvée à côté (dossier courant, compte
+# qui installe, /root, /tmp), elle est copiée dans /usr/local/lib ; la découverte des sources sur
+# le réseau passe par Avahi (mDNS).
+ndi_lib=""
+for f in /usr/local/lib/libndi.so* /usr/lib/libndi.so* /usr/lib/x86_64-linux-gnu/libndi.so* /usr/lib/aarch64-linux-gnu/libndi.so*; do
+  [ -e "$f" ] && ndi_lib="$f"
+done
+if [ -z "$ndi_lib" ]; then
+  for d in "$PWD" "$BUILD_HOME" /root /tmp; do
+    for f in "$d"/libndi.so*; do
+      [ -f "$f" ] || continue
+      install -m 0644 "$f" /usr/local/lib/libndi.so.6
+      ldconfig
+      ndi_lib=/usr/local/lib/libndi.so.6
+      break 2
+    done
+  done
+fi
+if [ -n "$ndi_lib" ]; then
+  apt_install avahi-daemon libavahi-client3
+  has_systemd && systemctl enable --now avahi-daemon >/dev/null 2>&1 || true
+  ok "NDI : bibliothèque présente ($ndi_lib), découverte des sources par Avahi"
+else
+  echo "  NDI : bibliothèque absente (facultatif : voir docs/INSTALL-UBUNTU.md, « NDI »)"
+fi
 # Cartes DeckLink : le pilote Desktop Video de Blackmagic s'installe à part (site de Blackmagic).
 decklink_lib=""
 for f in /usr/lib/libDeckLinkAPI.so /usr/lib64/libDeckLinkAPI.so /usr/lib/x86_64-linux-gnu/libDeckLinkAPI.so; do
