@@ -7,9 +7,9 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { AlertTriangle, Check, Plug, RadioTower, Square, Upload } from 'lucide-react';
+import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Square, Upload } from 'lucide-react';
 import { useDisplayPref } from '../displayPrefs';
-import { api, can, serverNow, useApp } from '../store';
+import { api, serverNow, useApp } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer } from '../player';
@@ -150,7 +150,8 @@ interface Draft {
 }
 
 function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[] | null; streams: StreamInfo[] }) {
-  const { recorders, user, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, toast: s.toast })));
+  const { recorders, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast })));
+  const [starting, setStarting] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const draft = (d: Destination): Draft => drafts[d.id] ?? { key: '', url: d.url ?? '', videoKbps: d.videoKbps ?? 6000 };
   const setDraft = (d: Destination, p: Partial<Draft>) => setDrafts((x) => ({ ...x, [d.id]: { ...draft(d), ...p } }));
@@ -160,13 +161,29 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
     const x = draft(d);
     return { key: d.keyLive ? x.key : '', url: d.exposeUrl ? x.url : '', videoKbps: d.exposeBitrate ? x.videoKbps : 0 };
   };
-  const toggle = async (d: Destination, on: boolean) => {
+  /** Starts (true: done; false: refused by the guard, which said why). */
+  const start = async (d: Destination): Promise<boolean> => {
     try {
-      if (on) await api('POST', '/api/streams', { destination: d.id, source: rec.id, ...overrides(d) });
-      else await api('DELETE', `/api/streams/${d.id}`);
+      await api('POST', '/api/streams', { destination: d.id, source: rec.id, ...overrides(d) });
     } catch (e) {
-      if (!explainGuard(e)) toast(t((e as Error).message), 'error');
+      if (explainGuard(e)) return false;
+      toast(`${d.name} : ${t((e as Error).message)}`, 'error');
     }
+    return true;
+  };
+  const stop = async (d: Destination) => {
+    try {
+      await api('DELETE', `/api/streams/${d.id}`);
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
+  // The free destinations ready to go (a key given for each live: once it is written).
+  const ready = (dests ?? []).filter((d) => !streams.some((s) => s.destination === d.id) && (!d.keyLive || draft(d).key.trim()));
+  const startAll = async () => {
+    setStarting(true);
+    for (const d of ready) if (!(await start(d))) break;
+    setStarting(false);
   };
   const test = async (d: Destination) => {
     setDraft(d, { test: { busy: true } });
@@ -184,11 +201,12 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
         <span>{t('Destinations')}</span>
         {mine.length > 0 && <em>{`${tn(mine.length, '{n} live', '{n} live')} · ${mbps(out, locale())}`}</em>}
       </header>
-      {dests && dests.length === 0 && (
-        <p className="muted st-foot">
-          {t('No destination yet.')} {can.admin(user) && <a className="linklike" onClick={() => void navigate('/system/destinations')}>{t('Create one in Système › Destinations')}</a>}
-        </p>
+      {ready.length > 1 && (
+        <button type="button" className="btn primary st-all" disabled={starting} onClick={() => void startAll()}>
+          <Play size={13} /> {t('Start all ({n})', { n: ready.length })}
+        </button>
       )}
+      {dests && dests.length === 0 && <Empty icon={Radio} text={t('No destination')} />}
       <div className="st-dests">
         {[...(dests ?? [])]
           // Those sending this source first, then the free ones, the busy ones last.
@@ -209,9 +227,19 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
               <div className="st-dest-top">
                 <ProtoTag p={d.protocol} />
                 <strong title={d.name}>{d.name}</strong>
-                <label className={`st-switch ${on ? 'on' : ''}`} title={busy ? t('It sends another source') : on ? t('Stop sending') : t('Send now')}>
-                  <input type="checkbox" checked={on} disabled={busy} onChange={(e) => void toggle(d, e.target.checked)} />
-                </label>
+                {on ? (
+                  <button type="button" className="btn small st-stop-one" onClick={() => void stop(d)}>
+                    <Square size={11} /> {t('Stop')}
+                  </button>
+                ) : busy ? (
+                  <button type="button" className="btn small" disabled>
+                    {t('Busy')}
+                  </button>
+                ) : (
+                  <button type="button" className="btn small primary" disabled={starting || (d.keyLive && !x.key.trim())} onClick={() => void start(d)}>
+                    <Play size={11} /> {t('Go live')}
+                  </button>
+                )}
               </div>
               <div className="st-host">
                 {d.host} · {encodingOf(d).toLowerCase()}
@@ -282,7 +310,6 @@ function DestPanel({ rec, dests, streams }: { rec: Recorder; dests: Destination[
           );
         })}
       </div>
-      <p className="st-foot">{t('A switch starts or stops sending to that destination at once. “Test” sends two seconds of black: the link and the key are checked. A destination sending another source is greyed.')}</p>
     </section>
   );
 }

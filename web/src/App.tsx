@@ -14,6 +14,7 @@ import { Shortcuts } from './ui/Shortcuts';
 import { StatusPill } from './ui/StatusPill';
 import { Toasts } from './ui/Toasts';
 import { FollowTip } from './ui/FollowTip';
+import { ServerLost } from './ui/ServerLost';
 import { UserMenu } from './ui/UserMenu';
 import { Login } from './pages/Login';
 import { SystemPage, visibleSystem } from './pages/SystemPage';
@@ -52,6 +53,7 @@ export function App() {
       <DialogHost />
       <Toasts />
       <FollowTip />
+      <ServerLost />
     </div>
   );
 }

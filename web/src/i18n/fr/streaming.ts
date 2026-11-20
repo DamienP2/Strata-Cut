@@ -137,6 +137,14 @@ export const streaming: Record<string, string> = {
   Off: 'Désactivé',
   'the limits of the processor and the memory are 30 to 100 %': 'Les limites du processeur et de la mémoire vont de 30 à 100\u00a0%.',
   'the bandwidth limit is 0 to 100000 mb/s': 'La limite de débit va de 0 à 100\u00a0000\u00a0Mb/s.',
+  'Go live': 'Diffuser',
+  'Start all ({n})': 'Tout lancer ({n})',
+  'No destination': 'Aucune destination',
+  // The server lost
+  'The server does not answer': 'Le serveur ne répond plus',
+  'Reconnecting… signed out in {s}': 'Reconnexion… déconnexion dans {s}',
+  'Sign out now': 'Se déconnecter maintenant',
+  'The server did not answer for a minute: you were signed out.': 'Le serveur n’a pas répondu pendant une minute\u00a0: vous avez été déconnecté.',
   // The server's messages
   'give the stream key of this live': 'Donnez la clé de stream de ce direct.',
   'this destination already sends another source': 'Cette destination diffuse déjà une autre source.',

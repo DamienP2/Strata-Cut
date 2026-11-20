@@ -1285,3 +1285,14 @@ a.btn { color: inherit; }
 .guard-legend b.adds { background: var(--live); }
 .guard-legend b.limit { width: 2px; background: var(--text); }
 @media (max-width: 900px) { .set-grid.three { grid-template-columns: 1fr; } }
+.btn.st-all { width: 100%; justify-content: center; margin: 2px 0 10px; }
+.btn.st-stop-one { background: var(--live); border-color: var(--live); color: #fff; }
+
+/* The server lost: a countdown, then signed out */
+.server-lost { position: fixed; top: 58px; left: 50%; transform: translateX(-50%); z-index: 80; display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 12%, var(--panel)); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); font-size: 13px; }
+.server-lost strong { color: var(--text); }
+.server-lost .muted { font-variant-numeric: tabular-nums; }
+.server-lost-ring { width: 30px; height: 30px; flex: none; transform: rotate(-90deg); }
+.server-lost-ring circle { fill: none; stroke-width: 3.5; }
+.server-lost-ring .bg { stroke: var(--panel-3); }
+.server-lost-ring .fg { stroke: var(--warn); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
