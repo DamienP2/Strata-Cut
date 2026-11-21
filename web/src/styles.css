@@ -1481,3 +1481,8 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 
 /* A tooltip of several lines (the load gauge's detail): its line breaks kept. */
 .follow-tip { white-space: pre-line; align-items: flex-start; }
+
+/* What the preview sees: a black or frozen picture, silence (on the source's picture). */
+.sc-content-flags { position: absolute; left: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; z-index: 1; }
+.sc-content-flag { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 10px; background: color-mix(in srgb, var(--warn) 85%, #000); color: #111; font-size: 11px; font-weight: 700; }
+.sc-content-mark { position: absolute; right: 3px; bottom: 3px; display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; background: var(--warn); color: #111; }

@@ -17,6 +17,7 @@ import { Dropdown } from '../ui/Dropdown';
 import { Segmented } from '../ui/fields';
 import { Field } from '../settings/ui';
 import { RecLogo } from '../ui/RecLogo';
+import { ContentFlags } from '../ui/ContentFlags';
 import type { Programme, Recorder, Slot } from '../types';
 import { explainGuard } from '../ui/guard';
 
@@ -665,6 +666,7 @@ function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
             REC
           </span>
         )}
+        {recording && <ContentFlags st={st} compact />}
         {state === 'nosignal' && (
           <span className="sc-cal-pic-msg">
             <WifiOff size={13} />

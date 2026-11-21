@@ -92,6 +92,10 @@ export interface RecorderStatus {
   /** The server is short of CPU: the preview's delay behind the recording (s), and whether it dropped some of the stream lately. */
   previewLag: number;
   previewDropped: boolean;
+  /** The picture black or frozen, the sound silent: since (server time, ms). */
+  blackSince?: number | null;
+  frozenSince?: number | null;
+  silentSince?: number | null;
 }
 
 export interface SlotTime {

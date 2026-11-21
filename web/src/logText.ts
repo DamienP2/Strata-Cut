@@ -32,6 +32,11 @@ const REASON: Record<string, string> = {
   upload: "débit sortant",
   out: "débit sortant",
 };
+const CONTENT: Record<string, string> = {
+  "black picture": "image noire",
+  "frozen picture": "image figée",
+  silence: "silence",
+};
 const moments = (s: string) =>
   s.replace(
     / \(in (\d+) moments?, up to (\d+) at once\)/,
@@ -198,6 +203,15 @@ const RULES: Rule[] = [
   [
     /^(.+?) signed in from (.+)$/,
     (m) => `${m[1]} s’est connecté depuis ${m[2]}`,
+  ],
+  [
+    /^(.+?): (black picture|frozen picture|silence) for (\d+) s$/,
+    (m) => `${m[1]} : ${CONTENT[m[2]]} depuis ${m[3]} s`,
+  ],
+  [
+    /^(.+?): (black picture|frozen picture|silence) ended$/,
+    (m) =>
+      `${m[1]} : fin ${m[2] === "silence" ? "du silence" : `de l’${CONTENT[m[2]]}`}`,
   ],
   [/^listening on (.+)$/, (m) => `À l’écoute sur ${m[1]}`],
   [/^stopping: recorders stopped$/, () => "Arrêt : enregistreurs arrêtés"],

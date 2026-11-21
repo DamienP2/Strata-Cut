@@ -365,6 +365,59 @@ pub struct Status {
     /// whether it had to drop some of the stream in the last 10 minutes (the recording is whole).
     pub preview_lag: u32,
     pub preview_dropped: bool,
+    /// What the picture and the sound show now (the preview watches them): black, frozen or
+    /// silent since (server time, ms).
+    pub black_since: Option<i64>,
+    pub frozen_since: Option<i64>,
+    pub silent_since: Option<i64>,
+}
+
+/// What the preview sees in the picture and hears in the sound: since when (server time, ms).
+#[derive(Default, Clone, Debug)]
+pub struct Content {
+    pub black: Option<i64>,
+    pub frozen: Option<i64>,
+    pub silent: Option<i64>,
+    /// Said in the journal already (each once, until it ends).
+    pub said: [bool; 3],
+}
+
+/// Black, frozen or silent this long (ms): said in the journal (and to the alerts).
+pub const CONTENT_SAY_MS: i64 = 10_000;
+
+impl Content {
+    /// A line of the preview's FFmpeg: a black picture, a frozen one or silence starting or ending.
+    /// True when it was one.
+    pub fn read(&mut self, line: &str, now: i64) -> bool {
+        let mut set = |slot: usize, on: bool| {
+            let v = match slot {
+                0 => &mut self.black,
+                1 => &mut self.frozen,
+                _ => &mut self.silent,
+            };
+            if on {
+                v.get_or_insert(now);
+            } else {
+                *v = None;
+            }
+        };
+        if line.contains("lavfi.black_start=") {
+            set(0, true);
+        } else if line.contains("lavfi.black_end=") {
+            set(0, false);
+        } else if line.contains("freeze_start:") {
+            set(1, true);
+        } else if line.contains("freeze_end:") {
+            set(1, false);
+        } else if line.contains("silence_start:") {
+            set(2, true);
+        } else if line.contains("silence_end:") {
+            set(2, false);
+        } else {
+            return false;
+        }
+        true
+    }
 }
 
 pub fn now_ms() -> i64 {
@@ -411,6 +464,9 @@ pub struct Rec {
     /// How far the preview is behind the recording (s); when it last dropped some of the stream.
     pub preview_lag: std::sync::atomic::AtomicU32,
     preview_dropped_at: std::sync::atomic::AtomicI64,
+    /// The picture black, frozen, the sound silent: since (server time, ms), and whether the
+    /// journal already said so.
+    pub content: Mutex<Content>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Local UDP ports the stream as received is copied to (the streams to destinations: see
     /// `crate::streams`), each with its key.
@@ -456,6 +512,28 @@ impl Rec {
     }
 
     /// Refreshes the loop figures of the status.
+    /// A picture black or frozen, a sound silent for 10 s: said in the journal, and when it ends.
+    pub fn say_content(&self) {
+        let now = now_ms();
+        let name = self.config().name;
+        let mut c = self.content.lock().unwrap();
+        let what = ["black picture", "frozen picture", "silence"];
+        let since = [c.black, c.frozen, c.silent];
+        for k in 0..3 {
+            match since[k] {
+                Some(t) if !c.said[k] && now - t >= CONTENT_SAY_MS => {
+                    c.said[k] = true;
+                    tracing::warn!("{name}: {} for {} s", what[k], (now - t) / 1000);
+                }
+                None if c.said[k] => {
+                    c.said[k] = false;
+                    tracing::info!("{name}: {} ended", what[k]);
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub fn refresh_status(&self) {
         let runs = self.runs.read().unwrap();
         let oldest = runs.iter().filter_map(Run::first_wall).reduce(f64::min).map(|w| w as i64);
@@ -498,6 +576,11 @@ impl Rec {
             s.damaged = damaged;
             s.preview_lag = self.preview_lag.load(std::sync::atomic::Ordering::Relaxed);
             s.preview_dropped = now - self.preview_dropped_at.load(std::sync::atomic::Ordering::Relaxed) < 600_000;
+            let c = self.content.lock().unwrap();
+            let live = s.state == State::Recording;
+            s.black_since = c.black.filter(|_| live);
+            s.frozen_since = c.frozen.filter(|_| live);
+            s.silent_since = c.silent.filter(|_| live);
         }
         let short = matches!((oldest, newest), (Some(a), Some(b)) if ((b - a) as f64) < cfg.loop_hours as f64 * 3_600_000.0 * 0.98);
         s.space_limited = cut > 0 && now_ms() - cut < 15 * 60_000 && short;
@@ -676,6 +759,7 @@ impl Manager {
                     if tick.is_multiple_of(5) {
                         m.trim(&r);
                     }
+                    r.say_content();
                 }
                 if tick.is_multiple_of(5) {
                     let m2 = m.clone();
@@ -940,7 +1024,7 @@ impl Manager {
         let found_known = found.stream.is_some();
         let rec = Arc::new(Rec {
             id: c.id.clone(),
-            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None, lost: 0, damaged: 0, preview_lag: 0, preview_dropped: false }),
+            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None, lost: 0, damaged: 0, preview_lag: 0, preview_dropped: false, black_since: None, frozen_since: None, silent_since: None }),
             cfg: watch::channel(c).0,
             runs: RwLock::new(runs),
             stop: watch::channel(false).0,
@@ -957,6 +1041,7 @@ impl Manager {
             damage: Default::default(),
             rtp: false.into(),
             preview_lag: 0.into(),
+            content: Mutex::new(Content::default()),
             no_signal: false.into(),
             last_end: Mutex::new(None),
             preview_dropped_at: 0.into(),

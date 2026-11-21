@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { CalendarClock, Copy, Square, Eraser, ImagePlus, Pencil, Plus, RadioTower, Search, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { RecLogo } from '../ui/RecLogo';
+import { ContentFlags } from '../ui/ContentFlags';
 import { lang, locale, t, tn } from '../i18n';
 import { navigate } from '../router';
 import { advisedBitrate, bitrate, clock, day, DECKLINK_MODES, formatFamily, formatName, scanFormat } from '../tc';
@@ -279,6 +280,7 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
           </span>
         )}
         {rec.protocol === 'web' && <span className="sc-onpic tr">{badge(rec)}</span>}
+        {recording && <ContentFlags st={st} />}
       </div>
       <div className="project-body">
         <div className="sc-card-title">

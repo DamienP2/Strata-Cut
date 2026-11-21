@@ -357,23 +357,30 @@ pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Op
 /// The preview making nothing this long (ms) while the recording goes on: it is stuck.
 const PREVIEW_STUCK_MS: i64 = 60_000;
 
+/// The preview's picture: light, and watched (a black picture, a frozen one: their start and end
+/// in its log).
+const PREVIEW_VIDEO: &str = "yadif=deint=interlaced,scale=-2:'min(540,ih)',format=yuv420p,blackdetect=d=1:pic_th=0.98,metadata=mode=print:key=lavfi.black_start,metadata=mode=print:key=lavfi.black_end,freezedetect=n=-60dB:d=2";
+/// Its sound: in step (see `AUDIO_SYNC`), and watched (silence).
+const PREVIEW_AUDIO: &str = "aresample=async=1:min_hard_comp=0.1,silencedetect=n=-60dB:d=2";
+
 pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", "warning", "-copyts", "-thread_queue_size", "4096", "-i"]);
+    // Its info lines too, tagged: what the picture and the sound show (black, frozen, silent).
+    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", "level+info", "-copyts", "-thread_queue_size", "4096", "-i"]);
     // No timeout: it waits for the receiver, and is stopped with it.
     a.push(format!("udp://127.0.0.1:{preview_port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216"));
     // 1. Video: same frames, same timestamps, light; no look-ahead (the live a second or two
     // behind the source).
     let keyframes = "expr:if(isnan(prev_forced_t),1,gte(t,prev_forced_t+1))";
-    a.extend(s(&["-map", "0:v:0", "-vf", "yadif=deint=interlaced,scale=-2:'min(540,ih)',format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "main", "-bf", "0", "-force_key_frames", keyframes, "-b:v", "1200k", "-maxrate", "1600k", "-bufsize", "2400k", "-an", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_flags", "+independent_segments", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
+    a.extend(s(&["-map", "0:v:0", "-vf", PREVIEW_VIDEO, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-profile:v", "main", "-bf", "0", "-force_key_frames", keyframes, "-b:v", "1200k", "-maxrate", "1600k", "-bufsize", "2400k", "-an", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_flags", "+independent_segments", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
     a.push(d("video/p%08d.m4s"));
     a.push(d("video/index.m3u8"));
     // 2. Audio (first track, stereo).
     if audio {
         // Lost or damaged audio packets leave a hole in the times: filled with silence (and
         // overlaps cut), else the sound after it is joined early and drifts ahead of the picture.
-        a.extend(s(&["-map", "0:a:0", "-vn", "-af", AUDIO_SYNC, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
+        a.extend(s(&["-map", "0:a:0", "-vn", "-af", PREVIEW_AUDIO, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
         a.push(d("audio/p%08d.m4s"));
         a.push(d("audio/index.m3u8"));
     }
@@ -670,6 +677,14 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         tokio::spawn(async move {
             let mut lines = tokio::io::BufReader::new(err).lines();
             while let Ok(Some(l)) = lines.next_line().await {
+                // What the picture and the sound show; its other info lines are not kept.
+                if rec2.content.lock().unwrap().read(&l, super::now_ms()) {
+                    continue;
+                }
+                if l.contains("[info]") || l.contains("[verbose]") {
+                    continue;
+                }
+                let l = l.replacen("[warning] ", "", 1).replacen("[error] ", "", 1).replacen("[fatal] ", "", 1);
                 // Its own input overflowing: the server is too busy for the preview (the recording is
                 // whole). Its decoder's complaints are not counted: the receiver already saw the
                 // damaged packets, and a preview that skips makes its own.
@@ -1192,6 +1207,11 @@ pub(crate) async fn stop_within(child: &mut tokio::process::Child, grace: Durati
 
 /// The run is no longer written; an empty one is removed.
 fn finish_run(rec: &Rec, run_id: &str) {
+    // What the preview saw ends with it.
+    {
+        let mut c = rec.content.lock().unwrap();
+        (c.black, c.frozen, c.silent) = (None, None, None);
+    }
     let mut runs = rec.runs.write().unwrap();
     if let Some(i) = runs.iter().position(|r| r.meta.id == run_id) {
         runs[i].live = false;
@@ -1503,7 +1523,8 @@ mod tests {
     fn audio_kept_on_its_times() {
         let a = preview_args(5000, Path::new("/r"), Path::new("/t.jpg"), true);
         let i = a.iter().position(|x| x == "0:a:0").unwrap();
-        assert_eq!(a[i + 2..i + 4], ["-af".to_string(), AUDIO_SYNC.to_string()]);
+        assert_eq!(a[i + 2], "-af");
+        assert!(a[i + 3].starts_with(AUDIO_SYNC));
         assert!(a.contains(&"udp://127.0.0.1:5000?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216".to_string()));
         // The receiver only copies (no encoding), and keeps the damaged frames: thrown away, they
         // make the mosaic last to the next key frame.
