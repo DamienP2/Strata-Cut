@@ -67,7 +67,7 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                 }
                 continue;
             }
-            if matches!(rec.status.lock().unwrap().state, State::Off | State::Waiting) {
+            if matches!(rec.state(), State::Off | State::Waiting) {
                 let slot = m.schedules.active(&rec.id, &tz, now).or_else(|| m.schedules.active(&rec.id, &tz, now + super::PREROLL_MS));
                 if let Some((slot, a, b)) = slot {
                     let hm = |ms: i64| jiff::Timestamp::from_millisecond(ms).map(|t| t.to_zoned(tz.clone()).strftime("%H:%M").to_string()).unwrap_or_default();
@@ -75,7 +75,7 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                 }
             }
         }
-        if matches!(rec.status.lock().unwrap().state, State::Off | State::Waiting) {
+        if matches!(rec.state(), State::Off | State::Waiting) {
             rec.set_state(State::Starting, "");
         }
         match record_once(&m, &rec, &cfg, &mut cfg_rx, &mut stop_rx).await {
@@ -382,17 +382,20 @@ pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool
     a.push(d("video/index.m3u8"));
     // 2. Audio (first track, stereo).
     if audio {
+        // A sound track for the browser: stereo AAC in fragments of the proxy's length.
         // Lost or damaged audio packets leave a hole in the times: filled with silence (and
         // overlaps cut), else the sound after it is joined early and drifts ahead of the picture.
-        a.extend(s(&["-map", "0:a:0", "-vn", "-af", PREVIEW_AUDIO, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
-        a.push(d("audio/p%08d.m4s"));
-        a.push(d("audio/index.m3u8"));
-        // The other tracks (another language, the audio description): the same, for the player's
-        // choice; their fragments are numbered as the first track's.
+        let mut track = |k: u32, filter: &str, dir: &str| {
+            a.extend(s(&["-map", &format!("0:a:{k}"), "-vn", "-af", filter, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
+            a.push(d(&format!("{dir}/p%08d.m4s")));
+            a.push(d(&format!("{dir}/index.m3u8")));
+        };
+        // The first one is watched (silence) and gives the waveforms.
+        track(0, PREVIEW_AUDIO, "audio");
+        // The other tracks (another language, the audio description), for the player's choice;
+        // their fragments are numbered as the first track's.
         for k in 1..=extra_audio.min(3) {
-            a.extend(s(&["-map", &format!("0:a:{k}"), "-vn", "-af", AUDIO_SYNC, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
-            a.push(d(&format!("audio{k}/p%08d.m4s")));
-            a.push(d(&format!("audio{k}/index.m3u8")));
+            track(k, AUDIO_SYNC, &format!("audio{k}"));
         }
     }
     // 3. A still every 2 s for the recorder's card.
@@ -401,7 +404,6 @@ pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool
     a
 }
 
-/// A free UDP port on the loopback, for the receiver's copy to the preview.
 /// Copies the stream as received (MPEG-TS on the loopback, from the receiver) to the preview,
 /// and to the streams that send this source somewhere (`Rec::taps`): a stream starts and stops
 /// without touching the recording. Stops when dropped.
@@ -454,6 +456,7 @@ fn set_receive_buffer(sock: &std::net::UdpSocket, bytes: i32) {
     }
 }
 
+/// A free UDP port on the loopback, for the receiver's copy to the preview.
 fn free_port() -> Option<u16> {
     std::net::UdpSocket::bind("127.0.0.1:0").ok()?.local_addr().ok().map(|a| a.port())
 }

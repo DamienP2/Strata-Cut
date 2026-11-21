@@ -320,7 +320,7 @@ pub fn start(data_dir: std::path::PathBuf, recorders: Arc<Manager>, streams: Arc
                 let (_, was_told, over, event, source) = told.remove(&k).unwrap();
                 // A picture or a sound that "ends" because the source is no longer received: its
                 // loss is what is told, not that.
-                let gone = event == "content" && k.split_once(':').and_then(|(_, id)| recorders.get(id)).is_none_or(|r| r.status.lock().unwrap().state != RecState::Recording);
+                let gone = event == "content" && k.split_once(':').and_then(|(_, id)| recorders.get(id)).is_none_or(|r| r.state() != RecState::Recording);
                 if was_told && !over.is_empty() && !gone {
                     out.push(Message { event, level: "ok", source, text: over });
                 }

@@ -519,9 +519,19 @@ impl Rec {
     }
 
     /// Refreshes the loop figures of the status.
+    /// Its state now.
+    pub fn state(&self) -> State {
+        self.status.lock().unwrap().state
+    }
+
+    /// Received: recording, or starting to.
+    pub fn running(&self) -> bool {
+        matches!(self.state(), State::Recording | State::Starting)
+    }
+
     /// The stream comes now: the source records and its relay passed packets in the last 2 s.
     pub fn flowing(&self) -> bool {
-        self.status.lock().unwrap().state == State::Recording && now_ms() - self.last_packet.load(std::sync::atomic::Ordering::Relaxed) < 2000
+        self.state() == State::Recording && now_ms() - self.last_packet.load(std::sync::atomic::Ordering::Relaxed) < 2000
     }
 
     /// A picture black or frozen, a sound silent for 10 s: said in the journal, and when it ends.
@@ -886,7 +896,7 @@ impl Manager {
         // Recording goes on in the new folder at once: every source received now, whatever the
         // reason (all the time, a programmed recording, a stream).
         for r in self.recs() {
-            let received = matches!(r.status.lock().unwrap().state, State::Recording | State::Starting | State::Nosignal);
+            let received = r.running() || r.state() == State::Nosignal;
             if !r.dir.lock().unwrap().starts_with(&dir) && received {
                 r.new_run.notify_one();
             }

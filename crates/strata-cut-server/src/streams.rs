@@ -358,7 +358,7 @@ impl Streams {
         };
         let mut cost = crate::limits::stream(format!("{} → {}", rec.config().name, dest.name), again, d.height, height, kbps);
         // A source not received yet is started by the stream: its receiver and preview count too.
-        if !matches!(rec.status.lock().unwrap().state, crate::recorder::State::Recording | crate::recorder::State::Starting) {
+        if !rec.running() {
             cost.cores += crate::limits::recording(&rec.config()).cores;
         }
         Ok(Some(cost))

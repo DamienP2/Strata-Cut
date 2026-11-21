@@ -236,15 +236,10 @@ fn records_now(s: &Shared, id: &str, c: &RecorderConfig) -> bool {
     c.enabled || (!c.slots_off && m.schedules.active(id, &m.tz(), super::now_ms()).is_some())
 }
 
-/// The source received already (recording, or starting to).
-fn running(rec: &super::Rec) -> bool {
-    matches!(rec.status.lock().unwrap().state, super::State::Recording | super::State::Starting)
-}
-
 /// A change made by hand that starts a recording now: is there room for it? (A programmed
 /// recording that starts at its time is never refused.)
 fn guard_start(s: &Shared, rec: &super::Rec, new: &RecorderConfig) -> ApiResult<()> {
-    if !running(rec) && records_now(s, &rec.id, new) && !records_now(s, &rec.id, &rec.config()) {
+    if !rec.running() && records_now(s, &rec.id, new) && !records_now(s, &rec.id, &rec.config()) {
         crate::limits::check(s, &crate::limits::recording(new))?;
     }
     Ok(())
@@ -346,7 +341,7 @@ fn save_slot(s: &Shared, slot: super::schedule::Slot) -> ApiResult<Json<Value>> 
     let now = super::now_ms();
     let mut probe = slot.clone();
     probe.normalize();
-    if probe.enabled && !c.slots_off && !running(&rec) && !records_now(s, &rec.id, &c) && probe.occurrences(&m.tz(), now, now + 1).iter().any(|&(a, b)| a <= now && now < b) {
+    if probe.enabled && !c.slots_off && !rec.running() && !records_now(s, &rec.id, &c) && probe.occurrences(&m.tz(), now, now + 1).iter().any(|&(a, b)| a <= now && now < b) {
         crate::limits::check(s, &crate::limits::recording(&c))?;
     }
     let before = m.reserved();
@@ -474,49 +469,42 @@ async fn coverage(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(
     Ok(Json(json!({"spans": spans, "loopHours": rec.config().loop_hours, "now": super::now_ms()})))
 }
 
-async fn fragment(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath((id, run, track, file)): UrlPath<(String, String, String, String)>) -> ApiResult<Response> {
+/// A file of the browser's proxy: `init.mp4` or a fragment `p<n>.m4s`, of the video, the first
+/// sound track (`audio`) or another one (`audio1` to `audio3`, numbered as the first's).
+async fn fragment(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath((id, run, track, file)): UrlPath<(String, String, String, String)>) -> ApiResult<Response> {
+    require(me.can("extract.view") || me.can("stream.view"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
-    // Another sound track: its fragment as numbered in the first track's list.
-    if let Some(k) = track.strip_prefix("audio").and_then(|k| k.parse::<u32>().ok()).filter(|k| (1..=3).contains(k)) {
-        let path = {
-            let runs = rec.runs.read().unwrap();
-            let r = runs.iter().find(|r| r.meta.id == run).ok_or_else(|| not_found("run"))?;
-            let dir = r.dir.join(format!("audio{k}"));
-            if file == "init.mp4" {
-                dir.join("init.mp4")
-            } else {
-                let n: u32 = file.strip_prefix('p').and_then(|f| f.strip_suffix(".m4s")).and_then(|n| n.parse().ok()).ok_or_else(|| not_found("fragment"))?;
-                dir.join(format!("p{n:08}.m4s"))
-            }
-        };
-        let mut data = tokio::fs::read(&path).await.map_err(|_| not_found("fragment"))?;
-    // The init segment without its edit lists (Safari applies them, see `mp4::without_edits`).
-    if file == "init.mp4" {
-        data = super::index::mp4::without_edits(&data);
-    }
-        return Ok(file_response(data, "video/mp4", "private, max-age=86400"));
-    }
-    let video = match track.as_str() {
-        "video" => true,
-        "audio" => false,
-        _ => return Err(not_found("track")),
+    // The fragment's number (none: the init segment); nothing else names a file.
+    let n: Option<u32> = if file == "init.mp4" {
+        None
+    } else {
+        Some(file.strip_prefix('p').and_then(|f| f.strip_suffix(".m4s")).and_then(|n| n.parse().ok()).ok_or_else(|| not_found("fragment"))?)
     };
     let path = {
         let runs = rec.runs.read().unwrap();
         let r = runs.iter().find(|r| r.meta.id == run).ok_or_else(|| not_found("run"))?;
-        if file == "init.mp4" {
-            r.track_dir(video).join("init.mp4")
-        } else {
-            let n: u32 = file.strip_prefix('p').and_then(|f| f.strip_suffix(".m4s")).and_then(|n| n.parse().ok()).ok_or_else(|| not_found("fragment"))?;
-            if !r.track(video).segs.iter().any(|p| p.n == n) {
-                return Err(not_found("fragment"));
+        let dir = match track.as_str() {
+            "video" | "audio" => {
+                let video = track == "video";
+                // An indexed track: only a fragment of its list.
+                if n.is_some_and(|n| !r.track(video).segs.iter().any(|p| p.n == n)) {
+                    return Err(not_found("fragment"));
+                }
+                r.track_dir(video)
             }
-            r.proxy_path(video, n)
+            other => match other.strip_prefix("audio").and_then(|k| k.parse::<u32>().ok()).filter(|k| (1..=3).contains(k)) {
+                Some(k) => r.dir.join(format!("audio{k}")),
+                None => return Err(not_found("track")),
+            },
+        };
+        match n {
+            None => dir.join("init.mp4"),
+            Some(n) => dir.join(format!("p{n:08}.m4s")),
         }
     };
     let mut data = tokio::fs::read(&path).await.map_err(|_| not_found("fragment"))?;
     // The init segment without its edit lists (Safari applies them, see `mp4::without_edits`).
-    if file == "init.mp4" {
+    if n.is_none() {
         data = super::index::mp4::without_edits(&data);
     }
     Ok(file_response(data, "video/mp4", "private, max-age=86400"))
