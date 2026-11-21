@@ -628,9 +628,21 @@ function Recorded({ spans, recId, from, to, now, loopFrom, tileMs, x }: { spans:
 const TILE_STEPS = [30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 14_400_000];
 const recMode = (r: Recorder): RecMode => (r.enabled ? 'continuous' : r.slotsOff ? 'off' : 'slots');
 
-/** A source at the head of its line: its picture (REC on it while it records), its logo and name. */
-function SourceHead({ rec }: { rec: Recorder }) {
+/** A source at the head of its line: its picture (REC on it while it records), its logo and name,
+ * and (as the role allows) REC to record it all the time, or Stop. */
+function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
   const st = useApp((s) => s.status[rec.id]);
+  const toast = useApp((s) => s.toast);
+  const [busy, setBusy] = useState(false);
+  const setMode = async (mode: 'continuous' | 'slots') => {
+    setBusy(true);
+    try {
+      await api('POST', `/api/recorders/${rec.id}/recording`, { mode });
+    } catch (e) {
+      if (!explainGuard(e)) toast(t((e as Error).message), 'error');
+    }
+    setBusy(false);
+  };
   const state = st?.state ?? 'off';
   const recording = state === 'recording';
   const [n, setN] = useState(0);
@@ -663,6 +675,16 @@ function SourceHead({ rec }: { rec: Recorder }) {
         <RecLogo rec={rec} size="sm" />
         <b title={rec.name}>{rec.name}</b>
       </span>
+      {admin &&
+        (rec.enabled ? (
+          <button type="button" className="sc-head-rec stop" disabled={busy} data-tip={t('Stop recording all the time')} onClick={() => void setMode('slots')}>
+            <Square size={9} /> {t('Stop')}
+          </button>
+        ) : (
+          <button type="button" className="sc-head-rec" disabled={busy} data-tip={t('Record all the time')} onClick={() => void setMode('continuous')}>
+            <span className="sc-rec" /> REC
+          </button>
+        ))}
     </div>
   );
 }
@@ -831,7 +853,7 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
           const guide = guides[r.id] ?? [];
           return (
             <div key={r.id} className="sc-cal-row">
-              <SourceHead rec={r} />
+              <SourceHead rec={r} admin={admin} />
               <div
                 className={`sc-cal-lane ${admin ? 'edit' : ''}`}
                 onPointerDown={(e) => {

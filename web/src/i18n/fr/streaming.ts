@@ -10,6 +10,8 @@ export const streaming: Record<string, string> = {
   'Not recorded (source)': 'Non enregistrée',
   Slots: 'Programmé',
   'None programmed': 'Aucun programmé',
+  'Record all the time': 'Enregistrer en continu',
+  'Stop recording all the time': 'Arrêter l’enregistrement en continu',
   'Records all the time (the loop keeps the last hours)': 'Enregistre tout le temps (la boucle garde les dernières heures)',
   'Records only during the slots drawn on its line': 'Enregistre seulement aux heures programmées sur sa ligne',
   'Received only to be sent (Streamer); nothing recorded, slots paused': 'Reçue seulement pour être diffusée (Streamer) : rien n’est enregistré, ses enregistrements programmés sont suspendus',

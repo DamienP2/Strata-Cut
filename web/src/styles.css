@@ -1449,7 +1449,7 @@ a.btn { color: inherit; }
    programmed recordings are drawn over what was recorded (the programme guide above it). */
 .sc-plan-main { padding-top: 16px; gap: 12px; }
 .sc-cal-title { font-size: 18px; margin: 0 8px 0 2px; }
-.sc-plan .sc-cal-row { grid-template-columns: 210px 1fr; min-height: 54px; }
+.sc-plan .sc-cal-row { grid-template-columns: 270px 1fr; min-height: 54px; }
 .sc-cal-src { gap: 10px; padding: 6px 10px; }
 .sc-cal-pic { width: 64px; border-radius: 4px; }
 .sc-cal-pic .sc-onpic { height: 13px; font-size: 8px; padding: 0 4px; top: 3px; left: 3px; gap: 3px; }
@@ -1459,3 +1459,10 @@ a.btn { color: inherit; }
 .sc-cal-prog { top: 2px; height: 14px; line-height: 14px; }
 /* Past programmed recordings: an outline over the pictures recorded in them. */
 .sc-cal-slot.past { background: transparent; border-color: color-mix(in srgb, var(--text-3) 70%, transparent); color: var(--text); filter: none; text-shadow: 0 1px 2px #000; }
+/* Régie: REC (all the time) or Stop, compact, at the end of the source's head. */
+.sc-cal-src .sc-cal-info-name { flex: 1; }
+.sc-head-rec { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text); font: 600 11px Inter, system-ui, sans-serif; cursor: pointer; }
+.sc-head-rec:hover:not(:disabled) { background: var(--panel-3); border-color: color-mix(in srgb, var(--live) 50%, var(--line-2)); }
+.sc-head-rec.stop:hover:not(:disabled) { border-color: var(--line-2); }
+.sc-head-rec .sc-rec { width: 6px; height: 6px; }
+.sc-head-rec:disabled { opacity: 0.5; cursor: default; }
