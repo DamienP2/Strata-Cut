@@ -191,7 +191,8 @@ fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
         a.extend(s(&["-c:v", "copy"]));
     }
     if d.srt() && d.encode == "copy" {
-        a.extend(s(&["-c:a", "copy", "-f", "mpegts"]));
+        // SRT carries the stream as it is: its subtitles (DVB, teletext) go with it.
+        a.extend(s(&["-map", "0:s?", "-c:s", "copy", "-c:a", "copy", "-f", "mpegts"]));
     } else {
         let ak = if d.audio_kbps > 0 { d.audio_kbps } else { 160 };
         a.extend(s(&["-c:a", "aac", "-b:a", &format!("{ak}k"), "-ar", "48000", "-ac", "2"]));

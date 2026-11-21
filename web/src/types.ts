@@ -60,6 +60,10 @@ export interface MediaInfo {
   fpsDen: number;
   interlaced: boolean;
   audioTracks: number;
+  /** Each sound track's language ("fra", "eng"…; "" when not said). */
+  audioLangs?: string[];
+  /** The subtitle tracks' codecs ("dvb_subtitle", "dvb_teletext"…). */
+  subtitles?: string[];
 }
 
 /** A recorder's live state. */

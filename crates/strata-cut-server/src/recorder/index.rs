@@ -48,6 +48,12 @@ pub struct MediaInfo {
     pub fps_den: u32,
     pub interlaced: bool,
     pub audio_tracks: u32,
+    /// Each sound track's language ("fra", "eng"…; "" when not said).
+    #[serde(default)]
+    pub audio_langs: Vec<String>,
+    /// The subtitle tracks' codecs ("dvb_subtitle", "dvb_teletext"…).
+    #[serde(default)]
+    pub subtitles: Vec<String>,
 }
 
 impl MediaInfo {

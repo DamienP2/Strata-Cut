@@ -148,6 +148,10 @@ pub struct ClipRequest {
     pub name: String,
     #[serde(default)]
     pub kind: Kind,
+    /// Video: the source's subtitles (DVB, teletext) burnt into the picture (an MP4 cannot hold
+    /// them as they are).
+    #[serde(default)]
+    pub subtitles: bool,
 }
 
 pub struct Clips {
@@ -362,12 +366,24 @@ impl Clips {
         let start = job.req.t - base - 0.5 / fps;
         let dur = job.req.frames as f64 / fps;
         let input = format!("concat:{}", segs.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join("|"));
-        let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into(), "-i".into(), input];
+        let burn = kind == Kind::Video && job.req.subtitles && !media.subtitles.is_empty();
+        let mut args: Vec<String> = vec!["-hide_banner".into(), "-nostdin".into(), "-v".into(), "error".into(), "-progress".into(), "pipe:1".into(), "-copyts".into()];
+        // Teletext: its subtitle pages only, drawn as pictures.
+        if burn && media.subtitles[0] == "dvb_teletext" {
+            args.extend(["-txt_format", "bitmap", "-txt_page", "subtitle"].map(String::from));
+        }
+        args.extend(["-i".into(), input]);
         let sound = format!("{},atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS", crate::recorder::AUDIO_SYNC, start + dur);
         match kind {
             Kind::Video => {
-                args.extend(["-map", "0:v:0", "-map", "0:a?"].map(String::from));
-                args.extend(["-vf".into(), format!("trim=start={start:.6},setpts=PTS-STARTPTS")]);
+                if burn {
+                    // The subtitles over the picture, on the source's timeline, then cut.
+                    let (w, h) = (media.width.max(2), media.height.max(2));
+                    args.extend(["-filter_complex".into(), format!("[0:s:0]scale={w}:{h}[s];[0:v:0][s]overlay=eof_action=pass,trim=start={start:.6},setpts=PTS-STARTPTS[v]"), "-map".into(), "[v]".into(), "-map".into(), "0:a?".into()]);
+                } else {
+                    args.extend(["-map", "0:v:0", "-map", "0:a?"].map(String::from));
+                    args.extend(["-vf".into(), format!("trim=start={start:.6},setpts=PTS-STARTPTS")]);
+                }
                 args.extend(["-af".into(), sound]);
                 args.extend(["-frames:v".into(), job.req.frames.to_string()]);
                 args.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "16", "-profile:v", "high", "-pix_fmt", "yuv420p"].map(String::from));

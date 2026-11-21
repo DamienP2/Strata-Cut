@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, History, Pause, Play, PlayCircle, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Captions, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, History, Pause, Play, PlayCircle, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { SourceGroups } from '../ui/SourceGroups';
 import { t, locale } from '../i18n';
@@ -137,9 +137,12 @@ function Editor({ rec }: { rec: Recorder }) {
   const pendingMark = useRef<{ which: 'in' | 'out'; wall: number } | null>(null);
   /** What the clip holds: the picture with its sound, the sound alone, the picture under the playhead. */
   const [kind, setKind] = useDisplayPref<'video' | 'audio' | 'image'>('extract.kind', 'video');
+  // The source's subtitles burnt into a video clip (when it has some).
+  const [burnSubs, setBurnSubs] = useDisplayPref<boolean>('extract.subtitles', false);
   const [clips, setClips] = useState<Clip[]>([]);
   const [guide, setGuide] = useState<Programme[]>([]);
   const fps = fpsOf(run?.media?.fpsNum, run?.media?.fpsDen);
+  const hasSubs = (run?.media?.subtitles?.length ?? 0) > 0;
   // A live only while the source records; stopped, its last recorded frame.
   const state = useApp((s) => s.status[rec.id]?.state);
   const newest = useApp((s) => s.status[rec.id]?.newest ?? null);
@@ -506,7 +509,7 @@ function Editor({ rec }: { rec: Recorder }) {
     if (!mIn || !mOut) return;
     if (mIn.run !== mOut.run) return toast(t('The in and out points must be in the same recording'), 'error');
     try {
-      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
+      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, subtitles: kind === 'video' && hasSubs && burnSubs, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
       // Extraction started: the marks are cleared for the next clip.
       setIn(null);
       setOut(null);
@@ -621,6 +624,11 @@ function Editor({ rec }: { rec: Recorder }) {
           </div>
           <MarkTag kind="in" mark={mIn} fps={fps} timezone={timezone} onType={(s) => typed(s, setIn)} onClear={() => setIn(null)} onMark={markIn} />
           <MarkTag kind="out" mark={mOut} fps={fps} timezone={timezone} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} onMark={markOut} />
+          {kind === 'video' && hasSubs && (
+            <button type="button" className={`sc-subs ${burnSubs ? 'on' : ''}`} aria-pressed={burnSubs} data-tip={t('Burn the subtitles into the picture')} onClick={() => setBurnSubs(!burnSubs)}>
+              <Captions size={14} />
+            </button>
+          )}
           <span className="sc-clipdur">{kind === 'image' ? (pos ? timecode(pos.wall, fps, timezone) : '--:--:--:--') : duration(frames, fps)}</span>
           <input className="sc-clipname" value={name} placeholder={mIn ? `${rec.name} ${timecode(mIn.wall, fps, timezone)}` : t('Name of the clip')} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
           <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>

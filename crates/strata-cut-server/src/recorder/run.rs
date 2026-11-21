@@ -337,13 +337,16 @@ pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Op
     a.extend(input);
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let from = program.map_or("0:".to_string(), |p| format!("0:p:{p}:"));
-    let (video, sounds, sound) = (format!("{from}v:0"), format!("{from}a?"), format!("{from}a:0?"));
+    let (video, sounds) = (format!("{from}v:0"), format!("{from}a?"));
+    // Its subtitles too (DVB subtitles, teletext), as they come.
+    let subs = format!("{from}s?");
     // 1. The stream as received, in segments.
-    a.extend(s(&["-map", &video, "-map", &sounds, "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
+    a.extend(s(&["-map", &video, "-map", &sounds, "-map", &subs, "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
     a.push(d("master/list.csv"));
     a.push(d("master/s%08d.ts"));
-    // 2. The same picture and first sound, same timestamps, for the preview (UDP never waits for it).
-    a.extend(s(&["-map", &video, "-map", &sound, "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts"]));
+    // 2. The same picture, its sounds and subtitles, same timestamps, for the preview and the
+    // streams (UDP never waits for them).
+    a.extend(s(&["-map", &video, "-map", &sounds, "-map", &subs, "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts"]));
     a.push(format!("udp://127.0.0.1:{preview_port}?pkt_size=1316"));
     // 3. The programme guide (DVB EIT sections), decoded by the recorder.
     if let Some(map) = epg {
@@ -1476,7 +1479,7 @@ fn start_time(ffmpeg: &str, file: &Path) -> Option<f64> {
 
 /// Codec, size, frame rate, scan and audio tracks of a segment.
 pub fn probe(ffmpeg: &str, file: &Path) -> Option<MediaInfo> {
-    let out = std::process::Command::new(ffprobe_of(ffmpeg)).args(["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate,field_order", "-of", "json"]).arg(file).output().ok()?;
+    let out = std::process::Command::new(ffprobe_of(ffmpeg)).args(["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate,field_order:stream_tags=language", "-of", "json"]).arg(file).output().ok()?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
     let streams = v["streams"].as_array()?;
     let video = streams.iter().find(|s| s["codec_type"] == "video")?;
@@ -1493,6 +1496,8 @@ pub fn probe(ffmpeg: &str, file: &Path) -> Option<MediaInfo> {
         fps_den: den,
         interlaced,
         audio_tracks: streams.iter().filter(|s| s["codec_type"] == "audio").count() as u32,
+        audio_langs: streams.iter().filter(|s| s["codec_type"] == "audio").map(|s| s["tags"]["language"].as_str().unwrap_or("").to_string()).collect(),
+        subtitles: streams.iter().filter(|s| s["codec_type"] == "subtitle").map(|s| s["codec_name"].as_str().unwrap_or("").to_string()).collect(),
     })
 }
 
