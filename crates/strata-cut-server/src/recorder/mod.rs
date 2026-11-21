@@ -464,6 +464,9 @@ pub struct Rec {
     /// How far the preview is behind the recording (s); when it last dropped some of the stream.
     pub preview_lag: std::sync::atomic::AtomicU32,
     preview_dropped_at: std::sync::atomic::AtomicI64,
+    /// When the relay last passed the stream on (server time, ms): a live sees the source lost
+    /// at once, before its recorder notices.
+    pub last_packet: std::sync::atomic::AtomicI64,
     /// The picture black, frozen, the sound silent: since (server time, ms), and whether the
     /// journal already said so.
     pub content: Mutex<Content>,
@@ -512,6 +515,11 @@ impl Rec {
     }
 
     /// Refreshes the loop figures of the status.
+    /// The stream comes now: the source records and its relay passed packets in the last 2 s.
+    pub fn flowing(&self) -> bool {
+        self.status.lock().unwrap().state == State::Recording && now_ms() - self.last_packet.load(std::sync::atomic::Ordering::Relaxed) < 2000
+    }
+
     /// A picture black or frozen, a sound silent for 10 s: said in the journal, and when it ends.
     pub fn say_content(&self) {
         let now = now_ms();
@@ -1042,6 +1050,7 @@ impl Manager {
             rtp: false.into(),
             preview_lag: 0.into(),
             content: Mutex::new(Content::default()),
+            last_packet: 0.into(),
             no_signal: false.into(),
             last_end: Mutex::new(None),
             preview_dropped_at: 0.into(),

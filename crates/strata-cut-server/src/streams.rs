@@ -54,6 +54,14 @@ pub struct Destination {
     /// What the operator may change in the Streamer: the server's address, the video bitrate.
     pub expose_url: bool,
     pub expose_bitrate: bool,
+    /// The source lost during a live: a still picture (and silence) sent until it comes back, so
+    /// that the platform keeps the live open.
+    #[serde(default = "yes")]
+    pub slate: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Destination {
@@ -196,6 +204,28 @@ fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
     }
     a.push(target(d));
     (a, note)
+}
+
+/// The picture sent while the source is lost: the source's size and rate (the platform sees the
+/// same stream), a dark ground, the source's name and that the live comes back; silence.
+fn slate_args(d: &Destination, text: &std::path::Path, (w, h, fps): (u32, u32, u32)) -> Vec<String> {
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let (w, h) = if d.height > 0 && d.encode == "h264" { ((d.height * 16 / 9 + 1) & !1, d.height) } else { (w, h) };
+    let size = (h / 16).max(16);
+    let file = text.to_string_lossy().replace('\\', "/").replace(':', "\\\\:").replace('\'', "");
+    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-re", "-f", "lavfi", "-i"]);
+    a.push(format!("color=c=0x0b0e16:s={w}x{h}:r={fps}"));
+    a.extend(s(&["-re", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-map", "0:v", "-map", "1:a", "-vf"]));
+    a.push(format!("drawtext=textfile='{file}':fontcolor=white:fontsize={size}:line_spacing={}:x=(w-tw)/2:y=(h-th)/2,format=yuv420p", size / 2));
+    let k = if d.video_kbps > 0 { d.video_kbps.min(4000) } else { 2500 };
+    a.extend(s(&["-c:v", "libx264", "-preset", "veryfast", "-tune", "stillimage", "-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string()]));
+    let ak = if d.audio_kbps > 0 { d.audio_kbps } else { 128 };
+    a.extend(s(&["-c:a", "aac", "-b:a", &format!("{ak}k"), "-ar", "48000", "-ac", "2", "-f", if d.srt() { "mpegts" } else { "flv" }]));
+    if !d.srt() {
+        a.extend(s(&["-rw_timeout", "10000000"]));
+    }
+    a.push(target(d));
+    a
 }
 
 fn free_port() -> Option<u16> {
@@ -440,7 +470,7 @@ impl Streams {
             if *stop.borrow() {
                 return false;
             }
-            if rec.status.lock().unwrap().state == crate::recorder::State::Recording {
+            if rec.flowing() {
                 return true;
             }
             if limit.is_some_and(|l| since.elapsed() > l) {
@@ -456,6 +486,55 @@ impl Streams {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(500)) => {}
                 _ = stop.changed() => {}
+            }
+        }
+    }
+
+    /// Sends the slate until the source is received again (true) or the live is stopped (false).
+    async fn slate(&self, s: &Session, d: &Destination, rec: &crate::recorder::Rec, stop: &mut watch::Receiver<bool>) -> bool {
+        let (size, name) = {
+            let st = rec.status.lock().unwrap();
+            let m = st.media.as_ref();
+            let fps = m.map(|m| m.fps().round() as u32).filter(|f| (10..=60).contains(f)).unwrap_or(25);
+            ((m.map(|m| m.width).filter(|w| *w > 0).unwrap_or(1920), m.map(|m| m.height).filter(|h| *h > 0).unwrap_or(1080), fps), rec.config().name)
+        };
+        let text = self.data_dir.join(format!("slate-{}.txt", s.dest));
+        let _ = std::fs::write(&text, format!("{name}\nLe direct reprend dans un instant"));
+        self.set(s, |st| {
+            st.state = "slate";
+            st.message = "the source is no longer received: slate sent".into();
+            st.live_since = None;
+            st.kbps = 0.0;
+        });
+        tracing::warn!("streaming to {}: the source is no longer received, a slate is sent", d.name);
+        loop {
+            let mut cmd = Command::new(&self.recorders.ffmpeg);
+            cmd.args(slate_args(d, &text, size)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
+            let mut child = cmd.spawn().ok();
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                    _ = stop.changed() => {}
+                }
+                if *stop.borrow() {
+                    if let Some(c) = child.as_mut() {
+                        let _ = c.kill().await;
+                    }
+                    return false;
+                }
+                if rec.flowing() {
+                    if let Some(c) = child.as_mut() {
+                        let _ = c.kill().await;
+                    }
+                    tracing::info!("streaming to {}: the source is back, the live goes on", d.name);
+                    self.set(s, |st| st.message.clear());
+                    return true;
+                }
+                // The slate's link fell (the server, the network): made again.
+                if child.as_mut().is_none_or(|c| c.try_wait().ok().flatten().is_some()) {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    break;
+                }
             }
         }
     }
@@ -480,6 +559,13 @@ impl Streams {
                 self.give_up(&s, &d, "the source was deleted".into());
                 break;
             };
+            // Lost during a live: the slate goes out until the source comes back (or the live stops).
+            if ever_live && d.slate && !rec.flowing() {
+                if !self.slate(&s, &d, &rec, &mut stop).await {
+                    break;
+                }
+                continue;
+            }
             // The source first: woken by this live it takes a few seconds (a web page, an encoder
             // that has to call, longer). Lost during a live, the live waits for it as long as it
             // is not stopped; never live, two minutes.
@@ -492,7 +578,7 @@ impl Streams {
                 break;
             };
             let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-progress", "pipe:1", "-stats_period", "1", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i"].map(String::from).to_vec();
-            args.push(format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=15000000"));
+            args.push(format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000"));
             let (out, note) = output_args(&d, &codec);
             args.extend(out);
             let mut cmd = Command::new(&ffmpeg);
@@ -535,7 +621,7 @@ impl Streams {
             }
             let progress = child.stdout.take().map(|o| tokio::io::BufReader::new(o).lines());
             let started = std::time::Instant::now();
-            let ended = self.follow(&s, &mut child, progress, &mut stop).await;
+            let ended = self.follow(&s, &mut child, progress, &mut stop, &rec, d.slate).await;
             ever_live |= s.stats.lock().unwrap().live_since.is_some();
             rec.taps.lock().unwrap().retain(|t| t.0 != key);
             if ended {
@@ -545,7 +631,7 @@ impl Streams {
             // The link fell: why, and again a little later.
             let lines: Vec<String> = last.lock().unwrap().iter().cloned().collect();
             let text = lines.join("\n");
-            let source_lost = rec.status.lock().unwrap().state != crate::recorder::State::Recording;
+            let source_lost = !rec.flowing();
             let why = if source_lost {
                 // Nothing came from the source: it is not the destination's doing.
                 "the source is no longer received: waiting for it".to_string()
@@ -565,6 +651,10 @@ impl Streams {
             }
             if started.elapsed() > Duration::from_secs(60) {
                 failures = 0;
+            }
+            // The source lost, with a slate: it goes out at once (the loop's next turn).
+            if source_lost && d.slate {
+                continue;
             }
             failures += 1;
             tracing::warn!("streaming to {}: {why}", d.name);
@@ -591,13 +681,24 @@ impl Streams {
         child: &mut tokio::process::Child,
         mut progress: Option<tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>>,
         stop: &mut watch::Receiver<bool>,
+        rec: &crate::recorder::Rec,
+        slate: bool,
     ) -> bool {
         let mut size = 0u64;
         let mut last = (0u64, std::time::Instant::now());
+        let mut look = tokio::time::interval(Duration::from_millis(500));
         loop {
             tokio::select! {
                 _ = stop.changed() => return true,
                 _ = child.wait() => return false,
+                // Live, with a slate: the source stopped coming, the slate goes out now rather
+                // than when FFmpeg gives up waiting for it.
+                _ = look.tick() => {
+                    if slate && s.stats.lock().unwrap().live_since.is_some() && !rec.flowing() {
+                        let _ = child.kill().await;
+                        return false;
+                    }
+                }
                 line = async { match progress.as_mut() { Some(p) => p.next_line().await, None => std::future::pending().await } } => {
                     let Ok(Some(line)) = line else { progress = None; continue };
                     if let Some(v) = line.strip_prefix("total_size=") {

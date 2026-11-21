@@ -419,6 +419,7 @@ impl Relay {
                 // The taps, looked at again every 64 packets (a few hundredths of a second).
                 if packets.is_multiple_of(64) {
                     taps = rec.taps.lock().unwrap().iter().map(|t| t.1).collect();
+                    rec.last_packet.store(super::now_ms(), Ordering::Relaxed);
                 }
                 packets = packets.wrapping_add(1);
                 for &port in &taps {

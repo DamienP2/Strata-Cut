@@ -26,13 +26,15 @@ export interface Destination {
   audioKbps?: number;
   exposeUrl: boolean;
   exposeBitrate: boolean;
+  /** The source lost during a live: a still picture sent until it comes back. */
+  slate: boolean;
 }
 
 export interface StreamInfo {
   destination: string;
   source: string;
   started: number;
-  state: 'connecting' | 'live' | 'retrying' | 'failed';
+  state: 'connecting' | 'live' | 'retrying' | 'slate' | 'failed';
   message: string;
   note: string;
   liveSince: number | null;
@@ -61,6 +63,7 @@ export const blankDestination = (): Destination => ({
   audioKbps: 160,
   exposeUrl: false,
   exposeBitrate: false,
+  slate: true,
 });
 
 export function useDestinations(): [Destination[] | null, () => void] {

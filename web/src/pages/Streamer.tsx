@@ -274,7 +274,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
                     </div>
                     <div>
                       <span>{t('State')}</span>
-                      <b className={s.state === 'live' ? 'ok' : 'bad'}>{s.state === 'live' ? t('Live') : s.state === 'connecting' ? t('Connecting…') : t('Reconnecting')}</b>
+                      <b className={s.state === 'live' ? 'ok' : 'bad'}>{s.state === 'live' ? t('Live') : s.state === 'connecting' ? t('Connecting…') : s.state === 'slate' ? t('Slate') : t('Reconnecting')}</b>
                     </div>
                   </div>
                   {(s.message || s.note) && (
