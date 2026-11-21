@@ -293,24 +293,15 @@ export interface TextInputProps extends Omit<React.InputHTMLAttributes<HTMLInput
   onChange: (v: string) => void;
   /** Send the value only when leaving the field (Enter leaves it). */
   commitOnBlur?: boolean;
-  /** A text area that grows with its text. */
-  autoGrow?: boolean;
 }
 
 /** A text field whose keys never reach the shortcuts. */
-export function TextInput({ value, onChange, commitOnBlur, autoGrow, onKeyDown, onBlur, ...rest }: TextInputProps) {
+export function TextInput({ value, onChange, commitOnBlur, onKeyDown, onBlur, ...rest }: TextInputProps) {
   const [local, setLocal] = useState(value);
   const focused = useRef(false);
-  const area = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!focused.current || !commitOnBlur) setLocal(value);
   }, [value, commitOnBlur]);
-  useLayoutEffect(() => {
-    const a = area.current;
-    if (!a) return;
-    a.style.height = 'auto';
-    a.style.height = `${a.scrollHeight + 2}px`;
-  }, [local]);
 
   const commit = () => {
     if (commitOnBlur && local !== value) onChange(local);
@@ -319,39 +310,15 @@ export function TextInput({ value, onChange, commitOnBlur, autoGrow, onKeyDown, 
     setLocal(v);
     if (!commitOnBlur) onChange(v);
   };
-  const keys = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const keys = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Escape' && e.key !== 'Tab') e.stopPropagation();
-    if (e.key === 'Enter' && commitOnBlur && !(autoGrow && e.shiftKey)) {
+    if (e.key === 'Enter' && commitOnBlur) {
       e.preventDefault();
       e.currentTarget.blur();
     }
-    onKeyDown?.(e as React.KeyboardEvent<HTMLInputElement>);
+    onKeyDown?.(e);
   };
 
-  if (autoGrow) {
-    const { className, placeholder, disabled, title, id, readOnly } = rest;
-    return (
-      <textarea
-        ref={area}
-        rows={1}
-        className={className}
-        placeholder={placeholder}
-        disabled={disabled}
-        title={title}
-        id={id}
-        readOnly={readOnly}
-        style={{ resize: 'none', overflow: 'hidden' }}
-        value={local}
-        onFocus={() => (focused.current = true)}
-        onChange={(e) => change(e.target.value)}
-        onBlur={() => {
-          focused.current = false;
-          commit();
-        }}
-        onKeyDown={keys}
-      />
-    );
-  }
   return (
     <input
       {...rest}

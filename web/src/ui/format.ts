@@ -16,11 +16,6 @@ export function formatBytes(n: number | null | undefined): string {
   return `${num} ${t(UNITS[i])}`;
 }
 
-/** A number in the interface language (« 1 234,5 »). */
-export function formatNumber(n: number, digits = 0): string {
-  return n.toLocaleString(locale(), { maximumFractionDigits: digits, minimumFractionDigits: digits });
-}
-
 /** How long: `2d 3h`, `3h 12m`, `5m 10s`, `8s` (French: « 2 j 3 h »…). */
 export function formatDuration(secs: number): string {
   const s = Math.max(0, Math.floor(secs));

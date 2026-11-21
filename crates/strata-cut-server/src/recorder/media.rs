@@ -34,7 +34,6 @@ pub fn routes() -> Router<Shared> {
         .route("/api/decklink/{n}/preview.jpg", get(decklink_preview))
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/probe", post(probe))
-        .route("/api/recorders/{id}/enabled", post(set_enabled))
         .route("/api/recorders/{id}/recording", post(set_recording))
         .route("/api/recorders/{id}/clear", post(clear))
         .route("/api/recorders/{id}/logo", get(logo_get).put(logo_put).delete(logo_delete).layer(axum::extract::DefaultBodyLimit::max(super::logo::MAX + 4096)))
@@ -261,20 +260,6 @@ async fn delete(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
     s.recorders.delete(&id).await.map_err(internal)?;
     s.clips.recorder_deleted(&id);
     Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Deserialize)]
-struct Enabled {
-    enabled: bool,
-}
-
-async fn set_enabled(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Enabled>) -> ApiResult<Json<Value>> {
-    require(me.can("schedule.edit"))?;
-    let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
-    let mut c = rec.config();
-    c.enabled = b.enabled;
-    guard_start(&s, &rec, &c)?;
-    s.recorders.update(&id, c).map(Json).map_err(bad)
 }
 
 #[derive(Deserialize)]

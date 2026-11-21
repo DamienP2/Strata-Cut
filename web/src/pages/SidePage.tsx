@@ -16,12 +16,11 @@ export function SidePage({ nav, children, className, wide = true }: { nav: React
   );
 }
 
-/** A section title of the left list, with optional actions. */
-export function NavSection({ title, children }: { title: string; children?: ReactNode }) {
+/** A section title of the left list. */
+export function NavSection({ title }: { title: string }) {
   return (
     <div className="lib-nav-section">
       <span className="grow">{title}</span>
-      {children}
     </div>
   );
 }
@@ -34,19 +33,15 @@ export interface NavItemProps {
   /** A dot: `ok` (green), `warn` (orange). */
   status?: 'ok' | 'warn' | null;
   count?: number;
-  /** Icon buttons shown on hover. */
-  actions?: ReactNode;
-  title?: string;
 }
 
-export function NavItem({ icon: Icon, label, on, onClick, status, count, actions, title }: NavItemProps) {
+export function NavItem({ icon: Icon, label, on, onClick, status, count }: NavItemProps) {
   return (
     <div
       className={`lib-nav-item ${on ? 'on' : ''}`}
       role="link"
       tabIndex={0}
       aria-current={on ? 'page' : undefined}
-      title={title}
       onClick={onClick}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -57,7 +52,6 @@ export function NavItem({ icon: Icon, label, on, onClick, status, count, actions
     >
       <Icon size={15} />
       <span className="grow">{label}</span>
-      {actions && <span className="lib-nav-actions">{actions}</span>}
       {status && <span className={`nav-dot ${status}`} />}
       {count !== undefined && <span className="count">{count}</span>}
     </div>

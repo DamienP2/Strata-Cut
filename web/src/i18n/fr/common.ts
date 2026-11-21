@@ -38,7 +38,6 @@ export const common: Record<string, string> = {
   'Server lost': 'Serveur perdu',
   'reconnecting…': 'reconnexion…',
   'CPU {n}%': 'CPU {n} %',
-  '{n}%': '{n} %',
   '{n} cores': '{n} cœurs',
   'Memory {used} of {total}': 'Mémoire {used} sur {total}',
   '{used} of {total}': '{used} sur {total}',

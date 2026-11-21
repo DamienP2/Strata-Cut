@@ -263,7 +263,7 @@ Touche `?` : liste des raccourcis.
 | Gérer les comptes | `sudo strata-cut user list --data-dir /var/lib/strata-cut` (aussi `add`, `passwd`, `delete`) |
 | Place disque | `df -h /srv/strata-cut` |
 
-Dans l'interface, **Système › Santé** regroupe les erreurs et les plantages, et **Système › Performances** montre le processeur et la mémoire.
+Dans l'interface, **Système › Santé** regroupe les erreurs, les plantages, le processeur et la mémoire.
 
 ### Changer le port de l'interface web
 
@@ -318,7 +318,7 @@ Le script récupère la dernière version (`git pull`), recompile, remplace le p
 
 ### Depuis l'interface
 
-**Système › Mises à jour** propose les versions publiées (releases GitHub, voir « Publier une version » dans le README) : « Vérifier maintenant », puis « Installer x.y.z ». Le serveur télécharge le paquet, vérifie son empreinte SHA-256, remplace le programme et redémarre (quelques secondes). Si la nouvelle version ne démarre pas, l'ancienne est remise automatiquement ; « Revenir à x.y.z » permet aussi de revenir en arrière à la main. Le menu ne voit que les versions publiées, pas chaque modification poussée sur GitHub : pour celles-ci, relancez le script.
+**Système › Maintenance** propose les versions publiées (releases GitHub, voir « Publier une version » dans le README) : « Vérifier maintenant », puis « Installer x.y.z ». Le serveur télécharge le paquet, vérifie son empreinte SHA-256, remplace le programme et redémarre (quelques secondes). Si la nouvelle version ne démarre pas, l'ancienne est remise automatiquement ; « Revenir à x.y.z » permet aussi de revenir en arrière à la main. Le menu ne voit que les versions publiées, pas chaque modification poussée sur GitHub : pour celles-ci, relancez le script.
 
 Avec un paquet déjà construit (`Strata-Cut-<version>-linux-x86_64.tar.gz`) :
 ```bash
@@ -335,7 +335,7 @@ sudo ./scripts/install-ubuntu.sh --package Strata-Cut-0.2.0-linux-x86_64.tar.gz
 | « Sans signal » sur une source UDP | Le flux arrive-t-il ? (`ffprobe` ci-dessus) ; interface réseau ; IGMP ; `rp_filter`. |
 | « En attente de la source » en SRT / RTMP | Port ouvert dans le pare-feu (SRT en **UDP**, RTMP en **TCP**) ; même phrase secrète des deux côtés ; adresse donnée à la source. |
 | Erreur rouge sur la carte | Le message vient de FFmpeg ; « Address already in use » : port déjà pris par un autre programme. |
-| Images saccadées, sources qui décrochent | Processeur saturé (**Système › Performances**) : moins de sources par serveur ou machine plus puissante. |
+| Images saccadées, sources qui décrochent | Processeur saturé (**Système › Santé**) : moins de sources par serveur ou machine plus puissante. |
 | La boucle n'atteint pas 24 h | Disque plein : **Système › Stockage**, `df -h`. |
 | Timecode décalé | `timedatectl` : heure synchronisée et bon fuseau. |
 | « impossible de lire le dépôt » | Le serveur sort-il sur Internet ? `curl -I https://github.com` ; derrière un proxy, exportez `https_proxy` et lancez `sudo -E bash`. |

@@ -12,7 +12,6 @@ export const updates: Record<string, string> = {
   'Up to date: latest version {v}, checked {ago}.': 'À jour : dernière version {v}, vérifié {ago}.',
   'Not checked yet.': 'Pas encore vérifié.',
   'What’s new in {v}': 'Nouveautés de {v}',
-  'Available versions': 'Versions disponibles',
   Install: 'Installer',
   'Go back': 'Revenir en arrière',
   'Version {from} did not start: {to} was put back automatically': 'La version {from} n’a pas démarré : {to} a été remise automatiquement',

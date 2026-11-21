@@ -82,7 +82,7 @@ cd web && npm run build && node scripts/i18n-check.mjs
 
 ## Publier une version (mises à jour depuis l'interface)
 
-Le menu **Système › Mises à jour** des serveurs installés propose les **releases GitHub** du dépôt, pas les simples commits. Pour en publier une, au choix :
+Le menu **Système › Maintenance** des serveurs installés propose les **releases GitHub** du dépôt, pas les simples commits. Pour en publier une, au choix :
 
 - **depuis GitHub** : onglet **Actions › Release › Run workflow**, branche par défaut, version `0.3.0`, puis **Run workflow** ;
 - **depuis un poste** :

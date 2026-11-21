@@ -618,13 +618,6 @@ impl Rec {
             s.media = media;
         }
     }
-
-    /// The run holding the server time `wall` (ms).
-    #[allow(dead_code)]
-    pub fn run_at(&self, wall: f64) -> Option<String> {
-        let runs = self.runs.read().unwrap();
-        runs.iter().find(|r| matches!((r.first_wall(), r.last_wall()), (Some(a), Some(b)) if a <= wall && wall < b)).map(|r| r.meta.id.clone())
-    }
 }
 
 /// Old segments kept while a clip is being cut from them.

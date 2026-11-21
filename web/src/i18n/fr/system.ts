@@ -4,7 +4,6 @@ export const system: Record<string, string> = {
   Monitoring: 'Supervision',
   Access: 'Accès',
   Server: 'Serveur',
-  Performance: 'Performances',
   Health: 'Santé',
   Security: 'Sécurité',
   Storage: 'Stockage',
@@ -17,28 +16,19 @@ export const system: Record<string, string> = {
   'A folder is written as an absolute path': 'Un dossier s’écrit en chemin absolu',
 
   // Maintenance
-  'Strata Cut {version} · {machine} · {os}/{arch} · running for {time}': 'Strata Cut {version} · {machine} · {os}/{arch} · en marche depuis {time}',
   Restart: 'Redémarrer',
   'The server is restarting': 'Le serveur redémarre',
   Version: 'Version',
   Machine: 'Machine',
   'Data folder': 'Dossier des données',
   'Listening on': 'À l’écoute sur',
-  'CPU threads': 'Threads CPU',
   'Running for': 'En marche depuis',
-  'Running for {time}': 'En marche depuis {time}',
 
   // Performance
   CPU: 'CPU',
   Memory: 'Mémoire',
 
   // Health
-  '{n} crash': '{n} plantage',
-  '{n} crashes': '{n} plantages',
-  '{n} error': '{n} erreur',
-  '{n} errors': '{n} erreurs',
-  '{n} warning': '{n} avertissement',
-  '{n} warnings': '{n} avertissements',
   Incidents: 'Incidents',
   Incident: 'Incident',
   Log: 'Journal',
@@ -193,7 +183,6 @@ export const system: Record<string, string> = {
   'Input {n}': 'Entrée {n}',
   'Open it in Extraction': 'L’ouvrir dans Extraction',
   'Create a recorder': 'Créer une source',
-  'Not used': 'Non utilisé',
   Busy: 'Occupée',
   'Name of the card': 'Nom de la carte',
   'Name this card': 'Nommer cette carte',

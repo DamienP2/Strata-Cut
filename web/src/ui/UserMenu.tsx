@@ -7,7 +7,7 @@ import { ChevronDown, Keyboard, Languages, LogOut, SunMoon } from 'lucide-react'
 import { LANGS, setLang, t, tc, useLang, type Lang } from '../i18n';
 import { setTheme, THEMES, useTheme, type Theme } from '../theme';
 import { api, useApp, type PublicUser } from '../store';
-import { useMenuKeys } from './NavMenu';
+import { useMenuKeys } from './menuKeys';
 import { openShortcuts } from './Shortcuts';
 import { showError } from './serverError';
 

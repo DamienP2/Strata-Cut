@@ -232,9 +232,6 @@ export const useApp = create<AppStore>((set, get) => ({
           set((s) => ({ elsewhere: true, connected: false, auth: s.auth ? { ...s.auth, user: null } : s.auth }));
           ws.close();
           break;
-        case 'error':
-          get().toast(e.message as string, 'error');
-          break;
         default:
           serverEvents.dispatchEvent(new CustomEvent(e.type, { detail: e }));
       }

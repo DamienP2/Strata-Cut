@@ -289,7 +289,6 @@ pub fn disk(path: &Path) -> (u64, u64) {
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/system/health", get(summary))
-        .route("/api/system/health/journal", get(get_journal))
         .route("/api/system/health/seen", post(seen))
         .route("/api/system/health/clear", post(clear))
         .route("/api/system/health/export.zip", get(export))
@@ -328,15 +327,6 @@ async fn summary(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
     })
     .await?;
     Ok(Json(v))
-}
-
-async fn get_journal(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Vec<JournalEntry>>> {
-    require(me.is_admin())?;
-    let dir = health_dir(&s);
-    let mut j = blocking(move || journal(&dir)).await?;
-    let skip = j.len().saturating_sub(5000);
-    j.drain(..skip);
-    Ok(Json(j))
 }
 
 async fn seen(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<StatusCode> {
