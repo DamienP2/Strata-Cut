@@ -155,6 +155,9 @@ export class LoopPlayer {
   /** When it was last moved (server ms): the waiting just after is loading, not a stall. */
   private seekedAt = 0;
   private refreshing = false;
+  /** Seeks under way: until the picture is put where asked, where it plays is that place (the
+   * video's own time is still the old one, 0 on a new recording). */
+  private seeking = 0;
   private ticks = 0;
 
   constructor(
@@ -328,7 +331,12 @@ export class LoopPlayer {
   }
 
   /** Loads the fragments around the source time t. */
-  private async fill(t = this.video.currentTime + this.base, ahead = 12) {
+  /** Where it plays (source time): the frame asked while a seek is under way. */
+  private playhead(): number {
+    return this.seeking > 0 ? this.t : this.video.currentTime + this.base;
+  }
+
+  private async fill(t = this.playhead(), ahead = 12) {
     const alive = this.alive;
     await Promise.all(
       this.bufs.map(async (b) => {
@@ -410,6 +418,10 @@ export class LoopPlayer {
     if (same) this.merge(same);
     const edge = this.live ? this.edge() : null;
     if (edge !== null) {
+      // A seek under way: it puts the picture where it goes, nothing is moved meanwhile (the
+      // video's own time is the old one: from there, minutes of fragments were loaded before the
+      // live's, and the live's own thrown away to make room).
+      if (this.seeking > 0) return;
       const cur = this.video.currentTime + this.base;
       // Everything from where it plays to the edge (a stall gets no timeupdate to load it).
       await this.fill(cur, Math.max(4, edge - cur + 1));
@@ -481,7 +493,13 @@ export class LoopPlayer {
     this.seekedAt = this.now();
     this.onFrame(this.wallOf(t), t);
     if (scrub && !play && this.video.paused) this.onScrub(t);
-    await this.fill(t);
+    // Playing (the live): a few seconds are enough to start, the rest comes while it plays.
+    this.seeking++;
+    try {
+      await this.fill(t, play ? 3 : 12);
+    } finally {
+      this.seeking--;
+    }
     if (this.alive.dead) return;
     // A recording's last frame can end a little before what its segment announces: past what the
     // browser holds, the picture would stay black; the last frame it holds instead.
@@ -500,7 +518,10 @@ export class LoopPlayer {
     }
     // A hair after the frame's start so that this very frame is shown.
     this.video.currentTime = t - this.base + 0.001;
-    if (play) await this.video.play().catch(() => {});
+    if (play) {
+      void this.fill(t, 12);
+      await this.video.play().catch(() => {});
+    }
   }
 
   step(frames: number) {
