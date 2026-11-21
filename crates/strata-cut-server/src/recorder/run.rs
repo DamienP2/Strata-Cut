@@ -712,7 +712,13 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     tokio::spawn(async move {
                         let mut lines = tokio::io::BufReader::new(err).lines();
                         while let Ok(Some(l)) = lines.next_line().await {
-                            tracing::warn!("{name}: pattern: {}", l.trim());
+                            // The receiver stopping closes the pattern's output: its "Broken pipe"
+                            // lines are the end of a recording, not a fault.
+                            if pattern_closed(&l) {
+                                tracing::debug!("{name}: pattern: {}", l.trim());
+                            } else {
+                                tracing::warn!("{name}: pattern: {}", l.trim());
+                            }
                         }
                     });
                 }
@@ -795,7 +801,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         tokio::spawn(read_guide(m.data_dir().to_path_buf(), rec.clone(), found.service, out));
     }
 
-    let mut scan = Scanner { dup_end: *rec.last_end.lock().unwrap(), ..Default::default() };
+    // Only a live web page gives its last segments again when it is read anew (its DVR window);
+    // another source restarting its clock from 0 (an encoder reconnecting, SDI, NDI, the test
+    // pattern) is new picture, never a repeat: nothing of it is passed over.
+    let dup_end = if cfg.protocol == Protocol::Web { *rec.last_end.lock().unwrap() } else { None };
+    let mut scan = Scanner { dup_end, ..Default::default() };
     let mut tick = tokio::time::interval(Duration::from_millis(500));
     let mut lag_logged = 0i64;
     // The preview's pictures: how far they went, and since when they have not gone further; when
@@ -1169,6 +1179,11 @@ fn finish_run(rec: &Rec, run_id: &str) {
     }
 }
 
+/// A line of the test pattern's FFmpeg written as its output is closed (the receiver stopped).
+fn pattern_closed(line: &str) -> bool {
+    ["Broken pipe", "Error muxing a packet", "Conversion failed", "Error writing trailer", "Error closing file", "Terminating thread with return code"].iter().any(|k| line.contains(k))
+}
+
 /// Follows what FFmpeg writes.
 #[derive(Default)]
 struct Scanner {
@@ -1442,6 +1457,22 @@ mod tests {
 
     fn cfg(protocol: Protocol, mode: Mode) -> RecorderConfig {
         RecorderConfig { id: "x".into(), name: "x".into(), protocol, url: "udp://239.1.1.1:5000".into(), mode, port: 9000, path: "live/a".into(), latency: 120, passphrase: String::new(), iface: "10.0.0.2".into(), cookies: String::new(), loop_hours: 24, bitrate: 8.0, enabled: true, device: 0, connection: "auto".into(), video_mode: "auto".into(), audio_channels: 2, audio_input: "auto".into(), variant: String::new(), host: String::new(), slots_off: false, pattern: "smpte".into() }
+    }
+
+    #[test]
+    fn pattern_end_is_not_a_fault() {
+        assert!(pattern_closed("[out#0/mpegts @ 0x55] Error writing trailer: Broken pipe"));
+        assert!(pattern_closed("[out#0/mpegts @ 0x55] Error muxing a packet"));
+        assert!(!pattern_closed("[lavfi @ 0x55] Unable to find a suitable output format"));
+    }
+
+    #[test]
+    fn duplicates_only_before_the_previous_end() {
+        let s = Scanner { dup_end: Some(25.5), ..Default::default() };
+        assert!(s.duplicate(18.0, 24.0));
+        assert!(!s.duplicate(24.0, 30.0));
+        // Without a previous end (every source but a web page): nothing is passed over.
+        assert!(!Scanner::default().duplicate(0.0, 6.0));
     }
 
     #[test]

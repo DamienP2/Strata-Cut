@@ -208,6 +208,9 @@ struct Session {
     source: String,
     started: i64,
     stop: watch::Sender<bool>,
+    /// True once its last FFmpeg has ended (a live started again waits for it: the destination
+    /// takes one link per stream key).
+    finished: watch::Sender<bool>,
     stats: Mutex<Stats>,
 }
 
@@ -330,22 +333,34 @@ impl Streams {
         let dest = self.get(dest_id).ok_or("no such destination")?;
         let rec = self.recorders.get(source).ok_or("no such source")?;
         let d = effective(&dest, o)?;
-        {
-            let sessions = self.sessions.lock().unwrap();
-            if let Some(s) = sessions.get(dest_id) {
-                return if s.source == source { Ok(()) } else { Err("this destination already sends another source".into()) };
-            }
-        }
+        // Looked at and taken in one go: two starts at once make one live. A live being stopped
+        // (its FFmpeg ends within a second) does not count: the new one starts after it.
+        let (session, previous) = {
+            let mut sessions = self.sessions.lock().unwrap();
+            let previous = match sessions.get(dest_id) {
+                Some(s) if !*s.stop.borrow() => {
+                    return if s.source == source { Ok(()) } else { Err("this destination already sends another source".into()) };
+                }
+                Some(s) => Some(s.clone()),
+                None => None,
+            };
+            let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), stop: watch::channel(false).0, finished: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
+            sessions.insert(dest_id.to_string(), session.clone());
+            (session, previous)
+        };
         self.failed.lock().unwrap().remove(dest_id);
-        let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), stop: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
-        self.sessions.lock().unwrap().insert(dest_id.to_string(), session.clone());
         // The source is received while it is sent (recorded meanwhile, whatever its programme).
         rec.streams.fetch_add(1, Ordering::Relaxed);
         rec.wake.notify_one();
         tracing::info!("{who} sends {} to {}", rec.config().name, dest.name);
         let me = self.clone();
         tokio::spawn(async move {
+            if let Some(p) = previous {
+                let mut done = p.finished.subscribe();
+                let _ = tokio::time::timeout(Duration::from_secs(5), done.wait_for(|d| *d)).await;
+            }
             me.run(session.clone(), d).await;
+            let _ = session.finished.send(true);
             rec.streams.fetch_sub(1, Ordering::Relaxed);
             me.sessions.lock().unwrap().retain(|_, s| !Arc::ptr_eq(s, &session));
             me.changed();
@@ -383,6 +398,41 @@ impl Streams {
     /// One FFmpeg after another until stopped. A live that never started (the destination did
     /// not take it: its key, its address) ends there, with why; a live lost on the way is made
     /// again until it is stopped (2 s, then every 5 s).
+    /// Waits until the source is received. False: the live was stopped, or the source did not
+    /// come within `limit` (then said, with the failed).
+    async fn source_ready(&self, s: &Session, d: &Destination, rec: &crate::recorder::Rec, stop: &mut watch::Receiver<bool>, limit: Option<Duration>) -> bool {
+        let since = std::time::Instant::now();
+        let mut said = false;
+        loop {
+            if *stop.borrow() {
+                return false;
+            }
+            if rec.status.lock().unwrap().state == crate::recorder::State::Recording {
+                return true;
+            }
+            if limit.is_some_and(|l| since.elapsed() > l) {
+                self.give_up(s, d, "the source does not answer".into());
+                return false;
+            }
+            if !said {
+                said = true;
+                self.set(s, |st| {
+                    st.message = "waiting for the source".into();
+                });
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                _ = stop.changed() => {}
+            }
+        }
+    }
+
+    /// A live that cannot go on, for a reason of the server's own: said, kept with the failed.
+    fn give_up(&self, s: &Session, d: &Destination, why: String) {
+        tracing::warn!("streaming to {}: {why}", d.name);
+        self.failed.lock().unwrap().insert(s.dest.clone(), Failed { source: s.source.clone(), message: why, at: now_ms() });
+    }
+
     async fn run(&self, s: Arc<Session>, d: Destination) {
         let mut stop = s.stop.subscribe();
         let mut failures = 0u32;
@@ -393,9 +443,21 @@ impl Streams {
             if *stop.borrow() {
                 break;
             }
-            let Some(rec) = self.recorders.get(&s.source) else { break };
+            let Some(rec) = self.recorders.get(&s.source) else {
+                self.give_up(&s, &d, "the source was deleted".into());
+                break;
+            };
+            // The source first: woken by this live it takes a few seconds (a web page, an encoder
+            // that has to call, longer). Lost during a live, the live waits for it as long as it
+            // is not stopped; never live, two minutes.
+            if !self.source_ready(&s, &d, &rec, &mut stop, if ever_live { None } else { Some(Duration::from_secs(120)) }).await {
+                break;
+            }
             let codec = rec.status.lock().unwrap().media.as_ref().map(|m| m.codec.clone()).unwrap_or_default();
-            let Some(port) = free_port() else { break };
+            let Some(port) = free_port() else {
+                self.give_up(&s, &d, "no free local port for the stream".into());
+                break;
+            };
             let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-progress", "pipe:1", "-stats_period", "1", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i"].map(String::from).to_vec();
             args.push(format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=15000000"));
             let (out, note) = output_args(&d, &codec);
@@ -405,16 +467,16 @@ impl Streams {
             let mut child = match cmd.spawn() {
                 Ok(c) => c,
                 Err(e) => {
-                    self.set(&s, |st| {
-                        st.state = "retrying";
-                        st.message = format!("cannot start {ffmpeg}: {e}");
-                    });
+                    self.give_up(&s, &d, format!("cannot start {ffmpeg}: {e}"));
                     break;
                 }
             };
             self.set(&s, |st| {
                 st.state = "connecting";
                 st.note = note.clone();
+                if st.message == "waiting for the source" {
+                    st.message.clear();
+                }
             });
             let key = rand_key();
             rec.taps.lock().unwrap().push((key, port));
@@ -449,10 +511,21 @@ impl Streams {
             }
             // The link fell: why, and again a little later.
             let lines: Vec<String> = last.lock().unwrap().iter().cloned().collect();
-            let why = if lines.iter().all(|l| l.trim().is_empty()) { "the link fell: connecting again".to_string() } else { explain(&lines.join("\n"), &hide(&crate::recorder::run::best_line(&lines), &d)) };
+            let text = lines.join("\n");
+            let source_lost = rec.status.lock().unwrap().state != crate::recorder::State::Recording;
+            let why = if source_lost {
+                // Nothing came from the source: it is not the destination's doing.
+                "the source is no longer received: waiting for it".to_string()
+            } else if lines.iter().all(|l| l.trim().is_empty()) {
+                "the link fell: connecting again".to_string()
+            } else if ever_live && stopped_taking(&text) {
+                "the server stopped taking the stream: connecting again".to_string()
+            } else {
+                explain(&text, &hide(&crate::recorder::run::best_line(&lines), &d))
+            };
             // Never live: it did not start, there is nothing to make again.
             if !ever_live {
-                let why = why.replace(": connecting again", "").replace(": trying again", "");
+                let why = why.replace(": connecting again", "").replace(": trying again", "").replace(": waiting for it", "");
                 tracing::warn!("streaming to {}: could not start: {why}", d.name);
                 self.failed.lock().unwrap().insert(s.dest.clone(), Failed { source: s.source.clone(), message: why, at: now_ms() });
                 break;
@@ -585,7 +658,14 @@ fn hide(msg: &str, d: &Destination) -> String {
 fn decoder_noise(line: &str) -> bool {
     let l = line.trim_start();
     ["[h264 @", "[hevc @", "[mpeg2video @", "[aac @", "[mp2 @", "[ac3 @", "[eac3 @", "[aac_latm @"].iter().any(|p| l.starts_with(p))
-        || ["Consider increasing the value for the 'analyzeduration'", "Increasing reorder buffer", "corrupt input packet", "Packet corrupt", "PES packet size mismatch", "Non-monotonic DTS", "changing to"].iter().any(|k| l.contains(k))
+        || ["Consider increasing the value for the 'analyzeduration'", "Increasing reorder buffer", "corrupt input packet", "Packet corrupt", "PES packet size mismatch", "Non-monotonic DTS", "changing to", "Last message repeated"].iter().any(|k| l.contains(k))
+}
+
+/// A live that was going: a write that timed out (no "connection … failed": the link was made)
+/// is the server no longer taking the stream, not an address or a firewall.
+fn stopped_taking(all: &str) -> bool {
+    let w = all.to_ascii_lowercase();
+    (w.contains("timed out") || w.contains("timeout")) && !(w.contains("connection to") && w.contains("failed")) && !w.contains("connection refused")
 }
 
 fn explain(all: &str, why: &str) -> String {
@@ -791,6 +871,8 @@ mod tests {
         assert_eq!(explain("Error in the pull function. NetStream.Publish.BadName", ""), "the server still holds the previous link (same stream key): trying again");
         assert_eq!(explain("[rtmp @ 0x1] Server error: Unauthorized", ""), "the server refuses the stream: check the stream key");
         assert_eq!(explain("av_interleaved_write_frame(): Broken pipe", ""), "the server closed the link: connecting again");
+        assert!(stopped_taking("[rtmp @ 0x1] Error writing frame: Connection timed out"));
+        assert!(!stopped_taking("[tcp @ 0x1] Connection to tcp://127.0.0.1:1935 failed: Connection timed out"));
         assert!(decoder_noise("[h264 @ 0x55] mmco: unref short failure") && decoder_noise("[mpegts @ 0x1] Packet corrupt (stream = 0, dts = 1).") && !decoder_noise("[rtmp @ 0x1] Server error: x"));
         assert_eq!(explain("x", "[flv @ 0x2] Something odd"), "Something odd");
     }
