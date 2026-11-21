@@ -93,6 +93,12 @@ class Buffer {
  * that), and comes back down slowly once all goes well (taken at the next jump: the speed
  * never changes). */
 const LIVE_DELAY = 7.0;
+/** The live's delay set in Système › Général (s), or null: the player's own, adjusted to how the
+ * fragments come. */
+let fixedDelay: number | null = null;
+export function setLiveDelay(s: number | null) {
+  fixedDelay = s !== null && Number.isFinite(s) && s > 0 ? s : null;
+}
 const LIVE_DELAY_MIN = 6.0;
 const LIVE_DELAY_MAX = 15.0;
 
@@ -150,7 +156,7 @@ export class LoopPlayer {
   private moved = 0;
   private lastTime = -1;
   /** Live: the delay held now (s), and when it last stalled (server ms). */
-  private delay = LIVE_DELAY;
+  private delay = fixedDelay ?? LIVE_DELAY;
   private stalledAt = 0;
   /** When it was last moved (server ms): the waiting just after is loading, not a stall. */
   private seekedAt = 0;
@@ -225,7 +231,7 @@ export class LoopPlayer {
     // Live: it waits for a fragment not there yet: more delay from now on, and asked at once.
     this.note('waiting');
     if (this.live && !this.video.paused && this.now() - this.seekedAt > 4000) {
-      this.delay = Math.min(LIVE_DELAY_MAX, this.delay + 1.5);
+      if (fixedDelay === null) this.delay = Math.min(LIVE_DELAY_MAX, this.delay + 1.5);
       this.stalledAt = this.now();
       void this.refresh();
     }
@@ -440,7 +446,7 @@ export class LoopPlayer {
       // LIVE_DELAY behind the edge: a little faster or slower to hold it (a jump only when far
       // behind, or stalled while the edge is further).
       // A minute without a stall: a little less delay.
-      if (this.now() - this.stalledAt > 60_000 && this.delay > LIVE_DELAY_MIN) {
+      if (fixedDelay === null && this.now() - this.stalledAt > 60_000 && this.delay > LIVE_DELAY_MIN) {
         this.delay = Math.max(LIVE_DELAY_MIN, this.delay - 0.25);
         this.stalledAt = this.now();
       }
@@ -626,6 +632,7 @@ export class LoopPlayer {
   async goLive(now: number) {
     this.stopReverse();
     this.live = true;
+    if (fixedDelay !== null) this.delay = fixedDelay;
     this.liveSince = this.now();
     this.note('goLive');
     // The newest recording, asked afresh (the one in hand may have ended since: a cut, a restart);

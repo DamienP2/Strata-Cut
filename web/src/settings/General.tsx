@@ -1,6 +1,6 @@
 /* Système › Serveur › Général: name and time zone, where the web interface listens, the clock. */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Clock, Gauge, Network, Server } from 'lucide-react';
+import { Clock, Gauge, Network, Radio, Server } from 'lucide-react';
 import { locale, t } from '../i18n';
 import { api } from '../store';
 import { PageHead } from '../pages/SidePage';
@@ -124,11 +124,34 @@ export function General() {
               </Field>
             </div>
           </Card>
+          <LiveDelayCard value={{ enabled: true, seconds: 10, ...((cfg.liveDelay as Partial<LiveDelay> | undefined) ?? {}) }} set={(p) => setCfg((c) => ({ ...c, liveDelay: { enabled: true, seconds: 10, ...((c.liveDelay as Partial<LiveDelay> | undefined) ?? {}), ...p } }))} />
           <LimitsCard limits={{ ...LIMITS, ...((cfg.limits as Partial<Limits> | undefined) ?? {}) }} set={(p) => setCfg((c) => ({ ...c, limits: { ...LIMITS, ...((c.limits as Partial<Limits> | undefined) ?? {}), ...p } }))} />
         </>
       )}
       <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onDiscard={discard} />
     </>
+  );
+}
+
+interface LiveDelay {
+  enabled: boolean;
+  seconds: number;
+}
+
+/** The live shown in the app (Extraction, Streamer): a fixed delay behind the newest frames, or off
+ * (the player's own, about 7 s). The recording and the streams do not depend on it. */
+function LiveDelayCard({ value, set }: { value: LiveDelay; set: (p: Partial<LiveDelay>) => void }) {
+  return (
+    <Card icon={<Radio size={16} />} title={t('Live shown in the app')} actions={<Switch checked={value.enabled} onChange={(enabled) => set({ enabled })} label={value.enabled ? t('On') : t('Off')} />}>
+      <div className="set-grid two">
+        <Field label={t('Delay behind the source')} hint={value.enabled ? t('More delay: fewer pauses when the network is uneven.') : t('Off: as near the source as the player can (about 7 s).')}>
+          <div className="set-inline">
+            <NumberField value={value.seconds} min={3} max={60} disabled={!value.enabled} onChange={(seconds) => set({ seconds })} />
+            <span className="muted">s</span>
+          </div>
+        </Field>
+      </div>
+    </Card>
   );
 }
 

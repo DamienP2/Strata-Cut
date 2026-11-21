@@ -27,6 +27,8 @@ export interface AuthState {
   serverName: string;
   sso: string | null;
   localAccounts: 'none' | 'adminOnly' | 'all';
+  /** The live shown in the app: its fixed delay (s), or null (the player's own). */
+  liveDelay?: number | null;
 }
 
 export interface Toast {

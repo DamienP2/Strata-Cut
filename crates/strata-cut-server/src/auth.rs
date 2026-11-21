@@ -605,6 +605,8 @@ async fn state(State(s): State<Shared>, MaybeUser(user): MaybeUser) -> Json<serd
         "needsSetup": s.auth.needs_setup(),
         "user": user.as_ref().map(User::public),
         "serverName": cfg.name,
+        // The live shown in the app: its fixed delay (s), or none (the player's own).
+        "liveDelay": cfg.live_delay.enabled.then_some(cfg.live_delay.seconds),
         "sso": sso.active().then(|| sso.button_name()),
         "localAccounts": if sso.active() { sso.local_accounts } else { crate::sso::LocalAccounts::All },
     }))

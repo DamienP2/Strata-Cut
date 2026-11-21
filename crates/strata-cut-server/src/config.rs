@@ -48,6 +48,25 @@ pub struct ServerConfig {
     /// Alerts (Système › Alertes): problems told to a webhook and by e-mail.
     #[serde(default)]
     pub alerts: crate::alerts::Alerts,
+    /// How far behind the newest frames the app's live plays (the browser's player).
+    #[serde(default)]
+    pub live_delay: LiveDelay,
+}
+
+/// The live shown in the app (Extraction, Streamer): a fixed delay behind the newest frames, or
+/// off (the player's own, about 7 s, set by how the fragments come). The recording and the
+/// streams do not depend on it.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LiveDelay {
+    pub enabled: bool,
+    pub seconds: f64,
+}
+
+impl Default for LiveDelay {
+    fn default() -> Self {
+        LiveDelay { enabled: true, seconds: 10.0 }
+    }
 }
 
 /// YouTube (Système › YouTube): for the web recorders, so that YouTube does not take the server
@@ -158,6 +177,9 @@ impl ServerConfig {
         }
         self.limits.validate()?;
         self.alerts.validate()?;
+        if !self.live_delay.seconds.is_finite() || !(3.0..=60.0).contains(&self.live_delay.seconds) {
+            return Err("the delay of the live shown is 3 to 60 s".into());
+        }
         if self.ntp.len() > 8 {
             return Err("8 ntp servers at most".into());
         }

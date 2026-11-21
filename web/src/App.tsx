@@ -13,6 +13,7 @@ import { needsLook, useHealth, watchHealth } from './ui/health';
 import { Shortcuts } from './ui/Shortcuts';
 import { StatusPill } from './ui/StatusPill';
 import { LoadGauge } from './ui/LoadGauge';
+import { setLiveDelay } from './player';
 import { Toasts } from './ui/Toasts';
 import { FollowTip } from './ui/FollowTip';
 import { UserMenu } from './ui/UserMenu';
@@ -31,6 +32,8 @@ export function App() {
   const user = auth?.user;
   const lang = useLang((s) => s.lang); // everything is redrawn in the new language
   useEffect(() => void init(), [init]);
+  // The live's delay (Système › Général) for every player.
+  useEffect(() => setLiveDelay(auth?.liveDelay ?? null), [auth?.liveDelay]);
   useEffect(() => {
     if (user) connect();
   }, [user, connect]);

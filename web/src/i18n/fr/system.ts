@@ -228,4 +228,9 @@ export const system: Record<string, string> = {
   'give a webhook or an e-mail address': 'Indiquez un webhook ou une adresse e-mail.',
   'the mail server refused the user or the password': 'Le serveur d’envoi a refusé l’utilisateur ou le mot de passe.',
   'the mail server does not offer STARTTLS': 'Le serveur d’envoi ne propose pas STARTTLS.',
+  'Live shown in the app': 'Direct affiché dans l’application',
+  'Delay behind the source': 'Retard sur la source',
+  'More delay: fewer pauses when the network is uneven.': 'Plus de retard : moins d’attentes quand le réseau est irrégulier. L’enregistrement et les diffusions ne sont pas concernés.',
+  'Off: as near the source as the player can (about 7 s).': 'Désactivé : au plus près de la source que le lecteur peut tenir (environ 7 s).',
+  'the delay of the live shown is 3 to 60 s': 'Le retard du direct affiché va de 3 à 60 s.',
 };
