@@ -232,7 +232,7 @@ export class LoopPlayer {
     const r = this.run;
     if (!r || r.live) return;
     const last = r.video?.segs.at(-1);
-    if (last && this.t >= last[2] - 1) void this.seekWall(r.to + 500);
+    if (last && this.playhead() >= last[2] - 1) void this.seekWall(r.to + 500);
   };
 
   private shown(t: number) {
@@ -420,7 +420,10 @@ export class LoopPlayer {
         return;
       }
     }
-    const near = this.wallOf(this.t);
+    // Where it plays: the video's own time while it plays (in a tab in the background no frame is
+    // drawn, the last frame shown no longer moves: a minute later the live's new fragments were
+    // out of the window asked, and the live stopped for 10 s).
+    const near = this.wallOf(this.video.paused || this.seeking > 0 ? this.t : this.video.currentTime + this.base);
     const runs = await this.fetchInfo(near - (this.live ? 5_000 : 20_000), near + 60_000);
     const same = runs.find((x) => x.id === r.id);
     if (same) this.merge(same);
@@ -611,7 +614,7 @@ export class LoopPlayer {
     this.audioTrack = k;
     const r = this.run;
     if (!r) return;
-    const t = this.t;
+    const t = this.playhead();
     const playing = !this.video.paused;
     const live = this.live;
     await this.open(r);
