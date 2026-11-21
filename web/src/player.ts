@@ -448,9 +448,12 @@ export class LoopPlayer {
       // stretch the sound each time (the edge moves by whole fragments, so the speed changed
       // several times a second): crackles heard in the live only. It plays at 1 and is put back
       // LIVE_DELAY behind the edge (one jump) only when it drifted far: far behind, stalled
-      // with the edge further, or so near the edge that it would stall.
+      // with the edge further.
       if (this.video.playbackRate !== 1) this.video.playbackRate = 1;
-      if (behind > delay + 6 || behind < 2.5 || (stalled && behind > delay + 1)) {
+      // Never back: near the edge (its fragments came slower than it plays) it goes on and, at
+      // worst, waits a moment for the next one. Put back LIVE_DELAY behind the edge, it showed
+      // the same seconds again (the live went back 3 s a few seconds after it opened).
+      if (behind > delay + 6 || (stalled && behind > delay + 1)) {
         this.note(`refresh jump: behind ${behind.toFixed(2)} delay ${delay} stalled ${stalled} edge ${edge.toFixed(2)} → ${(edge - delay).toFixed(2)}`);
         this.seekedAt = this.now();
         this.video.currentTime = edge - delay - this.base;
