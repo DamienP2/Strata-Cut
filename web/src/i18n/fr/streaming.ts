@@ -9,6 +9,7 @@ export const streaming: Record<string, string> = {
   'Recording mode': 'Enregistrement',
   'Not recorded (source)': 'Non enregistrée',
   Slots: 'Programmé',
+  'None programmed': 'Aucun programmé',
   'Records all the time (the loop keeps the last hours)': 'Enregistre tout le temps (la boucle garde les dernières heures)',
   'Records only during the slots drawn on its line': 'Enregistre seulement aux heures programmées sur sa ligne',
   'Received only to be sent (Streamer); nothing recorded, slots paused': 'Reçue seulement pour être diffusée (Streamer) : rien n’est enregistré, ses enregistrements programmés sont suspendus',
@@ -185,4 +186,10 @@ export const streaming: Record<string, string> = {
   'the server stopped taking the stream: connecting again': 'Le serveur ne prend plus le flux\u00a0: reconnexion',
   'the server stopped taking the stream': 'Le serveur ne prend plus le flux',
   'the link fell': 'La liaison est tombée',
+  'the source is no longer received: waiting for it': 'La source n’est plus reçue\u00a0: en attente de son retour',
+  'the source is no longer received': 'La source n’est plus reçue',
+  'the source was deleted': 'La source a été supprimée',
+  'waiting for the source': 'En attente de la source',
+  'the source does not answer': 'La source ne répond pas',
+  'no free local port for the stream': 'Aucun port local libre pour la diffusion',
 };

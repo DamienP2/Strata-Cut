@@ -9,11 +9,11 @@ export const business: Record<string, string> = {
   // Recorders
   '{n} recorder': '{n} source',
   '{n} recorders': '{n} sources',
-  '{n} recording': '{n} en marche',
+  '{n} recording': '{n} en enregistrement',
   'New recorder': 'Nouvelle source',
   'Search recorders': 'Rechercher des sources',
   'All recorders': 'Toutes les sources',
-  Recording: 'En marche',
+  Recording: 'En enregistrement',
   'No signal': 'Sans signal',
   'No signal for {d}': 'Sans signal depuis {d}',
   'No recorder': 'Aucune source',

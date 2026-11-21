@@ -16,6 +16,7 @@ import {
 import { t, tn } from "../i18n";
 import { api, useApp } from "../store";
 import { confirmDialog } from "../ui/dialogs";
+import { restartCuts } from "../ui/restartNote";
 import { TextInput } from "../ui/fields";
 import { formatBytes, formatDate, timeAgo } from "../ui/format";
 import { friendlyError, showError } from "../ui/serverError";
@@ -195,13 +196,14 @@ export function Updates() {
 
   const install = async (version: string) => {
     const back = compareVersions(version, info.current) < 0;
+    const cuts = await restartCuts();
     const ok = await confirmDialog({
       title: back
         ? t("Go back to version {v}?", { v: version })
         : t("Install Strata Cut {v}?", { v: version }),
-      message: t("The server restarts: it is unavailable for a few seconds."),
+      message: `${t("The server restarts: it is unavailable for a few seconds.")}${cuts ? ` ${cuts}` : ""}`,
       confirm: back ? t("Go back") : t("Install"),
-      danger: back,
+      danger: back || !!cuts,
     });
     if (!ok) return;
     try {
@@ -217,9 +219,10 @@ export function Updates() {
 
   const rollback = async () => {
     if (!info.previous) return;
+    const cuts = await restartCuts();
     const ok = await confirmDialog({
       title: t("Go back to version {v}?", { v: info.previous }),
-      message: t("The server restarts: it is unavailable for a few seconds."),
+      message: `${t("The server restarts: it is unavailable for a few seconds.")}${cuts ? ` ${cuts}` : ""}`,
       confirm: t("Go back"),
       danger: true,
     });
@@ -233,10 +236,12 @@ export function Updates() {
   };
 
   const upload = async (f: File) => {
+    const cuts = await restartCuts();
     const ok = await confirmDialog({
       title: t("Install the package “{name}”?", { name: f.name }),
-      message: t("The server restarts: it is unavailable for a few seconds."),
+      message: `${t("The server restarts: it is unavailable for a few seconds.")}${cuts ? ` ${cuts}` : ""}`,
       confirm: t("Install"),
+      danger: !!cuts,
     });
     if (!ok) return;
     try {

@@ -1138,7 +1138,20 @@ a.btn { color: inherit; }
 .sc-kind-b.video.on svg { color: var(--accent); }
 .sc-kind-b.audio.on svg { color: var(--mask, #2dd4bf); }
 .sc-kind-b.image.on svg { color: #f472b6; }
-@media (max-width: 1280px) { .sc-kind-b span { display: none; } }
+/* The clip bar follows the width the centre column really has (the side panels take their share):
+   narrower, the kinds keep only their icons; narrower still, it goes on two lines rather than
+   running under the panel beside it. */
+.sc-center { container-type: inline-size; container-name: centre; }
+@container centre (max-width: 1100px) {
+  .sc-kind-b span, .sc-clipbar-l { display: none; }
+  .sc-mtag input { width: 92px; }
+}
+@container centre (max-width: 880px) {
+  .sc-clipbar { flex-wrap: wrap; row-gap: 8px; }
+  /* Line 1: what, in, out, length; line 2: its name and what to do with it. */
+  .sc-clipbar .sc-clipname, .sc-clipbar .sc-preview, .sc-clipbar .sc-xwrap { order: 2; }
+  .sc-clipbar .sc-clipname { flex: 1 1 200px; }
+}
 /* Extraits: the kind of each clip; a sound shows its icon, not a picture. */
 .sc-mini.audio { background: color-mix(in srgb, var(--mask, #2dd4bf) 16%, var(--panel-3)); }
 .sc-mini-sound { position: absolute; inset: 0; display: grid; place-items: center; color: var(--mask, #2dd4bf); }
@@ -1294,7 +1307,7 @@ a.btn { color: inherit; }
 .guard-legend b.adds { background: var(--live); }
 .guard-legend b.limit { width: 2px; background: var(--text); }
 @media (max-width: 900px) { .set-grid.three { grid-template-columns: 1fr; } }
-.btn.st-all { width: 100%; justify-content: center; margin: 2px 0 10px; }
+.btn.st-all { width: calc(100% - 16px); justify-content: center; margin: 4px 8px 10px; }
 .btn.st-stop-one { background: var(--live); border-color: var(--live); color: #fff; }
 
 /* The server lost: a countdown, then signed out */
@@ -1428,3 +1441,13 @@ a.btn { color: inherit; }
 .sc-grp-it.locked { cursor: default; pointer-events: none; }
 .sc-ndi-pick { display: flex; align-items: center; gap: 8px; }
 .sc-ndi-pick > .dd-btn, .sc-ndi-pick > .muted { flex: 1; min-width: 0; }
+
+/* Régie: what the marks in the rows are. */
+.sc-cal-key { display: inline-flex; align-items: center; gap: 14px; margin-right: 8px; font-size: 12px; color: var(--text-3); }
+.sc-cal-key > span { display: inline-flex; align-items: center; gap: 6px; }
+.sc-cal-key i { width: 16px; height: 10px; border-radius: 3px; flex: none; }
+.sc-cal-key i.rec { background: #000; border: 1px solid var(--live); }
+.sc-cal-key i.hole { background: repeating-linear-gradient(135deg, transparent 0 3px, color-mix(in srgb, var(--warn) 45%, transparent) 3px 6px); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); }
+.sc-cal-key i.slot { background: var(--accent-soft); border: 1px solid var(--accent); }
+@media (max-width: 1100px) { .sc-cal-key { display: none; } }
+.st-bw-y span { white-space: nowrap; }

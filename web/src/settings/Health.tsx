@@ -12,6 +12,7 @@ import { Empty } from '../ui/Empty';
 import { confirmDialog } from '../ui/dialogs';
 import { formatDateTime, formatDuration, timeAgo } from '../ui/format';
 import { healthSeen, loadHealth, useHealth, type Incident } from '../ui/health';
+import { logText } from '../logText';
 
 type Tab = 'incidents' | 'log';
 
@@ -139,8 +140,8 @@ function Incidents({ list }: { list: Incident[] | null }) {
           <div key={k} className={`hl-inc ${LEVEL_CLASS[i.level] ?? ''}`}>
             <span className={`badge ${LEVEL_CLASS[i.level] ?? ''}`}>{t(LEVEL_LABEL[i.level] ?? i.level)}</span>
             <div className="hl-inc-main">
-              <strong>{i.title}</strong>
-              {detail && <span className="muted">{detail}</span>}
+              <strong>{logText(i.title)}</strong>
+              {detail && <span className="muted">{logText(detail)}</span>}
             </div>
             <div className="hl-inc-side" title={i.first !== i.last ? t('First: {date}', { date: formatDateTime(i.first) }) : formatDateTime(i.last)}>
               {i.count > 1 && <b>×{i.count}</b>}
@@ -271,7 +272,7 @@ function LogConsole() {
             <span className={`log-lvl ${e.level}`}>{e.level}</span>
             <span className="log-target">{e.target}</span>
             <span className="log-msg">
-              {e.message}
+              {logText(e.message)}
               {e.fields && <span className="log-fields"> {e.fields}</span>}
             </span>
           </div>

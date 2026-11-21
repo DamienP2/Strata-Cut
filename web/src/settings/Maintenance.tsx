@@ -8,12 +8,17 @@ import { formatDuration } from '../ui/format';
 import { showError } from '../ui/serverError';
 import { useServerConfig } from './serverConfig';
 import { Updates } from './Updates';
+import { confirmDialog } from '../ui/dialogs';
+import { restartCuts } from '../ui/restartNote';
 
 export function Maintenance() {
   const { info, reload } = useServerConfig();
   const [busy, setBusy] = useState(false);
 
   const restart = async () => {
+    // Something live or being made: said before it is cut.
+    const cuts = await restartCuts();
+    if (cuts && !(await confirmDialog({ title: t('Restart the server?'), message: cuts, confirm: t('Restart'), danger: true }))) return;
     setBusy(true);
     try {
       await api('POST', '/api/system/restart');

@@ -788,6 +788,12 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
         </button>
         <strong className="sc-cal-range">{label}</strong>
         <div className="spacer" />
+        {/* What the marks in the rows are. */}
+        <span className="sc-cal-key">
+          <span><i className="rec" />{t('Recorded')}</span>
+          <span><i className="hole" />{t('Not recorded')}</span>
+          <span><i className="slot" />{t('Programmed')}</span>
+        </span>
         <Segmented
           value={view}
           options={[

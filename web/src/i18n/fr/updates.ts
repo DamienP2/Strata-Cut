@@ -45,4 +45,9 @@ export const updates: Record<string, string> = {
   'GitHub refused the request (rate limit, or the token cannot read the repository)': 'GitHub a refusé la requête (limite atteinte, ou le jeton ne peut pas lire le dépôt)',
   'Repository not found: if it is private, add a read-only token': 'Dépôt introuvable : s’il est privé, ajoutez un jeton en lecture seule',
   'No version published on {repo} yet, checked {ago}.': 'Aucune version publiée sur {repo} pour l’instant, vérifié {ago}.',
+  '{n} live stream is cut and does not start again by itself.': '{n} diffusion en cours sera coupée et ne reprendra pas d’elle-même.',
+  '{n} live streams are cut and do not start again by themselves.': '{n} diffusions en cours seront coupées et ne reprendront pas d’elles-mêmes.',
+  '{n} clip being made is lost.': '{n} extrait en cours de fabrication sera perdu.',
+  '{n} clips being made are lost.': '{n} extraits en cours de fabrication seront perdus.',
+  'Restart the server?': 'Redémarrer le serveur\u00a0?',
 };

@@ -376,7 +376,10 @@ function Bandwidth({ streams, dests }: { streams: StreamInfo[]; dests: Destinati
         </div>
         <div className="st-bw-y">
           {[1, 0.75, 0.5, 0.25, 0].map((f) => (
-            <span key={f}>{((max * f) / 1000).toLocaleString(locale(), { maximumFractionDigits: 1 })}</span>
+            <span key={f}>
+              {((max * f) / 1000).toLocaleString(locale(), { maximumFractionDigits: 1 })}
+              {f === 1 && ' Mb/s'}
+            </span>
           ))}
         </div>
       </div>

@@ -268,7 +268,6 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
           </span>
         )}
         {state === 'starting' && <span className="sc-onpic mid">{(rec.protocol === 'rtmp' || rec.protocol === 'srt') && rec.mode === 'listener' ? t('Waiting for the source') : rec.protocol === 'decklink' ? t('Opening the card…') : t('Connecting…')}</span>}
-        {state === 'off' && <span className="sc-onpic mid">{t('Stopped')}</span>}
         {state === 'error' && (
           <span className="sc-onpic lostmsg">
             <TriangleAlert size={14} /> {t('Error')}
@@ -303,7 +302,9 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
           </div>
         )}
         <div className="sc-recmode">
-          {t('Recording mode')}&nbsp;: <b>{t(RECORDING_LABEL[recordingMode(rec)])}</b>
+          {t('Recording mode')}&nbsp;:{' '}
+          {/* Programmed with nothing to come: it does not record, say so rather than "Programmed". */}
+          <b>{recordingMode(rec) === 'slots' && !st?.slot && !st?.nextSlot ? t('None programmed') : t(RECORDING_LABEL[recordingMode(rec)])}</b>
           {recordingMode(rec) === 'slots' && st?.nextSlot && !st.slot ? ` · ${t('next: {when}', { when: `${clock(st.nextSlot.start, timezone).slice(0, 5)} ${st.nextSlot.name}` })}` : ''}
         </div>
         {/* The alerts (reception, server load, disk space, why no signal) go to Système › Santé, not here. */}
