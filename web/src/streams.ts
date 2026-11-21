@@ -26,8 +26,8 @@ export interface Destination {
   audioKbps?: number;
   exposeUrl: boolean;
   exposeBitrate: boolean;
-  /** The source lost during a live: a still picture sent until it comes back. */
-  slate: boolean;
+  /** Sends the clean source, rather than its programme (image, overlay, sound). */
+  clean?: boolean;
 }
 
 export interface StreamInfo {
@@ -63,7 +63,6 @@ export const blankDestination = (): Destination => ({
   audioKbps: 160,
   exposeUrl: false,
   exposeBitrate: false,
-  slate: true,
 });
 
 export function useDestinations(): [Destination[] | null, () => void] {

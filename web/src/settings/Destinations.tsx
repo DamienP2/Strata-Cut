@@ -258,11 +258,6 @@ function DestModal({ dest, onClose }: { dest: Destination; onClose: () => void }
               </>
             )}
             <div className="set-field span2">
-              <label className="check">
-                <input type="checkbox" checked={d.slate !== false} onChange={(e) => set({ slate: e.target.checked })} /> {t('Slate while the source is lost (the platform keeps the live open)')}
-              </label>
-            </div>
-            <div className="set-field span2">
               <div className="io-expose">
                 <h4>{t('What the operator may set in the Streamer')}</h4>
                 <p>{t('The rest is not shown to them: neither the address nor the fixed keys.')}</p>

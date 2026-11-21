@@ -1,16 +1,17 @@
 /*
  * Streamer: a source sent live to destinations (Système › Destinations). Laid out as
- * Extraction: the sources on the left, the picture, the destinations on the right (one switch
- * each: on, it sends now), the bandwidth going out below. A destination already sending
- * another source is greyed; one whose key is given for each live asks for it here; each can
- * be tried before going live.
+ * Extraction: the sources on the left; the programme in the middle (the picture as it goes out,
+ * the source and the image switched by CUT or AUTO, the overlay, the sound, the source lost);
+ * the destinations on the right (each sends the programme or the clean source), the bandwidth
+ * going out below. A destination already sending another source is greyed; one whose key is
+ * given for each live asks for it here; each can be tried before going live.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Square, Upload } from 'lucide-react';
+import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Square } from 'lucide-react';
 import { useDisplayPref } from '../displayPrefs';
 import { api, can, serverNow, useApp } from '../store';
-import { lang, locale, t, tn } from '../i18n';
+import { lang, locale, t, tc, tn } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer } from '../player';
 import { fpsOf, scanFormat, timecode, formatName } from '../tc';
@@ -22,7 +23,7 @@ import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
 import { explainGuard } from '../ui/guard';
 import { SourceGroups } from '../ui/SourceGroups';
-import { SlateRow } from './StreamerSlate';
+import { ProgramCards, ProgramLayer, Switcher, useProgram } from './StreamerProgram';
 
 const COLORS = ['var(--accent)', 'var(--pvw)', 'var(--warn)', '#c084fc', '#38bdf8'];
 
@@ -31,7 +32,7 @@ export function Streamer({ source }: { source?: string }) {
   // With the lives that could not start (said on their destination, with why).
   const all = useStreams(1000, true);
   const streams = all.filter((s) => s.state !== 'failed');
-  const [dests] = useDestinations();
+  const [dests, reloadDests] = useDestinations();
   const [last, setLast] = useDisplayPref<string | null>('streamer.source', null);
   const known = (x?: string | null) => !!x && recorders.some((r) => r.id === x);
   // The source asked for; else the last one seen if it is received now, else the first received.
@@ -59,8 +60,8 @@ export function Streamer({ source }: { source?: string }) {
           ) : null;
         }}
       />
-      {rec ? <Center key={rec.id} rec={rec} streams={mine} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
-      <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} streams={streams} failed={all.filter((s) => s.state === 'failed')} />}</aside>
+ {rec ? <Center key={rec.id} rec={rec} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
+      <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} reload={reloadDests} streams={streams} failed={all.filter((s) => s.state === 'failed')} />}</aside>
       <div className="st-bw">
         <Bandwidth streams={mine} dests={dests ?? []} />
       </div>
@@ -68,11 +69,10 @@ export function Streamer({ source }: { source?: string }) {
   );
 }
 
-/** The picture of the source, live; what it receives; the lives of this source. */
-function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
-  // May start, stop, test the streams (Système › Accès › Rôles).
-  const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
-  const { st, timezone, toast } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone, toast: s.toast })));
+/** The programme of the source, live: the picture as it goes out, what it receives, its switches and settings. */
+function Center({ rec }: { rec: Recorder }) {
+  const { st, timezone } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone })));
+  const prog = useProgram(rec.id);
   const video = useRef<HTMLVideoElement>(null);
   const audio = useAudioOut(video);
   const [wall, setWall] = useState<number | null>(null);
@@ -91,22 +91,13 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   }, [rec.id, received]);
   const m = st?.media;
   const fps = fpsOf(m?.fpsNum, m?.fpsDen);
-  const live = streams.filter((s) => s.state === 'live');
-  const since = Math.min(...streams.map((s) => s.liveSince ?? Infinity));
-  const out = streams.reduce((a, s) => a + s.kbps, 0);
-  const stopAll = async () => {
-    try {
-      await api('POST', '/api/streams/stop', { source: rec.id });
-    } catch (e) {
-      toast(t((e as Error).message), 'error');
-    }
-  };
   return (
     <div className="sc-center">
       <div className="sc-viewer-wrap">
         <div className="sc-viewer">
           <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
           {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
+          {received && prog.state && <ProgramLayer rec={rec} program={prog.state.program} lastFade={prog.lastFade} />}
           {received && <Meters out={audio.out} />}
         </div>
       </div>
@@ -121,24 +112,10 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
         <div className="spacer" />
         <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
       </div>
-      {streams.length > 0 && (
-        <div className="st-status on">
-            <span className="st-live-pic">
-              <span className="sc-rec" />
-              {live.length ? `${t('LIVE')} · ${clockOf(Number.isFinite(since) ? serverNow() - since : 0)}` : t('Connecting…')}
-            </span>
-            <span>{tn(streams.length, '{n} destination', '{n} destinations')}</span>
-            <span>
-              <Upload size={12} /> <b>{mbps(out, locale())}</b> {t('going out')}
-            </span>
-            <div className="spacer" />
-            {run && (
-              <button className="btn st-stop" onClick={() => void stopAll()}>
-                <Square size={13} /> {t('Stop all')}
-              </button>
-            )}
-        </div>
-      )}
+      <div className="pg-zone">
+        <Switcher rec={rec} prog={prog} />
+        <ProgramCards rec={rec} prog={prog} />
+      </div>
     </div>
   );
 }
@@ -151,7 +128,7 @@ interface Draft {
   test?: { busy: boolean; ok?: boolean; text?: string };
 }
 
-function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Destination[] | null; streams: StreamInfo[]; failed: StreamInfo[] }) {
+function DestPanel({ rec, dests, reload, streams, failed }: { rec: Recorder; dests: Destination[] | null; reload: () => void; streams: StreamInfo[]; failed: StreamInfo[] }) {
   const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const { recorders, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast })));
   const [starting, setStarting] = useState(false);
@@ -198,17 +175,40 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
     }
   };
   const out = mine.reduce((a, s) => a + s.kbps, 0);
+  const stopAll = async () => {
+    try {
+      await api('POST', '/api/streams/stop', { source: rec.id });
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
+  const setFeed = async (d: Destination, clean: boolean) => {
+    try {
+      await api('PUT', `/api/destinations/${d.id}/feed`, { clean });
+      reload();
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
   return (
     <section className="insp-section sc-guide-sec">
       <header className="st-panel-head">
         <span>{t('Destinations')}</span>
         {mine.length > 0 && <em>{`${tn(mine.length, '{n} live', '{n} live')} · ${mbps(out, locale())}`}</em>}
       </header>
-      <SlateRow rec={rec} />
-      {run && ready.length > 1 && (
-        <button type="button" className="btn primary st-all" disabled={starting} onClick={() => void startAll()}>
-          <Play size={13} /> {t('Start all ({n})', { n: ready.length })}
-        </button>
+      {run && (ready.length > 1 || mine.length > 0) && (
+        <div className="st-alls">
+          {ready.length > 1 && (
+            <button type="button" className="btn primary st-all" disabled={starting} onClick={() => void startAll()}>
+              <Play size={13} /> {t('Start all ({n})', { n: ready.length })}
+            </button>
+          )}
+          {mine.length > 0 && (
+            <button type="button" className="btn st-stop st-all" onClick={() => void stopAll()}>
+              <Square size={12} /> {t('Stop all')} ({mine.length})
+            </button>
+          )}
+        </div>
       )}
       {dests && dests.length === 0 && <Empty icon={Radio} text={t('No destination')} />}
       <div className="st-dests">
@@ -246,6 +246,16 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
                     <Play size={11} /> {t('Go live')}
                   </button>
                 )}
+              </div>
+              <div className="st-feed">
+                <span className="segmented" data-tip={on || busy ? t('Stop this live to change it') : undefined}>
+                  <button type="button" className={!d.clean ? 'on' : ''} disabled={!run || on || busy} onClick={() => void setFeed(d, false)}>
+                    {tc('feed', 'Programme')}
+                  </button>
+                  <button type="button" className={d.clean ? 'on' : ''} disabled={!run || on || busy} onClick={() => void setFeed(d, true)}>
+                    {t('Clean')}
+                  </button>
+                </span>
               </div>
               {refused && (
                 <div className="st-note bad">
