@@ -1,10 +1,9 @@
 /*
- * The connection pill: « ● Connecté », « Connexion… », « CPU 92 % » when the
- * machine is above 85 % (back under 80 %), « Serveur perdu · reconnexion… »
+ * The connection pill: « ● Connecté », « Connexion… », « Serveur perdu · reconnexion… »
  * when the WebSocket has been closed for 800 ms (4 s on the first load).
  */
-import { useEffect, useRef, useState } from 'react';
-import { TriangleAlert, WifiOff } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { WifiOff } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { t } from '../i18n';
 import { navigate } from '../router';
@@ -18,7 +17,6 @@ export function StatusPill() {
   const { connected, user, serverName } = useApp(useShallow((s) => ({ connected: s.connected, user: s.auth?.user, serverName: s.auth?.serverName ?? '' })));
   const machine = useMetrics((s) => s.metrics?.machine);
   const [lost, setLost] = useState(false);
-  const hot = useRef(false);
 
   useEffect(() => watchMetrics(), []);
 
@@ -48,12 +46,8 @@ export function StatusPill() {
   }, [lost]);
 
   const cpu = machine ? Math.round(machine.cpu) : null;
-  if (cpu !== null) {
-    if (cpu > 85) hot.current = true;
-    else if (cpu < 80) hot.current = false;
-  }
-
-  const state = lost ? 'lost' : !connected ? 'wait' : hot.current ? 'hot' : 'ok';
+  // The load is the gauge's beside it: the pill says the connection only.
+  const state = lost ? 'lost' : !connected ? 'wait' : 'ok';
   const stateText = state === 'lost' ? t('Server lost · reconnecting…') : state === 'wait' ? t('Connecting…') : t('Connected');
   const tip = [
     serverName,
@@ -74,11 +68,6 @@ export function StatusPill() {
           <span className="ux1-lost-sep"> · </span>
           <span>{t('reconnecting…')}</span>
         </span>
-      </>
-    ) : state === 'hot' ? (
-      <>
-        <TriangleAlert size={14} />
-        {t('CPU {n}%', { n: cpu ?? 0 })}
       </>
     ) : (
       <>

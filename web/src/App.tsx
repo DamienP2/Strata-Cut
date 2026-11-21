@@ -12,6 +12,7 @@ import { DialogHost } from './ui/dialogs';
 import { needsLook, useHealth, watchHealth } from './ui/health';
 import { Shortcuts } from './ui/Shortcuts';
 import { StatusPill } from './ui/StatusPill';
+import { LoadGauge } from './ui/LoadGauge';
 import { Toasts } from './ui/Toasts';
 import { FollowTip } from './ui/FollowTip';
 import { UserMenu } from './ui/UserMenu';
@@ -142,6 +143,7 @@ function Shell({ route }: { route: Route }) {
           {system && <Tab on={route.page === 'system'} icon={<Server size={14} />} label={t('System')} path="/system" dot={admin && needsLook(health)} />}
         </div>
         <div className="spacer" />
+        <LoadGauge />
         <StatusPill />
         <HelpButton on={route.page === 'help'} />
         <UserMenu named />

@@ -123,9 +123,29 @@ async fn restart(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
     Ok(StatusCode::ACCEPTED)
 }
 
-async fn metrics(CurrentUser(_me): CurrentUser) -> ApiResult<Json<Value>> {
+async fn metrics(State(s): State<Shared>, CurrentUser(_me): CurrentUser) -> ApiResult<Json<Value>> {
     let m = blocking(crate::perf::machine).await?;
-    Ok(Json(json!({ "machine": m })))
+    // The load of each resource, in % (the top bar's gauge shows the highest): the processor,
+    // the memory, the fullest disk of the loops and the clips, the bandwidth going out against
+    // its limit (none without a limit).
+    let dirs = [s.recorders.recordings_dir(), s.clips.dir()];
+    let disk = blocking(move || {
+        dirs.iter()
+            .map(|d| crate::health::disk(d))
+            .filter(|&(total, _)| total > 0)
+            .map(|(total, free)| (total - free.min(total)) as f64 / total as f64 * 100.0)
+            .fold(0.0_f64, f64::max)
+    })
+    .await?;
+    let memory = if m.mem_total > 0 { m.mem_used as f64 / m.mem_total as f64 * 100.0 } else { 0.0 };
+    let out_mbps = s.streams.out_kbps() / 1000.0;
+    let limit = s.config.load().limits.upload_mbps;
+    let upload = (limit > 0.0).then(|| out_mbps / limit * 100.0);
+    let r = |v: f64| (v * 10.0).round() / 10.0;
+    Ok(Json(json!({
+        "machine": m,
+        "load": { "cpu": r(m.cpu as f64), "memory": r(memory), "disk": r(disk), "upload": upload.map(r), "outMbps": r(out_mbps), "uploadLimit": limit },
+    })))
 }
 
 #[cfg(test)]

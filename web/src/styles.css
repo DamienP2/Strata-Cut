@@ -104,7 +104,6 @@ code { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
 .ux1-pill .ux1-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 .ux1-pill.wait { color: var(--text-3); }
 .ux1-pill.wait .ux1-dot { box-shadow: none; animation: blink 1s infinite; }
-.ux1-pill.hot { color: var(--warn); background: rgba(245, 165, 36, 0.14); border-color: rgba(245, 165, 36, 0.5); font-weight: 700; }
 .ux1-pill.lost { color: #fff; background: rgba(225, 29, 72, 0.22); border-color: var(--live); font-weight: 700; }
 .ux1-pill.lost svg { color: var(--live); }
 @media (max-width: 1500px) { .ux1-lost-txt { display: flex; flex-direction: column; line-height: 1.1; font-size: 11px; } .ux1-lost-sep { display: none; } }
@@ -1466,3 +1465,19 @@ a.btn { color: inherit; }
 .sc-head-rec.stop:hover:not(:disabled) { border-color: var(--line-2); }
 .sc-head-rec .sc-rec { width: 6px; height: 6px; }
 .sc-head-rec:disabled { opacity: 0.5; cursor: default; }
+
+/* Top bar: the server's highest load (processor, memory, disks, bandwidth out). */
+.load-gauge { display: inline-flex; align-items: center; gap: 7px; flex: none; height: 28px; padding: 0 10px; border-radius: 14px; border: 1px solid transparent; background: none; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+button.load-gauge { cursor: pointer; }
+button.load-gauge:hover { background: var(--panel-2); border-color: var(--line); }
+.load-gauge .load-bar { position: relative; width: 44px; height: 6px; border-radius: 3px; background: var(--panel-3); overflow: hidden; }
+.load-gauge .load-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: var(--pvw); transition: width 0.6s ease; }
+.load-gauge b { min-width: 34px; text-align: right; font-weight: 600; }
+.load-gauge.warn { color: var(--warn); }
+.load-gauge.warn .load-bar i { background: var(--warn); }
+.load-gauge.bad { color: var(--live); }
+.load-gauge.bad .load-bar i { background: var(--live); }
+@media (max-width: 900px) { .load-gauge .load-bar { display: none; } }
+
+/* A tooltip of several lines (the load gauge's detail): its line breaks kept. */
+.follow-tip { white-space: pre-line; align-items: flex-start; }

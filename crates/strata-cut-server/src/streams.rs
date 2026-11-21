@@ -286,7 +286,9 @@ impl Streams {
                 let st = s.stats.lock().unwrap();
                 if st.kbps > 0.0 || st.state == "live" { st.kbps } else { s.planned_kbps }
             })
-            .sum()
+            .sum::<f64>()
+            // An empty sum is -0.0: shown "-0".
+            .max(0.0)
     }
 
     /// What sending this source to this destination would take (the resources' guard); None

@@ -149,6 +149,8 @@ export const streaming: Record<string, string> = {
   'Resources’ guard': 'Garde-fou des ressources',
   'A new recording or stream started by hand is refused when it would take the server past these limits; a window says why. What already runs goes on, and the programmed slots start all the same.': 'Un nouvel enregistrement ou une nouvelle diffusion lancés à la main sont refusés s’ils mènent le serveur au-delà de ces limites\u00a0; une fenêtre explique pourquoi. Ce qui tourne déjà continue, et les enregistrements programmés démarrent quand même.',
   Processor: 'Processeur',
+  'Bandwidth out': 'Débit sortant',
+  'Highest load: {what} {n}': 'Utilisation la plus haute : {what} {n}',
   Memory: 'Mémoire',
   'Now: {n} %': 'En ce moment\u00a0: {n}\u00a0%',
   'Bandwidth of the streams': 'Débit des diffusions',

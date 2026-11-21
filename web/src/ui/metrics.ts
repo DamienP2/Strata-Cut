@@ -12,8 +12,19 @@ export interface Machine {
   hostname: string;
 }
 
+/** Each resource's load, % (upload: against its limit, null without one). */
+export interface Load {
+  cpu: number;
+  memory: number;
+  disk: number;
+  upload: number | null;
+  outMbps: number;
+  uploadLimit: number;
+}
+
 export interface Metrics {
   machine: Machine;
+  load?: Load;
   [k: string]: unknown;
 }
 
