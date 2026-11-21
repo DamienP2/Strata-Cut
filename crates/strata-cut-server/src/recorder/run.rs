@@ -442,7 +442,13 @@ fn free_port() -> Option<u16> {
 async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg_rx: &mut watch::Receiver<RecorderConfig>, stop_rx: &mut watch::Receiver<bool>) -> Outcome {
     // A web page: is it live, and where is its stream? (No run is opened while it is not.)
     let source = if cfg.protocol == Protocol::Web {
-        match super::web::resolve(m.data_dir(), cfg).await {
+        // Reading the page takes up to a minute and a half: a stop or new settings do not wait for it.
+        let resolved = tokio::select! {
+            r = super::web::resolve(m.data_dir(), cfg) => r,
+            _ = stop_rx.changed() => return Outcome::Stopped,
+            r = cfg_rx.changed() => return if r.is_ok() { Outcome::Restart } else { Outcome::Stopped },
+        };
+        match resolved {
             Ok(s) => Some(s),
             Err(reason) => {
                 // In the journal (Système › Santé): why the page gives no live.
@@ -625,7 +631,22 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     };
     let relay_port = relay_sock.local_addr().map(|a| a.port()).unwrap_or(0);
     // HLS: the variant of the quality chosen, when the playlist offers several.
-    let program = if cfg.protocol == Protocol::Hls { super::hls::choose(&cfg.url, &cfg.variant).await.1 } else { None };
+    let program = if cfg.protocol == Protocol::Hls {
+        // Up to 15 s to read the playlist: a stop or new settings do not wait for it.
+        tokio::select! {
+            c = super::hls::choose(&cfg.url, &cfg.variant) => c.1,
+            _ = stop_rx.changed() => {
+                finish_run(rec, &run_id);
+                return Outcome::Stopped;
+            }
+            r = cfg_rx.changed() => {
+                finish_run(rec, &run_id);
+                return if r.is_ok() { Outcome::Restart } else { Outcome::Stopped };
+            }
+        }
+    } else {
+        None
+    };
     let args = receiver_args(input, &run_dir, ts, epg_map.as_deref(), relay_port, program);
     let preview_args = preview_args(port, &run_dir, &base.join("thumb.jpg"), audio);
     tracing::debug!("{}: ffmpeg {}", cfg.name, args.join(" "));

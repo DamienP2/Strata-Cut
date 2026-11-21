@@ -253,6 +253,8 @@ fn guard_start(s: &Shared, rec: &super::Rec, new: &RecorderConfig) -> ApiResult<
 async fn delete(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
     require(me.is_admin())?;
     s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    // Its lives first: they would go on sending nothing until their input timed out.
+    s.streams.end_source(&id);
     s.recorders.delete(&id).await.map_err(internal)?;
     s.clips.recorder_deleted(&id);
     Ok(StatusCode::NO_CONTENT)

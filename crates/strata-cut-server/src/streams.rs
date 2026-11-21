@@ -389,6 +389,14 @@ impl Streams {
         Ok(())
     }
 
+    /// Every live of a source stopped (the source deleted, or "Tout arrêter").
+    pub fn end_source(&self, source: &str) {
+        let dests: Vec<String> = self.sessions.lock().unwrap().values().filter(|x| x.source == source).map(|x| x.dest.clone()).collect();
+        for d in dests {
+            self.end(&d);
+        }
+    }
+
     pub fn end(&self, dest_id: &str) -> bool {
         if self.failed.lock().unwrap().remove(dest_id).is_some() {
             self.changed();
@@ -831,10 +839,7 @@ async fn stop(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(des
 /// Every stream of a source ("Tout arrêter").
 async fn stop_source(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<StopSource>) -> ApiResult<Json<Value>> {
     require(me.can("stream.run"))?;
-    let dests: Vec<String> = s.streams.sessions.lock().unwrap().values().filter(|x| x.source == b.source).map(|x| x.dest.clone()).collect();
-    for d in dests {
-        s.streams.end(&d);
-    }
+    s.streams.end_source(&b.source);
     Ok(Json(json!({"ok": true})))
 }
 

@@ -159,7 +159,8 @@ pub struct Clips {
     jobs: Mutex<Vec<Job>>,
     wake: Notify,
     /// The running job's FFmpeg, to cancel it.
-    running: Mutex<Option<(String, u32)>>,
+    /// The job being cut: (its id, its recorder, FFmpeg's pid).
+    running: Mutex<Option<(String, String, u32)>>,
     /// Clips older than this many days are deleted (0 = kept).
     keep_days: std::sync::atomic::AtomicU32,
 }
@@ -178,6 +179,15 @@ impl Clips {
             running: Mutex::new(None),
             keep_days: cfg.clips_keep_days.into(),
         });
+        // A clip being cut when the server stopped (a crash, a restart) left its part file: its job
+        // is gone with the server, the file too.
+        if let Ok(list) = std::fs::read_dir(c.dir()) {
+            for e in list.flatten() {
+                if e.file_name().to_string_lossy().contains(".part.") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
         tokio::spawn(worker(c.clone()));
         tokio::spawn(purge(c.clone()));
         c
@@ -248,16 +258,24 @@ impl Clips {
     /// Queued jobs of a deleted recorder are dropped.
     pub fn recorder_deleted(&self, id: &str) {
         let mut jobs = self.jobs.lock().unwrap();
+        let dropped: Vec<String> = jobs.iter().filter(|j| j.recorder == id && j.state == JobState::Queued).map(|j| j.id.clone()).collect();
         jobs.retain(|j| !(j.recorder == id && j.state == JobState::Queued));
         drop(jobs);
-        if self.running.lock().unwrap().as_ref().is_some_and(|(r, _)| r == id) {
-            self.cancel_running();
+        // Their part of the loop no longer needs keeping.
+        for job in &dropped {
+            self.recorders.unpin(job);
+        }
+        let running = self.running.lock().unwrap().as_ref().filter(|(_, r, _)| r == id).map(|(j, _, _)| j.clone());
+        if let Some(job) = running {
+            self.cancel_running(&job);
         }
         self.jobs_changed();
     }
 
-    fn cancel_running(&self) {
-        if let Some((_, pid)) = self.running.lock().unwrap().as_ref() {
+    /// Stops the cutting of this job (only this one: the next may have started meanwhile).
+    fn cancel_running(&self, job: &str) {
+        if let Some((_, _, pid)) = self.running.lock().unwrap().as_ref().filter(|(j, _, _)| j == job) {
+            // SAFETY: a signal to the FFmpeg this job started (still running, as it is still listed).
             unsafe {
                 libc::kill(*pid as i32, libc::SIGKILL);
             }
@@ -376,7 +394,7 @@ impl Clips {
         cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         crate::recorder::background(&mut cmd);
         let mut child = cmd.spawn().map_err(|e| format!("cannot start ffmpeg: {e}"))?;
-        *self.running.lock().unwrap() = child.id().map(|p| (job.req.recorder.clone(), p));
+        *self.running.lock().unwrap() = child.id().map(|p| (job.id.clone(), job.req.recorder.clone(), p));
         let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
         let stderr = child.stderr.take().unwrap();
         let err_task = tokio::spawn(async move {
@@ -598,7 +616,7 @@ async fn cancel(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
     require(me.can_extract())?;
     let state = s.clips.jobs.lock().unwrap().iter().find(|j| j.id == id).map(|j| j.state).ok_or_else(|| not_found("job"))?;
     match state {
-        JobState::Running => s.clips.cancel_running(),
+        JobState::Running => s.clips.cancel_running(&id),
         _ => {
             s.clips.jobs.lock().unwrap().retain(|j| j.id != id);
             s.clips.recorders.unpin(&id);

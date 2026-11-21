@@ -693,7 +693,8 @@ impl Manager {
                 for r in m.recs() {
                     r.refresh_status();
                     let info = |o: Option<(schedule::Slot, i64, i64)>| o.map(|(s, a, b)| SlotInfo { name: s.name, start: a, end: b });
-                    let (slot, next) = (info(m.schedules.active(&r.id, &tz, now_t)), info(m.schedules.next(&r.id, &tz, now_t)));
+                    // Never recorded: its slots record nothing, none is shown as on or to come.
+                    let (slot, next) = if r.config().slots_off { (None, None) } else { (info(m.schedules.active(&r.id, &tz, now_t)), info(m.schedules.next(&r.id, &tz, now_t))) };
                     let mut st = r.status.lock().unwrap();
                     st.slot = slot;
                     st.next_slot = next;
@@ -786,9 +787,11 @@ impl Manager {
             let _ = crate::paths::write_json(&self.data_dir.join("loop-dirs.json"), &*dirs, false);
         }
         drop(dirs);
-        // Recording goes on in the new folder at once.
+        // Recording goes on in the new folder at once: every source received now, whatever the
+        // reason (all the time, a programmed recording, a stream).
         for r in self.recs() {
-            if !r.dir.lock().unwrap().starts_with(&dir) && r.config().enabled {
+            let received = matches!(r.status.lock().unwrap().state, State::Recording | State::Starting | State::Nosignal);
+            if !r.dir.lock().unwrap().starts_with(&dir) && received {
                 r.new_run.notify_one();
             }
         }
@@ -1004,9 +1007,10 @@ impl Manager {
         loop_need(c, measured)
     }
 
-    /// The recorder takes space: it records, or it has slots programmed.
+    /// The recorder takes space: it records all the time, or it has slots programmed (a source
+    /// never recorded takes none, whatever its slots).
     pub fn counts(&self, c: &RecorderConfig) -> bool {
-        c.enabled || !self.schedules.of(&c.id).iter().all(|s| !s.enabled)
+        c.enabled || (!c.slots_off && self.schedules.of(&c.id).iter().any(|s| s.enabled))
     }
 
     /// A stopped recorder records during its slots, from a little before (the connection takes time).
@@ -1026,7 +1030,8 @@ impl Manager {
 
     /// Refuses a recorder whose full loop does not fit (only when the change asks for more space).
     fn check_space(&self, c: &RecorderConfig) -> Result<(), String> {
-        if !c.enabled {
+        // Recording all the time, or by its slots: its loop must fit (a longer one too).
+        if !self.counts(c) {
             return Ok(());
         }
         let Some(cap) = self.loops_capacity() else { return Ok(()) };
