@@ -195,6 +195,8 @@ export const streaming: Record<string, string> = {
   'waiting for the source': 'En attente de la source',
   'the source is no longer received: slate sent': 'La source n’est plus reçue\u00a0: image de secours envoyée',
   Slate: 'Image de secours',
+  'Sound track': 'Piste son',
+  'Track {n}': 'Piste {n}',
   'Burn the subtitles into the picture': 'Incruster les sous-titres dans l’image',
   'the source is no longer received, a slate is sent': 'la source n’est plus reçue, image de secours envoyée',
   'the source is back, the live goes on': 'la source est revenue, le direct reprend',

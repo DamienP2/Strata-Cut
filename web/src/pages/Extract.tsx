@@ -143,6 +143,8 @@ function Editor({ rec }: { rec: Recorder }) {
   const [guide, setGuide] = useState<Programme[]>([]);
   const fps = fpsOf(run?.media?.fpsNum, run?.media?.fpsDen);
   const hasSubs = (run?.media?.subtitles?.length ?? 0) > 0;
+  // The sound track heard (the player keeps it from a recording to the next).
+  const [audioTrack, setAudioTrack] = useState(0);
   // A live only while the source records; stopped, its last recorded frame.
   const state = useApp((s) => s.status[rec.id]?.state);
   const newest = useApp((s) => s.status[rec.id]?.newest ?? null);
@@ -605,6 +607,26 @@ function Editor({ rec }: { rec: Recorder }) {
             <MarkOutIcon />
           </button>
           <div className="spacer" />
+          {/* Another sound track (another language, the audio description), when the source has some. */}
+          {(run?.extraAudio ?? 0) > 0 && (
+            <select
+              className="sc-track"
+              aria-label={t('Sound track')}
+              data-tip={t('Sound track')}
+              value={audioTrack}
+              onChange={(e) => {
+                const k = Number(e.target.value);
+                setAudioTrack(k);
+                void p()?.setAudioTrack(k, serverNow());
+              }}
+            >
+              {Array.from({ length: (run?.extraAudio ?? 0) + 1 }, (_, k) => (
+                <option key={k} value={k}>
+                  {run?.media?.audioLangs?.[k] ? run.media.audioLangs[k].toUpperCase() : t('Track {n}', { n: k + 1 })}
+                </option>
+              ))}
+            </select>
+          )}
           <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
         </div>
         {/* The clip: its in and out (the timeline's E and S), its length, its name. */}

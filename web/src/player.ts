@@ -21,6 +21,8 @@ export interface RunInfo {
   map: [number, number, number][]; // t0, t1, wall0
   video: TrackInfo | null;
   audio: TrackInfo | null;
+  /** The other sound tracks the preview made (their fragments numbered as the first's). */
+  extraAudio?: number;
 }
 
 class Buffer {
@@ -127,6 +129,8 @@ export class LoopPlayer {
   fps = 25;
   /** The source time of the frame shown. */
   t = 0;
+  /** The sound track heard (0: the first). */
+  audioTrack = 0;
   live = false;
   /** Called on each frame shown: (server time ms, source time s). */
   onFrame: (wall: number, t: number) => void = () => {};
@@ -310,7 +314,10 @@ export class LoopPlayer {
       if (!MediaSource.isTypeSupported(type)) continue;
       const sb = ms.addSourceBuffer(type);
       sb.timestampOffset = tr.offset - this.base;
-      const b = new Buffer(sb, (f) => `/api/recorders/${this.recorder}/runs/${r.id}/${name}/${f}`);
+      // Another sound track: its own fragments, on the first track's list.
+      const k = name === 'audio' && this.audioTrack > 0 && (r.extraAudio ?? 0) >= this.audioTrack ? this.audioTrack : 0;
+      const dir = k ? `audio${k}` : name;
+      const b = new Buffer(sb, (f) => `/api/recorders/${this.recorder}/runs/${r.id}/${dir}/${f}`);
       for (const s of tr.segs) b.segs.set(s[0], s);
       this.bufs.push(b);
       if (name === 'audio') this.audioBuf = b;
@@ -539,6 +546,20 @@ export class LoopPlayer {
 
   get playing() {
     return !this.video.paused || this.reverse !== 0;
+  }
+
+  /** Hears another sound track: the run opened again on it, where it was (live, playing or not). */
+  async setAudioTrack(k: number, now: number) {
+    if (k === this.audioTrack) return;
+    this.audioTrack = k;
+    const r = this.run;
+    if (!r) return;
+    const t = this.t;
+    const playing = !this.video.paused;
+    const live = this.live;
+    await this.open(r);
+    if (live) await this.goLive(now);
+    else await this.seekT(t, playing);
   }
 
   /** Follows the newest frames. */

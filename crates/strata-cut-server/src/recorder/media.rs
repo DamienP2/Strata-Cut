@@ -429,6 +429,8 @@ async fn media(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
                 "id": run.meta.id, "live": run.live, "media": run.meta.media,
                 "from": first, "to": last,
                 "map": map, "video": track(true), "audio": track(false),
+                // The other sound tracks the preview made (fragments numbered as the first's).
+                "extraAudio": (1..=3).take_while(|k| run.dir.join(format!("audio{k}")).join("init.mp4").exists()).count(),
             }));
         }
     }
@@ -474,6 +476,22 @@ async fn coverage(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(
 
 async fn fragment(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath((id, run, track, file)): UrlPath<(String, String, String, String)>) -> ApiResult<Response> {
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    // Another sound track: its fragment as numbered in the first track's list.
+    if let Some(k) = track.strip_prefix("audio").and_then(|k| k.parse::<u32>().ok()).filter(|k| (1..=3).contains(k)) {
+        let path = {
+            let runs = rec.runs.read().unwrap();
+            let r = runs.iter().find(|r| r.meta.id == run).ok_or_else(|| not_found("run"))?;
+            let dir = r.dir.join(format!("audio{k}"));
+            if file == "init.mp4" {
+                dir.join("init.mp4")
+            } else {
+                let n: u32 = file.strip_prefix('p').and_then(|f| f.strip_suffix(".m4s")).and_then(|n| n.parse().ok()).ok_or_else(|| not_found("fragment"))?;
+                dir.join(format!("p{n:08}.m4s"))
+            }
+        };
+        let data = tokio::fs::read(&path).await.map_err(|_| not_found("fragment"))?;
+        return Ok(file_response(data, "video/mp4", "private, max-age=86400"));
+    }
     let video = match track.as_str() {
         "video" => true,
         "audio" => false,

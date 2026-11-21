@@ -1498,3 +1498,7 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .sc-subs { flex: none; display: grid; place-items: center; width: 34px; height: 30px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text-3); cursor: pointer; }
 .sc-subs:hover { color: var(--text); }
 .sc-subs.on { color: var(--accent-2); border-color: var(--accent); background: var(--accent-soft); }
+
+/* Extraction: the sound track heard. */
+.sc-track { flex: none; height: 30px; min-height: 0; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text); font: 600 12px var(--mono); cursor: pointer; }
+@container centre (max-width: 880px) { .sc-volume input[type='range'] { display: none; } }

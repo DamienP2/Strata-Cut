@@ -467,6 +467,10 @@ pub struct Rec {
     /// When the relay last passed the stream on (server time, ms): a live sees the source lost
     /// at once, before its recorder notices.
     pub last_packet: std::sync::atomic::AtomicI64,
+    /// Sound tracks the preview makes besides the first (0 to 3: the player's choice of track),
+    /// and a run started again when the source turns out to have more.
+    pub audio_extra: std::sync::atomic::AtomicU32,
+    pub restart_run: tokio::sync::Notify,
     /// The picture black, frozen, the sound silent: since (server time, ms), and whether the
     /// journal already said so.
     pub content: Mutex<Content>,
@@ -976,6 +980,8 @@ impl Manager {
                     if !video {
                         doomed.push(run.wave_path(p.n));
                         run.audio.waves.remove(&p.n);
+                        // The other sound tracks' fragment of the same number.
+                        doomed.extend((1..=3).map(|k| run.dir.join(format!("audio{k}")).join(format!("p{:08}.m4s", p.n))).filter(|f| f.exists()));
                     }
                     run.track_mut(video).segs.pop_front();
                 }
@@ -1030,6 +1036,8 @@ impl Manager {
         let guide = epg::Guide::load(&epg::path(&self.data_dir, &c.id));
         let found: epg::Found = crate::paths::read_json(&epg::found_path(&self.data_dir, &c.id)).unwrap_or_default();
         let found_known = found.stream.is_some();
+        // The source's sound tracks, as its newest recording had them (no start again for them).
+        let extra_audio = runs.iter().rev().find_map(|r| r.meta.media.as_ref()).map(|m| m.audio_tracks.saturating_sub(1).min(3)).unwrap_or(0);
         let rec = Arc::new(Rec {
             id: c.id.clone(),
             status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None, lost: 0, damaged: 0, preview_lag: 0, preview_dropped: false, black_since: None, frozen_since: None, silent_since: None }),
@@ -1051,6 +1059,8 @@ impl Manager {
             preview_lag: 0.into(),
             content: Mutex::new(Content::default()),
             last_packet: 0.into(),
+            audio_extra: extra_audio.into(),
+            restart_run: tokio::sync::Notify::new(),
             no_signal: false.into(),
             last_end: Mutex::new(None),
             preview_dropped_at: 0.into(),
@@ -1324,6 +1334,8 @@ impl Manager {
                     if !video {
                         doomed.push(run.wave_path(p.n));
                         run.audio.waves.remove(&p.n);
+                        // The other sound tracks' fragment of the same number.
+                        doomed.extend((1..=3).map(|k| run.dir.join(format!("audio{k}")).join(format!("p{:08}.m4s", p.n))).filter(|f| f.exists()));
                     }
                     run.track_mut(video).segs.pop_front();
                     changed = true;

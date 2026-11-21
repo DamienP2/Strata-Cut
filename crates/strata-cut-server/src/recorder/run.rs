@@ -366,7 +366,7 @@ const PREVIEW_VIDEO: &str = "yadif=deint=interlaced,scale=-2:'min(540,ih)',forma
 /// Its sound: in step (see `AUDIO_SYNC`), and watched (silence).
 const PREVIEW_AUDIO: &str = "aresample=async=1:min_hard_comp=0.1,silencedetect=n=-60dB:d=2";
 
-pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool) -> Vec<String> {
+pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool, extra_audio: u32) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     // Its info lines too, tagged: what the picture and the sound show (black, frozen, silent).
@@ -386,6 +386,13 @@ pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool
         a.extend(s(&["-map", "0:a:0", "-vn", "-af", PREVIEW_AUDIO, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
         a.push(d("audio/p%08d.m4s"));
         a.push(d("audio/index.m3u8"));
+        // The other tracks (another language, the audio description): the same, for the player's
+        // choice; their fragments are numbered as the first track's.
+        for k in 1..=extra_audio.min(3) {
+            a.extend(s(&["-map", &format!("0:a:{k}"), "-vn", "-af", AUDIO_SYNC, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
+            a.push(d(&format!("audio{k}/p%08d.m4s")));
+            a.push(d(&format!("audio{k}/index.m3u8")));
+        }
     }
     // 3. A still every 2 s for the recorder's card.
     a.extend(s(&["-map", "0:v:0", "-vf", "fps=1/2,yadif=deint=interlaced,scale=480:-2", "-q:v", "5", "-update", "1", "-atomic_writing", "1"]));
@@ -659,7 +666,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         None
     };
     let args = receiver_args(input, &run_dir, ts, epg_map.as_deref(), relay_port, program);
-    let preview_args = preview_args(port, &run_dir, &base.join("thumb.jpg"), audio);
+    let extra_audio = if audio { rec.audio_extra.load(Ordering::Relaxed) } else { 0 };
+    for k in 1..=extra_audio {
+        let _ = std::fs::create_dir_all(run_dir.join(format!("audio{k}")));
+    }
+    let preview_args = preview_args(port, &run_dir, &base.join("thumb.jpg"), audio, extra_audio);
     tracing::debug!("{}: ffmpeg {}", cfg.name, args.join(" "));
     tracing::debug!("{}: preview: ffmpeg {}", cfg.name, preview_args.join(" "));
     // The preview first: it listens before the receiver sends. A little lower priority: when the
@@ -940,6 +951,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 stop_child(&mut child).await;
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
                 break Outcome::Stopped;
+            }
+            _ = rec.restart_run.notified() => {
+                stop_child(&mut child).await;
+                tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                break Outcome::Restart;
             }
             _ = epg_new.notified() => {
                 stop_child(&mut child).await;
@@ -1289,6 +1305,12 @@ impl Scanner {
             if let Some(first) = new_master.first() {
                 self.probed = true;
                 media = probe(&m.ffmpeg, &dir.join(super::index::MASTER).join(format!("s{:08}.ts", first.n)));
+                // More sound tracks than the preview makes: the run starts again with them all.
+                let want = media.as_ref().map(|mi| mi.audio_tracks.saturating_sub(1).min(3)).unwrap_or(0);
+                if want > rec.audio_extra.load(Ordering::Relaxed) && !rec.no_audio.load(Ordering::Relaxed) {
+                    rec.audio_extra.store(want, Ordering::Relaxed);
+                    rec.restart_run.notify_one();
+                }
             }
         }
         {
@@ -1527,7 +1549,7 @@ mod tests {
 
     #[test]
     fn audio_kept_on_its_times() {
-        let a = preview_args(5000, Path::new("/r"), Path::new("/t.jpg"), true);
+        let a = preview_args(5000, Path::new("/r"), Path::new("/t.jpg"), true, 0);
         let i = a.iter().position(|x| x == "0:a:0").unwrap();
         assert_eq!(a[i + 2], "-af");
         assert!(a[i + 3].starts_with(AUDIO_SYNC));
