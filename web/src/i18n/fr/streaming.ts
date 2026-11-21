@@ -158,10 +158,6 @@ export const streaming: Record<string, string> = {
   'Go live': 'Diffuser',
   'Start all ({n})': 'Tout lancer ({n})',
   'No destination': 'Aucune destination',
-  // The server lost
-  'Reconnecting… signed out in {s}': 'Reconnexion… déconnexion dans {s}',
-  'Sign out now': 'Se déconnecter maintenant',
-  'The server did not answer for a minute: you were signed out.': 'Le serveur n’a pas répondu pendant une minute\u00a0: vous avez été déconnecté.',
   // The server's messages
   'give the stream key of this live': 'Donnez la clé de stream de ce direct.',
   'this destination already sends another source': 'Cette destination diffuse déjà une autre source.',

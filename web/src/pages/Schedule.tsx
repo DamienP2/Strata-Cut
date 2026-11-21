@@ -9,7 +9,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { CalendarClock, Check, ChevronLeft, ChevronRight, Pause, Play, Plus, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { Empty } from '../ui/Empty';
 import { api, can, serverEvents, serverNow, useApp } from '../store';
-import { locale, t, tc, tn } from '../i18n';
+import { locale, t, tc } from '../i18n';
 import { navigate } from '../router';
 import { clock, day } from '../tc';
 import { confirmDialog } from '../ui/dialogs';
@@ -34,7 +34,7 @@ function dateIn(ms: number, tz: string): string {
 const hhmm = (ms: number, tz: string) => clock(ms, tz).slice(0, 5);
 
 export function Schedule() {
-  const { recorders, user, timezone, toast, status } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, timezone: s.timezone, toast: s.toast, status: s.status })));
+  const { recorders, user, timezone, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, timezone: s.timezone, toast: s.toast })));
   // Starting, stopping, programming: as the role allows.
   const admin = can.has(user, 'schedule.edit');
   const [slots, setSlots] = useState<Slot[] | null>(null);
@@ -63,19 +63,10 @@ export function Schedule() {
   const programmed = recorders;
   const names = useMemo(dayNames, []);
   if (!slots) return <div className="loading">{t('Loading…')}</div>;
-  const recording = recorders.filter((r) => status[r.id]?.state === 'recording').length;
 
   return (
     <div className="sc-plan">
       <div className="sc-plan-main">
-        <div className="settings-head">
-          <div>
-            <h1>{t('Schedule')}</h1>
-            <p className="muted">
-              {tn(recorders.length, '{n} recorder', '{n} recorders')} · {tn(recording, '{n} recording now', '{n} recording now')}
-            </p>
-          </div>
-        </div>
         {programmed.length === 0 ? (
           <div className="empty big">
             <CalendarClock size={22} />
@@ -777,6 +768,7 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
   return (
     <div className="sc-cal">
       <div className="sc-cal-head">
+        <h1 className="sc-cal-title">{t('Schedule')}</h1>
         <button className="icon-btn ghost" title={t('Before')} onClick={() => go(-1)}>
           <ChevronLeft size={16} />
         </button>
@@ -910,8 +902,8 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
                       style={{
                         left: `${Math.max(0, x(o.start))}%`,
                         width: `${Math.max(0.4, Math.min(100, x(o.end)) - Math.max(0, x(o.start)))}%`,
-                        top: `calc(21px + (100% - 68px) * ${track[i] / tracks})`,
-                        height: `calc((100% - 68px) / ${tracks} - ${tracks > 1 ? 2 : 0}px)`,
+                        top: `calc(19px + (100% - 23px) * ${track[i] / tracks})`,
+                        height: `calc((100% - 23px) / ${tracks} - ${tracks > 1 ? 2 : 0}px)`,
                         bottom: 'auto',
                       }}
                       title={`${o.name || t('Programmed slot')}\n${day(o.start, timezone, locale())} ${hhmm(o.start, timezone)}–${hhmm(o.end, timezone)}\n\n${live ? t('Click: watch it in Extraction') : kept ? t('Click: open it in Extraction') : t('Click: its details')}`}

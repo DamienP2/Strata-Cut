@@ -1311,13 +1311,6 @@ a.btn { color: inherit; }
 .btn.st-stop-one { background: var(--live); border-color: var(--live); color: #fff; }
 
 /* The server lost: a countdown, then signed out */
-.server-lost { position: fixed; top: 58px; left: 50%; transform: translateX(-50%); z-index: 80; display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 12%, var(--panel)); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); font-size: 13px; }
-.server-lost strong { color: var(--text); }
-.server-lost .muted { font-variant-numeric: tabular-nums; }
-.server-lost-ring { width: 30px; height: 30px; flex: none; transform: rotate(-90deg); }
-.server-lost-ring circle { fill: none; stroke-width: 3.5; }
-.server-lost-ring .bg { stroke: var(--panel-3); }
-.server-lost-ring .fg { stroke: var(--warn); stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
 
 /* Programmation: one button (REC / Stop); the line as recorded (stills, holes), as in Extraction */
 .sc-cal-row { min-height: 96px; }
@@ -1451,3 +1444,18 @@ a.btn { color: inherit; }
 .sc-cal-key i.slot { background: var(--accent-soft); border: 1px solid var(--accent); }
 @media (max-width: 1100px) { .sc-cal-key { display: none; } }
 .st-bw-y span { white-space: nowrap; }
+
+/* Régie, compact: a line is the source's small picture and name, then one band where the
+   programmed recordings are drawn over what was recorded (the programme guide above it). */
+.sc-plan-main { padding-top: 16px; gap: 12px; }
+.sc-cal-title { font-size: 18px; margin: 0 8px 0 2px; }
+.sc-plan .sc-cal-row { grid-template-columns: 210px 1fr; min-height: 54px; }
+.sc-cal-src { gap: 10px; padding: 6px 10px; }
+.sc-cal-pic { width: 64px; border-radius: 4px; }
+.sc-cal-pic .sc-onpic { height: 13px; font-size: 8px; padding: 0 4px; top: 3px; left: 3px; gap: 3px; }
+.sc-cal-pic .sc-onpic .sc-rec { width: 5px; height: 5px; }
+.sc-cal-rec, .sc-cal-tile, .sc-cal-hole, .sc-cal-row .sc-cal-cont.todo { top: 19px; bottom: 4px; height: auto; }
+.sc-cal-sel { top: 19px; bottom: 4px; }
+.sc-cal-prog { top: 2px; height: 14px; line-height: 14px; }
+/* Past programmed recordings: an outline over the pictures recorded in them. */
+.sc-cal-slot.past { background: transparent; border-color: color-mix(in srgb, var(--text-3) 70%, transparent); color: var(--text); filter: none; text-shadow: 0 1px 2px #000; }
