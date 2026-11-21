@@ -25,6 +25,10 @@ pub fn masked(cfg: &ServerConfig) -> ServerConfig {
     if !c.security.sso.client_secret.is_empty() {
         c.security.sso.client_secret = MASK.into();
     }
+    // The mail server's password: never sent back.
+    if !c.alerts.smtp_password.is_empty() {
+        c.alerts.smtp_password = MASK.into();
+    }
     // A YouTube account's cookies and its token: never sent back.
     if !c.youtube.cookies.is_empty() {
         c.youtube.cookies = MASK.into();
@@ -82,6 +86,9 @@ async fn put_config(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(
     let old = s.config.load_full();
     if cfg.security.sso.client_secret == MASK {
         cfg.security.sso.client_secret = old.security.sso.client_secret.clone();
+    }
+    if cfg.alerts.smtp_password == MASK {
+        cfg.alerts.smtp_password = old.alerts.smtp_password.clone();
     }
     if cfg.youtube.cookies == MASK {
         cfg.youtube.cookies = old.youtube.cookies.clone();

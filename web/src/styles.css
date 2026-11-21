@@ -1486,3 +1486,10 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .sc-content-flags { position: absolute; left: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; z-index: 1; }
 .sc-content-flag { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 10px; background: color-mix(in srgb, var(--warn) 85%, #000); color: #111; font-size: 11px; font-weight: 700; }
 .sc-content-mark { position: absolute; right: 3px; bottom: 3px; display: grid; place-items: center; width: 15px; height: 15px; border-radius: 50%; background: var(--warn); color: #111; }
+
+/* Système › Alertes. */
+.set-inline { display: flex; align-items: center; gap: 8px; }
+.alert-events { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 14px; }
+.alert-test { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 0 0 14px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); font-size: 13px; }
+.ok-text { color: var(--pvw); font-weight: 600; }
+.bad-text { color: var(--live); font-weight: 600; }

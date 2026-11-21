@@ -5,6 +5,7 @@ use tokio::sync::{watch, Notify};
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+mod alerts;
 mod api;
 mod auth;
 mod cli;
@@ -271,8 +272,10 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     tokio::spawn(recorder::decklink::search_at_start(data_dir.clone()));
     let clips = clips::Clips::start(&data_dir, &first, events.clone(), recorders.clone());
     let streams = streams::Streams::start(&data_dir, recorders.clone(), events.clone());
+    alerts::start(data_dir.clone(), recorders.clone(), streams.clone());
     loop {
         let config = config::ServerConfig::load(&data_dir);
+        alerts::configure(&config.alerts, &config.name);
         recorders.set_config(&config);
         ntp::request(&data_dir, &config.ntp);
         clips.set_config(&config);

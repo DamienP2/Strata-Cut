@@ -121,6 +121,13 @@ struct Running {
     started_at: i64,
 }
 
+/// The previous run stopped without saying so (the alerts tell it once).
+static CRASHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn crashed_before() -> bool {
+    CRASHED.load(Ordering::SeqCst)
+}
+
 /// Starts the on-disk journal and crash reports.
 pub fn start(data_dir: &Path) {
     let dir = data_dir.join("health");
@@ -131,6 +138,7 @@ pub fn start(data_dir: &Path) {
     // A marker left by the previous run: it stopped without saying so.
     let marker = dir.join("running.json");
     if let Some(prev) = crate::paths::read_json::<Running>(&marker) {
+        CRASHED.store(true, Ordering::SeqCst);
         let at = std::fs::metadata(&marker).and_then(|m| m.modified()).map(ms_of).unwrap_or_else(|_| now_ms());
         write_crash(h, &Crash {
             id: format!("{at}-stop"),

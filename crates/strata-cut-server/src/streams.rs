@@ -390,6 +390,11 @@ impl Streams {
     }
 
     /// Every live of a source stopped (the source deleted, or "Tout arrêter").
+    /// A destination's name (its id when it is gone).
+    pub fn name_of(&self, id: &str) -> String {
+        self.get(id).map(|d| d.name).unwrap_or_else(|| id.to_string())
+    }
+
     pub fn end_source(&self, source: &str) {
         let dests: Vec<String> = self.sessions.lock().unwrap().values().filter(|x| x.source == source).map(|x| x.dest.clone()).collect();
         for d in dests {

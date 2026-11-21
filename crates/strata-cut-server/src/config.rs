@@ -45,6 +45,9 @@ pub struct ServerConfig {
     /// The resources' guard: a new recording or stream refused past these limits.
     #[serde(default)]
     pub limits: crate::limits::Limits,
+    /// Alerts (Système › Alertes): problems told to a webhook and by e-mail.
+    #[serde(default)]
+    pub alerts: crate::alerts::Alerts,
 }
 
 /// YouTube (Système › YouTube): for the web recorders, so that YouTube does not take the server
@@ -134,6 +137,7 @@ impl ServerConfig {
         self.loops_max_gb = 0.0;
         self.clips_max_gb = 0.0;
         self.keep_free_percent = self.keep_free_percent.clamp(1, 50);
+        self.alerts.normalize();
         self.clips_keep_days = self.clips_keep_days.min(3650);
         let mut ntp: Vec<String> = Vec::new();
         for s in self.ntp.iter().flat_map(|s| s.split([' ', ',', ';'])).map(str::trim).filter(|s| !s.is_empty()) {
@@ -153,6 +157,7 @@ impl ServerConfig {
             return Err("the server name cannot be empty".into());
         }
         self.limits.validate()?;
+        self.alerts.validate()?;
         if self.ntp.len() > 8 {
             return Err("8 ntp servers at most".into());
         }

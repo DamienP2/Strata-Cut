@@ -32,6 +32,7 @@ pub fn new_id() -> String {
 pub fn router() -> Router<Shared> {
     Router::new()
         .merge(crate::auth::routes())
+        .merge(crate::alerts::routes())
         .merge(crate::users::routes())
         .merge(crate::groups::routes())
         .merge(crate::roles::routes())
