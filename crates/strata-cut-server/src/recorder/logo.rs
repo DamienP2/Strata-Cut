@@ -75,11 +75,7 @@ fn allowed(host: &str, port: u16) -> Result<(), String> {
         return Err(format!("unknown address: {host}"));
     }
     for a in addrs {
-        // An IPv6 address that wraps an IPv4 one (::ffff:127.0.0.1) is judged as that one.
-        let ip = match a.ip() {
-            std::net::IpAddr::V6(v) => v.to_ipv4_mapped().map_or(std::net::IpAddr::V6(v), std::net::IpAddr::V4),
-            ip => ip,
-        };
+        let ip = crate::guard::plain_ip(a.ip());
         let local = match ip {
             std::net::IpAddr::V4(v) => v.is_loopback() || v.is_link_local() || v.is_unspecified() || v.is_broadcast(),
             std::net::IpAddr::V6(v) => v.is_loopback() || v.is_unspecified() || (v.segments()[0] & 0xffc0) == 0xfe80,

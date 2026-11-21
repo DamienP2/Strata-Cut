@@ -538,12 +538,17 @@ pub fn token_from(headers: &HeaderMap) -> Option<String> {
             return Some(t.trim().to_string());
         }
     }
+    cookie(headers, COOKIE)
+}
+
+/// A cookie's value (none when empty).
+pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     headers
         .get_all("cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
-        .find_map(|c| c.trim().strip_prefix("sc_session=").map(str::to_string))
+        .find_map(|c| c.trim().strip_prefix(name).and_then(|v| v.strip_prefix('=')).map(str::to_string))
         .filter(|t| !t.is_empty())
 }
 

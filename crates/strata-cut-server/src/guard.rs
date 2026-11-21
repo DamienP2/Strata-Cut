@@ -70,13 +70,17 @@ fn local_name(host: &str) -> bool {
     matches!(name.as_str(), "localhost" | "127.0.0.1" | "::1")
 }
 
+/// An IPv6 address that wraps an IPv4 one (`::ffff:127.0.0.1`) as that one.
+pub fn plain_ip(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(IpAddr::V6(v6), IpAddr::V4),
+        ip => ip,
+    }
+}
+
 /// A request from the server itself: loopback peer, not another site, local `Host`/`Origin`.
 pub fn this_machine(peer: SocketAddr, headers: &HeaderMap) -> bool {
-    let ip = match peer.ip() {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
-        ip => ip,
-    };
-    if !ip.is_loopback() || headers.contains_key("x-forwarded-for") || headers.contains_key("forwarded") || headers.contains_key("x-forwarded-host") {
+    if !plain_ip(peer.ip()).is_loopback() || headers.contains_key("x-forwarded-for") || headers.contains_key("forwarded") || headers.contains_key("x-forwarded-host") {
         return false;
     }
     if header(headers, "sec-fetch-site").is_some_and(|v| v.eq_ignore_ascii_case("cross-site")) {
@@ -95,10 +99,7 @@ pub fn this_machine(peer: SocketAddr, headers: &HeaderMap) -> bool {
 /// peer), the one the proxy names last in `X-Forwarded-For` (the one it saw itself): else every
 /// client would share the proxy's address, and its sign-in throttling.
 pub fn client_ip(peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
-    let ip = match peer.ip() {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
-        ip => ip,
-    };
+    let ip = plain_ip(peer.ip());
     if !ip.is_loopback() {
         return ip;
     }

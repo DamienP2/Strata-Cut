@@ -229,10 +229,6 @@ fn state_cookie(state: &str, headers: &HeaderMap) -> axum::http::HeaderValue {
     axum::http::HeaderValue::from_str(&format!("{STATE_COOKIE}={state}; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")).expect("cookie")
 }
 
-fn state_from(headers: &HeaderMap) -> Option<String> {
-    let prefix = format!("{STATE_COOKIE}=");
-    headers.get_all("cookie").iter().filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(';')).find_map(|c| c.trim().strip_prefix(prefix.as_str()).map(str::to_string)).filter(|t| !t.is_empty())
-}
 
 fn pending() -> &'static Mutex<HashMap<String, Pending>> {
     static P: OnceLock<Mutex<HashMap<String, Pending>>> = OnceLock::new();
@@ -471,7 +467,7 @@ async fn callback(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<C
         return fail("failed", q.error_description.as_deref().unwrap_or(e));
     }
     // The state this browser was given at the start: a callback link sent from elsewhere does not sign it in.
-    let mine = state_from(&headers);
+    let mine = auth::cookie(&headers, STATE_COOKIE);
     let p = q.state.as_deref().filter(|st| mine.as_deref() == Some(*st)).and_then(|st| pending().lock().unwrap().remove(st));
     let Some(p) = p.filter(|p| p.created.elapsed() < PENDING_TTL) else { return fail("expired", "") };
     let Some(code) = q.code else { return fail("failed", "no code") };
