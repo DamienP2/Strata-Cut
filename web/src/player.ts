@@ -155,6 +155,11 @@ export class LoopPlayer {
   /** When it was last moved (server ms): the waiting just after is loading, not a stall. */
   private seekedAt = 0;
   private refreshing = false;
+  /** What the player did lately (the live's first minute is reported if it goes back). */
+  private trace: string[] = [];
+  private liveSince = 0;
+  private lastCT = -1;
+  private reported = false;
   /** Seeks under way: until the picture is put where asked, where it plays is that place (the
    * video's own time is still the old one, 0 on a new recording). */
   private seeking = 0;
@@ -182,6 +187,7 @@ export class LoopPlayer {
     // Live: every half second (the new fragments, the distance to the edge); else every 2 s.
     this.stopTicker = steadyTicker(500, () => {
       this.ticks++;
+      this.watchBack();
       if (this.live || this.ticks % 4 === 0) void this.refresh();
     });
     document.addEventListener('visibilitychange', this.onVisible);
@@ -217,6 +223,7 @@ export class LoopPlayer {
   private onWaiting = () => {
     void this.fill();
     // Live: it waits for a fragment not there yet: more delay from now on, and asked at once.
+    this.note('waiting');
     if (this.live && !this.video.paused && this.now() - this.seekedAt > 4000) {
       this.delay = Math.min(LIVE_DELAY_MAX, this.delay + 1.5);
       this.stalledAt = this.now();
@@ -297,6 +304,7 @@ export class LoopPlayer {
   }
 
   private async open(r: RunInfo) {
+    this.note(`open run ${r.id} live=${r.live} from=${r.from} to=${r.to}`);
     this.alive.dead = true;
     this.alive = { dead: false };
     const alive = this.alive;
@@ -443,6 +451,7 @@ export class LoopPlayer {
       // with the edge further, or so near the edge that it would stall.
       if (this.video.playbackRate !== 1) this.video.playbackRate = 1;
       if (behind > delay + 6 || behind < 2.5 || (stalled && behind > delay + 1)) {
+        this.note(`refresh jump: behind ${behind.toFixed(2)} delay ${delay} stalled ${stalled} edge ${edge.toFixed(2)} → ${(edge - delay).toFixed(2)}`);
         this.seekedAt = this.now();
         this.video.currentTime = edge - delay - this.base;
         void this.video.play().catch(() => {});
@@ -458,6 +467,29 @@ export class LoopPlayer {
       if (s[1] <= t && t < s[2]) return { init: b.url('init.mp4'), seg: b.url(`p${String(s[0]).padStart(8, '0')}.m4s`), t0: s[1] };
     }
     return null;
+  }
+
+  /** A line of what the player did, with its time since the live started. */
+  private note(what: string) {
+    const v = this.video;
+    const buf: string[] = [];
+    for (let i = 0; i < v.buffered.length; i++) buf.push(`${v.buffered.start(i).toFixed(1)}-${v.buffered.end(i).toFixed(1)}`);
+    const at = this.liveSince ? ((this.now() - this.liveSince) / 1000).toFixed(1) : '-';
+    this.trace.push(`${at}s ${what} ct=${v.currentTime.toFixed(2)} rs=${v.readyState} buf=[${buf.join(',')}]`);
+    if (this.trace.length > 40) this.trace.shift();
+  }
+
+  /** The live went back in its first minute (by itself or put back): what led to it, sent to the
+   * server's journal (Système › Santé), once per player. */
+  private watchBack() {
+    const ct = this.video.currentTime;
+    const back = this.lastCT - ct;
+    this.lastCT = ct;
+    if (!this.live || this.reported || this.video.paused || back < 0.5 || !this.liveSince || this.now() - this.liveSince > 60_000) return;
+    this.reported = true;
+    this.note(`WENT BACK ${back.toFixed(2)} s (delay ${this.delay}, edge ${this.edge()?.toFixed(2)}, base ${this.base})`);
+    const body = JSON.stringify({ page: location.pathname, ua: navigator.userAgent, back, events: this.trace });
+    void fetch('/api/player/trace', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body }).catch(() => {});
   }
 
   /** Shows the frame at a server time (ms). */
@@ -518,6 +550,7 @@ export class LoopPlayer {
     }
     // A hair after the frame's start so that this very frame is shown.
     this.video.currentTime = t - this.base + 0.001;
+    if (this.live) this.note(`seek ${t.toFixed(2)} play=${play}`);
     if (play) {
       void this.fill(t, 12);
       await this.video.play().catch(() => {});
@@ -587,6 +620,8 @@ export class LoopPlayer {
   async goLive(now: number) {
     this.stopReverse();
     this.live = true;
+    this.liveSince = this.now();
+    this.note('goLive');
     // The newest recording, asked afresh (the one in hand may have ended since: a cut, a restart);
     // one whose preview has not started yet, or of a few seconds, is passed over.
     const runs = await this.fetchInfo(now - 120_000, now + 10_000);

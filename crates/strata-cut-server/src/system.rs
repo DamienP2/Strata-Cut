@@ -17,6 +17,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/system/config", put(put_config))
         .route("/api/system/restart", post(restart))
         .route("/api/system/metrics", get(metrics))
+        .route("/api/player/trace", post(player_trace))
 }
 
 /// The settings as a client sees them: the SSO secret masked.
@@ -128,6 +129,49 @@ async fn restart(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
     tracing::info!("restart asked by {}", me.username);
     s.restart.notify_one();
     Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(serde::Deserialize)]
+struct PlayerTrace {
+    #[serde(default)]
+    page: String,
+    #[serde(default)]
+    ua: String,
+    #[serde(default)]
+    back: f64,
+    #[serde(default)]
+    events: Vec<String>,
+}
+
+/// The browser's player went back during the first minute of a live: what led to it, in the
+/// journal (Système › Santé) for the support. A few per user and per 10 minutes.
+async fn player_trace(CurrentUser(me): CurrentUser, Json(t): Json<PlayerTrace>) -> ApiResult<StatusCode> {
+    static SEEN: std::sync::Mutex<Vec<(String, i64)>> = std::sync::Mutex::new(Vec::new());
+    let now = crate::recorder::now_ms();
+    {
+        let mut seen = SEEN.lock().unwrap();
+        seen.retain(|(_, at)| now - at < 600_000);
+        if seen.iter().filter(|(u, _)| *u == me.username).count() >= 5 {
+            return Ok(StatusCode::NO_CONTENT);
+        }
+        seen.push((me.username.clone(), now));
+    }
+    let clip = |x: &str, n: usize| -> String { x.chars().filter(|c| !c.is_control()).take(n).collect() };
+    let browser = if t.ua.contains("Firefox/") {
+        "Firefox"
+    } else if t.ua.contains("Edg/") {
+        "Edge"
+    } else if t.ua.contains("Chrome/") {
+        "Chrome"
+    } else if t.ua.contains("Safari/") {
+        "Safari"
+    } else {
+        "other"
+    };
+    let events: Vec<String> = t.events.iter().take(40).map(|e| clip(e, 200)).collect();
+    tracing::warn!("player: the live went back {:.1} s ({}, {browser}, {}): {}", t.back, clip(&t.page, 80), me.username, events.join(" | "));
+    tracing::info!("player: browser {}", clip(&t.ua, 200));
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn metrics(State(s): State<Shared>, CurrentUser(_me): CurrentUser) -> ApiResult<Json<Value>> {
