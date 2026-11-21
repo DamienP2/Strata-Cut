@@ -219,6 +219,7 @@ export const system: Record<string, string> = {
   Sender: 'Expéditeur',
   'Mail user': 'Utilisateur',
   'Mail server': 'Serveur d’envoi (SMTP)',
+  'give the password again for this server': 'Saisissez à nouveau le mot de passe pour ce serveur.',
   'the webhook address starts with https://': 'L’adresse du webhook commence par https://',
   "the mail server's security is starttls, tls or none": 'La sécurité du serveur d’envoi est STARTTLS, TLS ou aucune.',
   "give the mail server and the sender's address": 'Indiquez le serveur d’envoi et l’adresse de l’expéditeur.',

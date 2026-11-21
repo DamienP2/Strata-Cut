@@ -965,11 +965,18 @@ case "$d" in
   * ) echo "dossier refusé : $d" >&2; exit 1 ;;
 esac
 case "$d" in *[!A-Za-z0-9._/-]*) echo "dossier refusé : $d" >&2; exit 1 ;; esac
+# Aucun lien symbolique sur le chemin : root ne doit pas donner un autre dossier au service.
+p=""
+for part in $(echo "${d#/}" | tr '/' ' '); do
+  p="$p/$part"
+  if [ -L "$p" ]; then echo "dossier refusé (lien symbolique) : $p" >&2; exit 1; fi
+done
 mkdir -p "$d"
+if [ "$(realpath "$d")" != "$d" ]; then echo "dossier refusé : $d" >&2; exit 1; fi
 parent="$(dirname "$d")"
-[ "$(basename "$parent")" = strata-cut ] && chown "$2:$2" "$parent"
-chown "$2:$2" "$d"
-chmod 0750 "$d"
+[ "$(basename "$parent")" = strata-cut ] && chown -h "$2:$2" "$parent"
+chown -h "$2:$2" "$d"
+[ -L "$d" ] || chmod 0750 "$d"
 echo ok >"$result"
 EOF
   chmod 0755 "$STORAGE_HELPER"

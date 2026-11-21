@@ -21,6 +21,8 @@ use crate::{
 };
 
 pub const MAX: usize = 10 << 20;
+/// Images kept at most (10 MB each).
+const MAX_IMAGES: usize = 50;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -115,8 +117,11 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
     crate::api::blocking(move || -> Result<(), String> {
         let _g = LOCK.lock().unwrap();
         std::fs::create_dir_all(dir(&data_dir)).map_err(|e| e.to_string())?;
-        std::fs::write(dir(&data_dir).join(format!("{}.{}", saved.id, saved.ext)), &body).map_err(|e| e.to_string())?;
         let mut i = load(&data_dir);
+        if i.images.len() >= MAX_IMAGES {
+            return Err("too many images: delete some first".into());
+        }
+        std::fs::write(dir(&data_dir).join(format!("{}.{}", saved.id, saved.ext)), &body).map_err(|e| e.to_string())?;
         i.images.push(saved);
         save(&data_dir, &i)
     })

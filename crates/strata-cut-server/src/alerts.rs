@@ -498,7 +498,12 @@ pub fn routes() -> Router<Shared> {
 async fn test(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut a): Json<Alerts>) -> ApiResult<Json<Value>> {
     require(me.is_admin())?;
     if a.smtp_password == crate::sso::MASK {
-        a.smtp_password = s.config.load().alerts.smtp_password.clone();
+        // The saved password goes only to the saved server, the same way.
+        let saved = s.config.load().alerts.clone();
+        if (a.smtp_host.trim(), a.smtp_port, a.smtp_security.as_str(), a.smtp_user.trim()) != (saved.smtp_host.trim(), saved.smtp_port, saved.smtp_security.as_str(), saved.smtp_user.trim()) {
+            return Err(bad("give the password again for this server"));
+        }
+        a.smtp_password = saved.smtp_password;
     }
     a.normalize();
     a.validate().map_err(bad)?;

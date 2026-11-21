@@ -218,6 +218,21 @@ struct Pending {
 }
 
 const PENDING_TTL: Duration = Duration::from_secs(600);
+/// Sign-ins started and not finished, kept at most (the oldest go first).
+const PENDING_MAX: usize = 1000;
+/// The browser that started a sign-in: only it can finish it.
+const STATE_COOKIE: &str = "sc_sso";
+
+fn state_cookie(state: &str, headers: &HeaderMap) -> axum::http::HeaderValue {
+    let max_age = if state.is_empty() { 0 } else { PENDING_TTL.as_secs() };
+    let secure = if auth::is_https(headers) { "; Secure" } else { "" };
+    axum::http::HeaderValue::from_str(&format!("{STATE_COOKIE}={state}; Path=/api/auth/sso; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}")).expect("cookie")
+}
+
+fn state_from(headers: &HeaderMap) -> Option<String> {
+    let prefix = format!("{STATE_COOKIE}=");
+    headers.get_all("cookie").iter().filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(';')).find_map(|c| c.trim().strip_prefix(prefix.as_str()).map(str::to_string)).filter(|t| !t.is_empty())
+}
 
 fn pending() -> &'static Mutex<HashMap<String, Pending>> {
     static P: OnceLock<Mutex<HashMap<String, Pending>>> = OnceLock::new();
@@ -243,10 +258,11 @@ pub fn enc(s: &str) -> String {
     out
 }
 
-/// Only a local path: starts with `/`, no `//` nor `\`.
+/// Only a local path: starts with `/`, no `//` nor `\`, no space nor control character (a browser
+/// drops a tab: `/\t/evil.com` would become `//evil.com`).
 pub fn safe_next(next: Option<&str>) -> String {
     match next {
-        Some(n) if n.starts_with('/') && !n.contains("//") && !n.contains('\\') => n.to_string(),
+        Some(n) if n.starts_with('/') && !n.contains("//") && !n.contains('\\') && !n.chars().any(|c| c.is_control() || c.is_whitespace()) => n.to_string(),
         _ => "/".into(),
     }
 }
@@ -296,8 +312,14 @@ async fn start(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<Star
     );
     let mut p = pending().lock().unwrap();
     p.retain(|_, v| v.created.elapsed() < PENDING_TTL);
-    p.insert(state, Pending { nonce, verifier, redirect_uri, next: safe_next(q.next.as_deref()), created: Instant::now() });
-    Redirect::to(&url).into_response()
+    while p.len() >= PENDING_MAX {
+        let Some(old) = p.iter().min_by_key(|(_, v)| v.created).map(|(k, _)| k.clone()) else { break };
+        p.remove(&old);
+    }
+    p.insert(state.clone(), Pending { nonce, verifier, redirect_uri, next: safe_next(q.next.as_deref()), created: Instant::now() });
+    let mut res = Redirect::to(&url).into_response();
+    res.headers_mut().append(header::SET_COOKIE, state_cookie(&state, &headers));
+    res
 }
 
 // ---------------------------------------------------------------- callback
@@ -448,7 +470,9 @@ async fn callback(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<C
     if let Some(e) = q.error.as_deref() {
         return fail("failed", q.error_description.as_deref().unwrap_or(e));
     }
-    let p = q.state.as_deref().and_then(|st| pending().lock().unwrap().remove(st));
+    // The state this browser was given at the start: a callback link sent from elsewhere does not sign it in.
+    let mine = state_from(&headers);
+    let p = q.state.as_deref().filter(|st| mine.as_deref() == Some(*st)).and_then(|st| pending().lock().unwrap().remove(st));
     let Some(p) = p.filter(|p| p.created.elapsed() < PENDING_TTL) else { return fail("expired", "") };
     let Some(code) = q.code else { return fail("failed", "no code") };
     let cfg = s.config.load().security.sso.clone();
@@ -481,6 +505,7 @@ async fn callback(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<C
     let token = s.auth.open_session(&user.id);
     let mut res = Redirect::to(&next).into_response();
     res.headers_mut().insert(header::SET_COOKIE, auth::session_cookie(&token, &headers));
+    res.headers_mut().append(header::SET_COOKIE, state_cookie("", &headers));
     res
 }
 
@@ -618,6 +643,8 @@ mod tests {
         assert_eq!(safe_next(Some("//evil.com")), "/");
         assert_eq!(safe_next(Some("/\\evil.com")), "/");
         assert_eq!(safe_next(Some("https://evil.com")), "/");
+        assert_eq!(safe_next(Some("/\t/evil.com")), "/");
+        assert_eq!(safe_next(Some("/ /evil.com")), "/");
         assert_eq!(safe_next(None), "/");
         assert_eq!(enc("a b/é"), "a%20b%2F%C3%A9");
         let list = vec![User::without_password("ann".into(), String::new(), Role::Viewer, String::new()), User::without_password("ann-2".into(), String::new(), Role::Viewer, String::new())];

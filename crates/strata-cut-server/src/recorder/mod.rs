@@ -291,7 +291,7 @@ impl RecorderConfig {
         matches!(self.protocol, Protocol::Rtmp | Protocol::Srt) && self.mode == Mode::Listener
     }
 
-    /// For clients: the passphrase masked.
+    /// For clients: the passphrase and the cookies masked.
     pub fn public(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap_or_default();
         if !self.passphrase.is_empty() {
@@ -418,6 +418,14 @@ impl Content {
         }
         true
     }
+}
+
+/// `scheme://user:pass@host:port/path?query` → `scheme://host:port`; a name (NDI, DeckLink) as it is.
+pub fn only_host(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else { return url.to_string() };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    format!("{scheme}://{host}")
 }
 
 pub fn now_ms() -> i64 {
@@ -1283,15 +1291,21 @@ impl Manager {
     }
 
     fn list_changed(&self) {
-        self.events.send(Audience::All, json!({"type": "recorders", "recorders": self.list_json()}));
+        self.events.send(Audience::Admins, json!({"type": "recorders", "recorders": self.list_json(true)}));
+        self.events.send(Audience::NotAdmins, json!({"type": "recorders", "recorders": self.list_json(false)}));
     }
 
-    pub fn list_json(&self) -> Value {
+    /// The sources, for an admin; for the others, their addresses without what may be secret
+    /// (a stream key in the path, a token in the query, a user and password).
+    pub fn list_json(&self, admin: bool) -> Value {
         Value::Array(
             self.recs()
                 .iter()
                 .map(|r| {
                     let mut v = r.config().public();
+                    if !admin {
+                        v["url"] = json!(only_host(&r.config().url));
+                    }
                     // The logo's version: the interface asks for it again when it changes.
                     v["logo"] = json!(logo::version(&self.data_dir, &r.id));
                     v
@@ -1554,6 +1568,14 @@ mod glitch_tests {
         assert!(glitch_lines(&[], 0, 0).is_empty());
         let l = glitch_lines(&recs, 0, 12);
         assert!(l[0].contains("network card of this server") && l.iter().any(|x| x.contains("dropped 12 packets")), "{l:?}");
+    }
+
+    #[test]
+    fn addresses_without_secrets() {
+        assert_eq!(only_host("rtmp://live.example.com/app/secretkey"), "rtmp://live.example.com");
+        assert_eq!(only_host("https://u:p@cdn.example.com:8443/live.m3u8?token=x"), "https://cdn.example.com:8443");
+        assert_eq!(only_host("udp://@239.1.1.1:5000"), "udp://239.1.1.1:5000");
+        assert_eq!(only_host("MACHINE (Caméra 1)"), "MACHINE (Caméra 1)");
     }
 
     #[test]

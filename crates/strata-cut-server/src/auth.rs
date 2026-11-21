@@ -621,7 +621,7 @@ struct LoginBody {
 }
 
 async fn login(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(b): Json<LoginBody>) -> ApiResult<Response> {
-    let ip = peer.ip();
+    let ip = guard::client_ip(peer, &headers);
     let name = b.username.trim().to_string();
     if let Err(wait) = s.auth.logins.check(ip, &name) {
         return Err((StatusCode::TOO_MANY_REQUESTS, format!("too many tries: wait {wait} s")));

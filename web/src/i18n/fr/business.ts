@@ -70,6 +70,9 @@ export const business: Record<string, string> = {
   'give the expected bitrate': 'Indiquez le débit prévu.',
   'the bitrate is 0.1 to 2000 mb/s': 'Le débit va de 0,1 à 2000 Mb/s.',
   'the clips storage is full': 'L’espace des extraits est plein.',
+  'too many clips are waiting: wait for some to be ready': 'Trop d’extraits en attente : attendez que certains soient prêts.',
+  'you have too many clips waiting: wait for some to be ready': 'Vous avez trop d’extraits en attente : attendez que certains soient prêts.',
+  'only the one who asked for this clip can cancel it': 'Seul l’auteur de cet extrait peut l’annuler.',
   'the disk of the clips is full': 'Le disque des extraits est plein.',
 
   Free: 'Libre',

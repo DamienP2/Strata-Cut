@@ -208,6 +208,7 @@ export const streaming: Record<string, string> = {
   'No source uses it.': 'Aucune source ne l’utilise.',
   'the image is a PNG, a JPEG or a WebP': 'L’image doit être un PNG, un JPEG ou un WebP.',
   'an image is 10 MB at most': 'Une image fait 10 Mo au plus.',
+  'too many images: delete some first': 'Trop d’images : supprimez-en d’abord.',
   'this image no longer exists': 'Cette image n’existe plus.',
   'Sound track': 'Piste son',
   'Track {n}': 'Piste {n}',

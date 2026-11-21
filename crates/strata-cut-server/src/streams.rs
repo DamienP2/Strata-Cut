@@ -140,7 +140,15 @@ fn effective(d: &Destination, o: &Overrides) -> Result<Destination, String> {
         d.key = o.key.trim().to_string();
     }
     if d.expose_url && !o.url.trim().is_empty() {
+        let saved = d.host().to_ascii_lowercase();
         d.url = o.url.trim().to_string();
+        // Another server: the saved secrets are not sent to it (the live gives its own key).
+        if d.host().to_ascii_lowercase() != saved {
+            d.passphrase.clear();
+            if !d.key_live {
+                d.key = o.key.trim().to_string();
+            }
+        }
     }
     if d.expose_bitrate && o.video_kbps > 0 {
         d.video_kbps = o.video_kbps.clamp(300, 50_000);
@@ -999,6 +1007,19 @@ mod tests {
         // Not handed over: the address stays the admin's.
         let e = effective(&d, &Overrides { key: "k".into(), url: "rtmp://other/app".into(), ..Default::default() }).unwrap();
         assert_eq!(e.url, "rtmp://live.example.com/app");
+        // Handed over: another server never gets the saved key nor the passphrase.
+        let mut d = dest("rtmp", "rtmp://live.example.com/app");
+        d.key = "saved".into();
+        d.expose_url = true;
+        let e = effective(&d, &Overrides { url: "rtmp://other.example/app".into(), ..Default::default() }).unwrap();
+        assert_eq!(target(&e), "rtmp://other.example/app");
+        let e = effective(&d, &Overrides { url: "rtmp://LIVE.example.com/app2".into(), ..Default::default() }).unwrap();
+        assert_eq!(target(&e), "rtmp://LIVE.example.com/app2/saved");
+        let mut s = dest("srt", "srt://regie.example.net:9000");
+        s.passphrase = "p".into();
+        s.expose_url = true;
+        let e = effective(&s, &Overrides { url: "srt://other.example:9000".into(), ..Default::default() }).unwrap();
+        assert!(e.passphrase.is_empty());
     }
 
     #[test]

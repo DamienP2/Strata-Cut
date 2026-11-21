@@ -26,6 +26,10 @@ use crate::{
     state::{Audience, Events, Shared},
 };
 
+/// Clip jobs waiting (queued or being cut), in all and for one account.
+const MAX_WAITING: usize = 100;
+const MAX_WAITING_EACH: usize = 20;
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Clip {
@@ -286,7 +290,7 @@ impl Clips {
         }
     }
 
-    /// Checks a request and queues it.
+    /// Checks a request and queues it (at most `MAX_WAITING` jobs waiting, `MAX_WAITING_EACH` an account).
     fn queue(&self, mut req: ClipRequest, by: &str, by_id: &str) -> Result<Job, String> {
         let rec = self.recorders.get(&req.recorder).ok_or("no such recorder")?;
         if req.kind == Kind::Image {
@@ -296,6 +300,17 @@ impl Clips {
             return Err("the clip has no frame".into());
         }
         let name = req.name.trim().to_string();
+        // A queue that stays short: each waiting job holds its recording back from the loop's trim.
+        {
+            let jobs = self.jobs.lock().unwrap();
+            let waiting = |j: &&Job| matches!(j.state, JobState::Queued | JobState::Running);
+            if jobs.iter().filter(waiting).count() >= MAX_WAITING {
+                return Err("too many clips are waiting: wait for some to be ready".into());
+            }
+            if jobs.iter().filter(waiting).filter(|j| j.by_id == by_id).count() >= MAX_WAITING_EACH {
+                return Err("you have too many clips waiting: wait for some to be ready".into());
+            }
+        }
         // The clips' space: their limit, and the free margin of their disk.
         {
             let lim = self.recorders.limits.lock().unwrap().clone();
@@ -630,7 +645,10 @@ async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
 
 async fn cancel(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
     require(me.can_extract())?;
-    let state = s.clips.jobs.lock().unwrap().iter().find(|j| j.id == id).map(|j| j.state).ok_or_else(|| not_found("job"))?;
+    let (state, by) = s.clips.jobs.lock().unwrap().iter().find(|j| j.id == id).map(|j| (j.state, j.by_id.clone())).ok_or_else(|| not_found("job"))?;
+    if by != me.id && !me.is_admin() {
+        return Err((StatusCode::FORBIDDEN, "only the one who asked for this clip can cancel it".into()));
+    }
     match state {
         JobState::Running => s.clips.cancel_running(&id),
         _ => {

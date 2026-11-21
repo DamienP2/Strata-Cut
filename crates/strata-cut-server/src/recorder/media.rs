@@ -52,6 +52,11 @@ pub fn routes() -> Router<Shared> {
         .route("/api/storage", get(storage))
 }
 
+/// Sees the sources' pictures and what was recorded: from Extraction, the Régie or the Streamer.
+fn sees(me: &crate::auth::User) -> bool {
+    me.can("extract.view") || me.can("schedule.view") || me.can("stream.view")
+}
+
 /// DeckLink cards: what the server has (GStreamer's module, Blackmagic's driver) and the cards seen.
 async fn decklink(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Value> {
     Json(super::decklink::status(&s.recorders).await)
@@ -93,6 +98,7 @@ async fn hardware_name(State(s): State<Shared>, CurrentUser(me): CurrentUser, Js
 
 /// A recorder's logo (an SVG is shown as an image only: no script of its own runs).
 async fn logo_get(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
+    s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let (path, mime) = super::logo::find(s.recorders.data_dir(), &id).ok_or_else(|| not_found("logo"))?;
     let bytes = tokio::fs::read(&path).await.map_err(|_| not_found("logo"))?;
     Ok((
@@ -128,6 +134,7 @@ async fn logo_url(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath
 
 async fn logo_delete(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
     require(me.is_admin())?;
+    s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     super::logo::remove(s.recorders.data_dir(), &id);
     s.recorders.list_changed();
     Ok(StatusCode::NO_CONTENT)
@@ -143,7 +150,8 @@ struct PreviewQuery {
 
 /// A still of what a card's input receives, for the recorder's form (its format in `X-Format`).
 /// An input a recorder captures gives that recorder's still; no picture: 204.
-async fn decklink_preview(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(n): UrlPath<u32>, Query(q): Query<PreviewQuery>) -> ApiResult<Response> {
+async fn decklink_preview(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(n): UrlPath<u32>, Query(q): Query<PreviewQuery>) -> ApiResult<Response> {
+    require(me.is_admin())?;
     use super::decklink::{CONNECTIONS, MODES};
     let connection = q.connection.filter(|c| CONNECTIONS.contains(&c.as_str())).unwrap_or_else(|| "auto".into());
     let mode = q.mode.filter(|m| MODES.contains(&m.as_str())).unwrap_or_else(|| "auto".into());
@@ -190,8 +198,8 @@ async fn hardware_forget(State(s): State<Shared>, CurrentUser(me): CurrentUser, 
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn list(State(s): State<Shared>, CurrentUser(_): CurrentUser) -> Json<Value> {
-    Json(s.recorders.list_json())
+async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<Value> {
+    Json(s.recorders.list_json(me.is_admin()))
 }
 
 #[derive(Deserialize)]
@@ -383,7 +391,8 @@ fn file_response(data: Vec<u8>, mime: &'static str, cache: &'static str) -> Resp
     r
 }
 
-async fn thumb(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
+async fn thumb(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
+    require(sees(&me))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let path = rec.dir.lock().unwrap().join("thumb.jpg");
     let data = tokio::fs::read(path).await.map_err(|_| not_found("image"))?;
@@ -442,7 +451,8 @@ async fn media(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
 }
 
 /// The recorded spans of the loop, for the overview bar.
-async fn coverage(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+async fn coverage(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
+    require(sees(&me))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let runs = rec.runs.read().unwrap();
     let spans: Vec<Value> = runs
@@ -511,7 +521,8 @@ async fn fragment(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath
 }
 
 /// The programmes of the source's guide between two server times.
-async fn epg(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<Window>) -> ApiResult<Json<Value>> {
+async fn epg(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<Window>) -> ApiResult<Json<Value>> {
+    require(sees(&me))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let events = rec.epg.lock().unwrap().between(q.from, q.to);
     Ok(Json(json!({ "events": events })))
@@ -526,7 +537,8 @@ struct WaveQuery {
 
 /// The sound level between two server times, in `n` columns (peak of each;
 /// -1 where nothing was recorded).
-async fn wave(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<WaveQuery>) -> ApiResult<Json<Value>> {
+async fn wave(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<WaveQuery>) -> ApiResult<Json<Value>> {
+    require(me.can("extract.view"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let n = q.n.clamp(1, 4000);
     if q.to <= q.from || q.to.is_nan() || q.from.is_nan() {
@@ -595,7 +607,8 @@ fn frame_cache() -> &'static FrameCache {
 }
 
 /// A still of the loop at a server time, from the proxy (the timeline's strip).
-async fn frame(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<At>) -> ApiResult<Response> {
+async fn frame(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<At>) -> ApiResult<Response> {
+    require(sees(&me))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let h = q.h.clamp(36, 540) & !1;
     let (init, seg, t, key) = {

@@ -91,6 +91,21 @@ pub fn this_machine(peer: SocketAddr, headers: &HeaderMap) -> bool {
     }
 }
 
+/// The address of whoever sent the request. Behind a reverse proxy on this machine (a loopback
+/// peer), the one the proxy names last in `X-Forwarded-For` (the one it saw itself): else every
+/// client would share the proxy's address, and its sign-in throttling.
+pub fn client_ip(peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
+    let ip = match peer.ip() {
+        IpAddr::V6(v6) => v6.to_ipv4_mapped().map(IpAddr::V4).unwrap_or(IpAddr::V6(v6)),
+        ip => ip,
+    };
+    if !ip.is_loopback() {
+        return ip;
+    }
+    let forwarded = header(headers, "x-forwarded-for").and_then(|v| v.rsplit(',').next()).or_else(|| header(headers, "x-real-ip"));
+    forwarded.and_then(|v| v.trim().parse().ok()).unwrap_or(ip)
+}
+
 /// Headers on every answer.
 pub async fn every_answer(req: Request, next: Next) -> Response {
     let mut res = next.run(req).await;
@@ -170,6 +185,18 @@ impl Logins {
 mod tests {
     use super::*;
     use axum::http::HeaderValue;
+
+    #[test]
+    fn client_behind_a_proxy() {
+        let local: SocketAddr = "127.0.0.1:5000".parse().unwrap();
+        let far: SocketAddr = "203.0.113.9:5000".parse().unwrap();
+        let fwd = h(&[("x-forwarded-for", "198.51.100.1, 198.51.100.7")]);
+        assert_eq!(client_ip(local, &fwd).to_string(), "198.51.100.7");
+        // Only a proxy on this machine is believed.
+        assert_eq!(client_ip(far, &fwd).to_string(), "203.0.113.9");
+        assert_eq!(client_ip(local, &h(&[("x-forwarded-for", "garbage")])).to_string(), "127.0.0.1");
+        assert_eq!(client_ip(local, &HeaderMap::new()).to_string(), "127.0.0.1");
+    }
 
     fn h(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
         let mut m = HeaderMap::new();

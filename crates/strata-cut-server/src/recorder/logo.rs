@@ -12,6 +12,12 @@ fn dir(data_dir: &Path) -> PathBuf {
     data_dir.join("logos")
 }
 
+/// The file of a logo: only a plain id (letters, digits, - and _) names one, never a path.
+fn file(data_dir: &Path, id: &str, ext: &str) -> Option<PathBuf> {
+    let plain = !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    plain.then(|| dir(data_dir).join(format!("{id}.{ext}")))
+}
+
 /// The type of an image from its first bytes: (extension, MIME type).
 pub fn kind(b: &[u8]) -> Option<(&'static str, &'static str)> {
     if b.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -31,7 +37,7 @@ pub fn kind(b: &[u8]) -> Option<(&'static str, &'static str)> {
 
 /// The logo's file and its MIME type.
 pub fn find(data_dir: &Path, id: &str) -> Option<(PathBuf, &'static str)> {
-    EXTS.iter().map(|e| dir(data_dir).join(format!("{id}.{e}"))).find(|p| p.is_file()).and_then(|p| {
+    EXTS.iter().filter_map(|e| file(data_dir, id, e)).find(|p| p.is_file()).and_then(|p| {
         let head = std::fs::read(&p).ok()?;
         kind(&head).map(|(_, mime)| (p, mime))
     })
@@ -45,8 +51,8 @@ pub fn version(data_dir: &Path, id: &str) -> Option<i64> {
 }
 
 pub fn remove(data_dir: &Path, id: &str) {
-    for e in EXTS {
-        let _ = std::fs::remove_file(dir(data_dir).join(format!("{id}.{e}")));
+    for p in EXTS.iter().filter_map(|e| file(data_dir, id, e)) {
+        let _ = std::fs::remove_file(p);
     }
 }
 
@@ -55,9 +61,10 @@ pub fn save(data_dir: &Path, id: &str, bytes: &[u8]) -> Result<(), String> {
         return Err("the logo is 2 MB at most".into());
     }
     let (ext, _) = kind(bytes).ok_or("the logo is a PNG, JPEG, WebP, GIF or SVG image")?;
+    let path = file(data_dir, id, ext).ok_or("no such recorder")?;
     std::fs::create_dir_all(dir(data_dir)).map_err(|e| e.to_string())?;
     remove(data_dir, id);
-    crate::paths::write_atomic(&dir(data_dir).join(format!("{id}.{ext}")), bytes, false).map_err(|e| e.to_string())
+    crate::paths::write_atomic(&path, bytes, false).map_err(|e| e.to_string())
 }
 
 /// Not an address of this machine, nor the cloud's metadata (link-local): a logo comes from the web.
@@ -68,7 +75,11 @@ fn allowed(host: &str, port: u16) -> Result<(), String> {
         return Err(format!("unknown address: {host}"));
     }
     for a in addrs {
-        let ip = a.ip();
+        // An IPv6 address that wraps an IPv4 one (::ffff:127.0.0.1) is judged as that one.
+        let ip = match a.ip() {
+            std::net::IpAddr::V6(v) => v.to_ipv4_mapped().map_or(std::net::IpAddr::V6(v), std::net::IpAddr::V4),
+            ip => ip,
+        };
         let local = match ip {
             std::net::IpAddr::V4(v) => v.is_loopback() || v.is_link_local() || v.is_unspecified() || v.is_broadcast(),
             std::net::IpAddr::V6(v) => v.is_loopback() || v.is_unspecified() || (v.segments()[0] & 0xffc0) == 0xfe80,
@@ -122,5 +133,11 @@ mod tests {
         assert_eq!(kind(b"<html><body>no</body></html>"), None);
         assert!(allowed("127.0.0.1", 80).is_err());
         assert!(allowed("169.254.169.254", 80).is_err());
+        assert!(allowed("::ffff:127.0.0.1", 80).is_err());
+        let d = Path::new("/data");
+        assert!(file(d, "../clips/abc", "jpg").is_none());
+        assert!(file(d, "..", "jpg").is_none());
+        assert!(file(d, "", "jpg").is_none());
+        assert_eq!(file(d, "0a1b2c3d4e5f", "png"), Some(PathBuf::from("/data/logos/0a1b2c3d4e5f.png")));
     }
 }

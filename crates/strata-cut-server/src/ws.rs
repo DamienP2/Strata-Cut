@@ -31,7 +31,7 @@ pub fn reaches(a: &Audience, u: &User) -> bool {
     match a {
         Audience::All => true,
         Audience::Admins => u.is_admin(),
-        Audience::User(id) => *id == u.id,
+        Audience::NotAdmins => !u.is_admin(),
     }
 }
 
@@ -40,7 +40,7 @@ fn hello(s: &Shared, me: &User) -> Value {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let mut v = json!({"type": "hello", "user": me.public(), "serverName": cfg.name, "serverTime": now, "timezone": cfg.timezone});
     if let Value::Object(m) = &mut v {
-        m.extend(s.app_hello());
+        m.extend(s.app_hello(me.is_admin()));
     }
     v
 }
@@ -105,6 +105,6 @@ mod tests {
         let viewer = mk(crate::auth::Role::Viewer);
         assert!(reaches(&Audience::All, &viewer));
         assert!(reaches(&Audience::Admins, &admin) && !reaches(&Audience::Admins, &viewer));
-        assert!(reaches(&Audience::User(viewer.id.clone()), &viewer) && !reaches(&Audience::User(viewer.id.clone()), &admin));
+        assert!(reaches(&Audience::NotAdmins, &viewer) && !reaches(&Audience::NotAdmins, &admin));
     }
 }
