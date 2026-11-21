@@ -489,7 +489,11 @@ async fn fragment(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(
                 dir.join(format!("p{n:08}.m4s"))
             }
         };
-        let data = tokio::fs::read(&path).await.map_err(|_| not_found("fragment"))?;
+        let mut data = tokio::fs::read(&path).await.map_err(|_| not_found("fragment"))?;
+    // The init segment without its edit lists (Safari applies them, see `mp4::without_edits`).
+    if file == "init.mp4" {
+        data = super::index::mp4::without_edits(&data);
+    }
         return Ok(file_response(data, "video/mp4", "private, max-age=86400"));
     }
     let video = match track.as_str() {
@@ -510,7 +514,11 @@ async fn fragment(State(s): State<Shared>, CurrentUser(_): CurrentUser, UrlPath(
             r.proxy_path(video, n)
         }
     };
-    let data = tokio::fs::read(&path).await.map_err(|_| not_found("fragment"))?;
+    let mut data = tokio::fs::read(&path).await.map_err(|_| not_found("fragment"))?;
+    // The init segment without its edit lists (Safari applies them, see `mp4::without_edits`).
+    if file == "init.mp4" {
+        data = super::index::mp4::without_edits(&data);
+    }
     Ok(file_response(data, "video/mp4", "private, max-age=86400"))
 }
 

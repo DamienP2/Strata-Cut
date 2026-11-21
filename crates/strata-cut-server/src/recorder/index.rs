@@ -392,6 +392,43 @@ pub mod mp4 {
         if seg[s] == 1 { be64(seg, s + 4) } else { be32(seg, s + 4).map(u64::from) }
     }
 
+    /// An init segment without its edit lists (`edts`). FFmpeg writes one that delays the track by
+    /// the source's first timestamp (kept as received: `-copyts`); Chrome ignores it in a
+    /// MediaSource, Safari applies it: the picture and the sound then came seconds away from where
+    /// the player put them (the live started, went back, then held). The player places the
+    /// fragments itself (`timestampOffset`). Unchanged when it cannot be read.
+    pub fn without_edits(init: &[u8]) -> Vec<u8> {
+        /// The boxes of b[start..end] written again, `edts` left out inside a `trak` (and the
+        /// `moov` and `trak` around them resized).
+        fn rewrite(b: &[u8], start: usize, end: usize, in_trak: bool) -> Option<Vec<u8>> {
+            let mut out = Vec::with_capacity(end - start);
+            let mut i = start;
+            while i + 8 <= end {
+                let size = be32(b, i)? as usize;
+                // 64-bit or open-ended sizes: not in an init segment of ours; left as it is.
+                if size < 8 || i + size > end {
+                    return None;
+                }
+                let typ = &b[i + 4..i + 8];
+                if in_trak && typ == b"edts" {
+                    i += size;
+                    continue;
+                }
+                if typ == b"moov" || typ == b"trak" {
+                    let inner = rewrite(b, i + 8, i + size, typ == b"trak")?;
+                    out.extend_from_slice(&((inner.len() + 8) as u32).to_be_bytes());
+                    out.extend_from_slice(typ);
+                    out.extend_from_slice(&inner);
+                } else {
+                    out.extend_from_slice(&b[i..i + size]);
+                }
+                i += size;
+            }
+            (i == end).then_some(out)
+        }
+        rewrite(init, 0, init.len(), false).unwrap_or_else(|| init.to_vec())
+    }
+
     /// The codec string of an init segment for MediaSource (`avc1.4d401f`, `mp4a.40.2`).
     pub fn codec(init: &[u8]) -> Option<String> {
         let (ts, te) = find(init, 0, init.len(), &[b"moov", b"trak"])?;
@@ -413,6 +450,19 @@ pub mod mp4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edits_left_out() {
+        // moov { trak { tkhd, edts { elst }, mdia } }
+        let bx = |t: &[u8], body: &[u8]| -> Vec<u8> { let mut v = ((body.len() + 8) as u32).to_be_bytes().to_vec(); v.extend_from_slice(t); v.extend_from_slice(body); v };
+        let trak = [bx(b"tkhd", &[1, 2, 3]), bx(b"edts", &bx(b"elst", &[0; 16])), bx(b"mdia", &[4, 5])].concat();
+        let init = [bx(b"ftyp", b"isom"), bx(b"moov", &bx(b"trak", &trak))].concat();
+        let out = mp4::without_edits(&init);
+        let want_trak = [bx(b"tkhd", &[1, 2, 3]), bx(b"mdia", &[4, 5])].concat();
+        assert_eq!(out, [bx(b"ftyp", b"isom"), bx(b"moov", &bx(b"trak", &want_trak))].concat());
+        // Not readable: unchanged.
+        assert_eq!(mp4::without_edits(&[0, 0, 0, 3, 1]), vec![0, 0, 0, 3, 1]);
+    }
 
     #[test]
     fn wave_split_by_durations() {
