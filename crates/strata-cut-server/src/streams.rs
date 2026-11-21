@@ -4,13 +4,20 @@
 //!
 //! A destination's secrets (stream key, SRT passphrase) are masked for everyone; an operator
 //! sees only its name, its type, its server's host and what the admin hands to them (a key
-//! given for each live, the server's address, the bitrate). A key given for a live is kept in
-//! memory only, for that live.
+//! given for each live, the server's address, the bitrate). A key given for a live is kept for
+//! that live only: in memory, and in `lives.json` (readable by the service alone) until it stops.
+//!
+//! The lives under way are written in `lives.json`: after a restart of the server (an update, a
+//! reboot, a crash) they start again by themselves. Only a stop asked for (or a live that never
+//! started) takes one out.
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{atomic::Ordering, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -122,7 +129,7 @@ impl Destination {
 }
 
 /// What a live may change from the destination's settings (the operator's, when handed over).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Overrides {
     pub key: String,
@@ -254,11 +261,28 @@ fn free_port() -> Option<u16> {
     std::net::UdpSocket::bind("127.0.0.1:0").ok()?.local_addr().ok().map(|a| a.port())
 }
 
+/// A live under way, as written in `lives.json` (started again after a restart).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Live {
+    destination: String,
+    source: String,
+    #[serde(default)]
+    overrides: Overrides,
+    #[serde(default)]
+    by: String,
+    /// Tells this live from the next one to the same destination.
+    token: u64,
+}
+
 /// A live to one destination.
 struct Session {
     dest: String,
     source: String,
     started: i64,
+    token: u64,
+    /// Started again after a restart of the server: it was live, and is made again until stopped.
+    resumed: bool,
     stop: watch::Sender<bool>,
     /// What it is expected to send (kb/s), counted by the guard until it really sends.
     planned_kbps: f64,
@@ -289,6 +313,8 @@ pub struct Streams {
     /// Lives that could not start (the destination never took them), by destination: shown
     /// with their reason until another start, a stop, or 10 minutes.
     failed: Mutex<HashMap<String, Failed>>,
+    /// The server is stopping: its lives stay in `lives.json`, to start again.
+    closing: AtomicBool,
 }
 
 struct Failed {
@@ -301,11 +327,42 @@ fn path(data_dir: &Path) -> PathBuf {
     data_dir.join("destinations.json")
 }
 
+fn lives_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("lives.json")
+}
+
+static LIVES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl Streams {
     pub fn start(data_dir: &Path, recorders: Arc<Manager>, events: Events) -> Arc<Streams> {
-        Arc::new(Streams { data_dir: data_dir.to_path_buf(), recorders, events, sessions: Mutex::new(HashMap::new()), failed: Mutex::new(HashMap::new()) })
+        Arc::new(Streams { data_dir: data_dir.to_path_buf(), recorders, events, sessions: Mutex::new(HashMap::new()), failed: Mutex::new(HashMap::new()), closing: AtomicBool::new(false) })
+    }
+
+    /// Changes the lives written: `f` gets them, and changes them.
+    fn lives(&self, f: impl FnOnce(&mut Vec<Live>)) {
+        let _g = LIVES.lock().unwrap();
+        let path = lives_path(&self.data_dir);
+        let mut all: Vec<Live> = crate::paths::read_json(&path).unwrap_or_default();
+        f(&mut all);
+        if let Err(e) = crate::paths::write_json(&path, &all, true) {
+            tracing::warn!("{}: {e}", path.display());
+        }
+    }
+
+    /// The lives under way when the server stopped: started again (their destination and their
+    /// source still there; the resources' guard does not hold back what already ran).
+    pub fn resume(self: &Arc<Self>) {
+        let all: Vec<Live> = crate::paths::read_json(&lives_path(&self.data_dir)).unwrap_or_default();
+        for l in all {
+            if let Err(e) = self.begin_live(&l, true) {
+                tracing::warn!("streaming to {}: not started again after the restart: {e}", self.name_of(&l.destination));
+                self.lives(|all| all.retain(|x| x.token != l.token));
+                self.failed.lock().unwrap().insert(l.destination.clone(), Failed { source: l.source.clone(), message: e, at: now_ms() });
+                self.changed();
+            }
+        }
     }
 
     pub fn list(&self) -> Vec<Destination> {
@@ -401,6 +458,11 @@ impl Streams {
 
     /// Sends a source to a destination (a destination sends one source at a time).
     pub fn begin(self: &Arc<Self>, dest_id: &str, source: &str, o: &Overrides, who: &str) -> Result<(), String> {
+        self.begin_live(&Live { destination: dest_id.into(), source: source.into(), overrides: o.clone(), by: who.into(), token: rand_key() }, false)
+    }
+
+    fn begin_live(self: &Arc<Self>, live: &Live, resumed: bool) -> Result<(), String> {
+        let (dest_id, source, o, who) = (live.destination.as_str(), live.source.as_str(), &live.overrides, live.by.as_str());
         let dest = self.get(dest_id).ok_or("no such destination")?;
         let rec = self.recorders.get(source).ok_or("no such source")?;
         let d = effective(&dest, o)?;
@@ -416,15 +478,23 @@ impl Streams {
                 Some(s) => Some(s.clone()),
                 None => None,
             };
-            let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), planned_kbps, stop: watch::channel(false).0, finished: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
+            let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), token: live.token, resumed, planned_kbps, stop: watch::channel(false).0, finished: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
             sessions.insert(dest_id.to_string(), session.clone());
             (session, previous)
         };
         self.failed.lock().unwrap().remove(dest_id);
+        self.lives(|all| {
+            all.retain(|x| x.destination != dest_id);
+            all.push(live.clone());
+        });
         // The source is received while it is sent (recorded meanwhile, whatever its programme).
         rec.streams.fetch_add(1, Ordering::Relaxed);
         rec.wake.notify_one();
-        tracing::info!("{who} sends {} to {}", rec.config().name, dest.name);
+        if resumed {
+            tracing::info!("streaming to {} again after the restart (started by {who}): {}", dest.name, rec.config().name);
+        } else {
+            tracing::info!("{who} sends {} to {}", rec.config().name, dest.name);
+        }
         let me = self.clone();
         tokio::spawn(async move {
             if let Some(p) = previous {
@@ -432,6 +502,10 @@ impl Streams {
                 let _ = tokio::time::timeout(Duration::from_secs(5), done.wait_for(|d| *d)).await;
             }
             me.run(session.clone(), d).await;
+            // Stopped, or never started: not to start again. The server stopping: it stays.
+            if !me.closing.load(Ordering::Relaxed) {
+                me.lives(|all| all.retain(|x| x.token != session.token));
+            }
             let _ = session.finished.send(true);
             rec.streams.fetch_sub(1, Ordering::Relaxed);
             me.sessions.lock().unwrap().retain(|_, s| !Arc::ptr_eq(s, &session));
@@ -468,6 +542,7 @@ impl Streams {
     }
 
     pub async fn shutdown(&self) {
+        self.closing.store(true, Ordering::Relaxed);
         let all: Vec<Arc<Session>> = self.sessions.lock().unwrap().values().cloned().collect();
         for s in &all {
             let _ = s.stop.send(true);
@@ -576,8 +651,21 @@ impl Streams {
     async fn run(&self, s: Arc<Session>, d: Destination) {
         let mut stop = s.stop.subscribe();
         let mut failures = 0u32;
-        // Live at least once: a link lost on the way is made again.
-        let mut ever_live = false;
+        // Live at least once (or before the restart): a link lost on the way is made again.
+        let mut ever_live = s.resumed;
+        // After a restart the sources start too: their first seconds come before the slate.
+        if s.resumed {
+            let since = std::time::Instant::now();
+            while !*stop.borrow() && since.elapsed() < Duration::from_secs(30) && !self.recorders.get(&s.source).is_some_and(|r| r.flowing()) {
+                if since.elapsed() > Duration::from_secs(1) {
+                    self.set(&s, |st| st.message = "waiting for the source".into());
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                    _ = stop.changed() => {}
+                }
+            }
+        }
         let ffmpeg = self.recorders.ffmpeg.clone();
         loop {
             if *stop.borrow() {

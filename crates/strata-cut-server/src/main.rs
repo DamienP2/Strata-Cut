@@ -273,6 +273,8 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     tokio::spawn(recorder::decklink::search_at_start(data_dir.clone()));
     let clips = clips::Clips::start(&data_dir, &first, events.clone(), recorders.clone());
     let streams = streams::Streams::start(&data_dir, recorders.clone(), events.clone());
+    // The lives under way before the restart start again.
+    streams.resume();
     alerts::start(data_dir.clone(), recorders.clone(), streams.clone());
     loop {
         let config = config::ServerConfig::load(&data_dir);

@@ -54,6 +54,14 @@ const RULES: Rule[] = [
       `Le processus ${m[1]} (version ${m[2]}), démarré le ${m[3]}, ne s’est pas arrêté de lui-même : tué, mémoire saturée, coupure de courant ou plantage`,
   ],
   [
+    /^streaming to (.+?) again after the restart \(started by (.+?)\): (.+)$/,
+    (m) => `Diffusion de ${m[3]} vers ${m[1]} reprise après le redémarrage (lancée par ${m[2]})`,
+  ],
+  [
+    /^streaming to (.+?): not started again after the restart: (.+)$/,
+    (m) => `Diffusion vers ${m[1]} : non reprise après le redémarrage : ${known(m[2])}`,
+  ],
+  [
     /^streaming to (.+?): could not start: (.+)$/,
     (m) => `Diffusion vers ${m[1]} : n’a pas pu démarrer : ${known(m[2])}`,
   ],
