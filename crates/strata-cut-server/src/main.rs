@@ -24,6 +24,7 @@ mod perf;
 mod prefs;
 mod recorder;
 mod service;
+mod program;
 mod slates;
 mod sso;
 mod state;
@@ -272,7 +273,8 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     // The capture cards are searched once now (then only when asked, in Système › Matériel).
     tokio::spawn(recorder::decklink::search_at_start(data_dir.clone()));
     let clips = clips::Clips::start(&data_dir, &first, events.clone(), recorders.clone());
-    let streams = streams::Streams::start(&data_dir, recorders.clone(), events.clone());
+    let programs = program::Programs::start(&data_dir, recorders.clone(), events.clone());
+    let streams = streams::Streams::start(&data_dir, recorders.clone(), programs, events.clone());
     // The lives under way before the restart start again.
     streams.resume();
     alerts::start(data_dir.clone(), recorders.clone(), streams.clone());

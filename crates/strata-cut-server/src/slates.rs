@@ -1,6 +1,7 @@
-//! The slates' images (Streamer): what a live sends while its source is lost. The images are
-//! dropped in the Streamer (PNG, JPEG or WebP, 10 MB at most), kept as `<data>/slates/<id>.<ext>`,
-//! and each source may have its own; without one, a dark picture with the source's name.
+//! The Streamer's pictures, kept as `<data>/slates/<id>.<ext>` (10 MB at most each): the slates
+//! and the programme's images (PNG, JPEG or WebP: what a live sends while its source is lost, or
+//! what CUT and AUTO put on air), and the overlays (`kind` "overlay": transparent PNG). Each
+//! source may have its own slate; without one, a dark picture with the source's name.
 use std::path::{Path, PathBuf};
 
 use axum::{
@@ -32,6 +33,9 @@ pub struct Image {
     pub ext: String,
     pub added: i64,
     pub by: String,
+    /// "" (a picture), or "overlay".
+    #[serde(default)]
+    pub kind: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -70,6 +74,13 @@ pub fn image_for(data_dir: &Path, source: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
+/// The file of a picture (any kind), if it is there.
+pub fn file_of(data_dir: &Path, id: &str) -> Option<PathBuf> {
+    let img = load(data_dir).images.into_iter().find(|x| x.id == id)?;
+    let p = dir(data_dir).join(format!("{}.{}", img.id, img.ext));
+    p.is_file().then_some(p)
+}
+
 /// PNG, JPEG or WebP, from its first bytes: (extension, MIME type).
 fn kind(b: &[u8]) -> Option<(&'static str, &'static str)> {
     match crate::recorder::logo::kind(b)? {
@@ -96,6 +107,9 @@ async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResul
 struct Named {
     #[serde(default)]
     name: String,
+    /// "overlay" for an overlay.
+    #[serde(default)]
+    kind: String,
 }
 
 async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Named>, body: Bytes) -> ApiResult<Json<Image>> {
@@ -104,6 +118,10 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
         return Err(bad("an image is 10 MB at most"));
     }
     let (ext, _) = kind(&body).ok_or_else(|| bad("the image is a PNG, a JPEG or a WebP"))?;
+    let overlay = q.kind == "overlay";
+    if overlay && ext != "png" {
+        return Err(bad("an overlay is a PNG"));
+    }
     let name: String = q.name.trim().chars().filter(|c| !c.is_control()).take(80).collect();
     let img = Image {
         id: crate::api::new_id(),
@@ -111,6 +129,7 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
         ext: ext.into(),
         added: crate::recorder::now_ms(),
         by: me.username.clone(),
+        kind: if overlay { "overlay".into() } else { String::new() },
     };
     let data_dir = s.data_dir.clone();
     let saved = img.clone();
