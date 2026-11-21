@@ -224,8 +224,30 @@ async fn probe(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(c): J
 
 async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(c): Json<RecorderConfig>) -> ApiResult<Json<Value>> {
     require(me.is_admin())?;
-    s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    guard_start(&s, &rec, &c)?;
     s.recorders.update(&id, c).map(Json).map_err(bad)
+}
+
+/// Would the source record now with these settings: all the time, or one of its programmed
+/// recordings is on now (unless it is never recorded)?
+fn records_now(s: &Shared, id: &str, c: &RecorderConfig) -> bool {
+    let m = &s.recorders;
+    c.enabled || (!c.slots_off && m.schedules.active(id, &m.tz(), super::now_ms()).is_some())
+}
+
+/// The source received already (recording, or starting to).
+fn running(rec: &super::Rec) -> bool {
+    matches!(rec.status.lock().unwrap().state, super::State::Recording | super::State::Starting)
+}
+
+/// A change made by hand that starts a recording now: is there room for it? (A programmed
+/// recording that starts at its time is never refused.)
+fn guard_start(s: &Shared, rec: &super::Rec, new: &RecorderConfig) -> ApiResult<()> {
+    if !running(rec) && records_now(s, &rec.id, new) && !records_now(s, &rec.id, &rec.config()) {
+        crate::limits::check(s, &crate::limits::recording(new))?;
+    }
+    Ok(())
 }
 
 async fn delete(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
@@ -245,10 +267,8 @@ async fn set_enabled(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlP
     require(me.can("schedule.edit"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut c = rec.config();
-    if b.enabled && !c.enabled && !matches!(rec.status.lock().unwrap().state, super::State::Recording) {
-        crate::limits::check(&s, &crate::limits::recording(&c))?;
-    }
     c.enabled = b.enabled;
+    guard_start(&s, &rec, &c)?;
     s.recorders.update(&id, c).map(Json).map_err(bad)
 }
 
@@ -263,16 +283,14 @@ async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, Ur
     require(me.can("schedule.edit"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut c = rec.config();
-    // Recording all the time from now: is there room for it (unless it records already)?
-    if b.mode == "continuous" && !c.enabled && !matches!(rec.status.lock().unwrap().state, super::State::Recording) {
-        crate::limits::check(&s, &crate::limits::recording(&c))?;
-    }
     (c.enabled, c.slots_off) = match b.mode.as_str() {
         "continuous" => (true, false),
         "slots" => (false, false),
         "off" => (false, true),
         _ => return Err(bad("the recording is continuous, by slots or off")),
     };
+    // Recording from now on (all the time, or a programmed recording on now): is there room for it?
+    guard_start(&s, &rec, &c)?;
     s.recorders.update(&id, c).map(Json).map_err(bad)
 }
 
@@ -320,7 +338,15 @@ async fn put_slot_id(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlP
 
 fn save_slot(s: &Shared, slot: super::schedule::Slot) -> ApiResult<Json<Value>> {
     let m = s.recorders.clone();
-    m.get(&slot.recorder).ok_or_else(|| not_found("recorder"))?;
+    let rec = m.get(&slot.recorder).ok_or_else(|| not_found("recorder"))?;
+    // A programmed recording saved while its time is on starts now: by hand, so the guard asks.
+    let c = rec.config();
+    let now = super::now_ms();
+    let mut probe = slot.clone();
+    probe.normalize();
+    if probe.enabled && !c.slots_off && !running(&rec) && !records_now(s, &rec.id, &c) && probe.occurrences(&m.tz(), now, now + 1).iter().any(|&(a, b)| a <= now && now < b) {
+        crate::limits::check(s, &crate::limits::recording(&c))?;
+    }
     let before = m.reserved();
     let saved = m
         .schedules

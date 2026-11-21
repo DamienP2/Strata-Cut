@@ -208,6 +208,8 @@ struct Session {
     source: String,
     started: i64,
     stop: watch::Sender<bool>,
+    /// What it is expected to send (kb/s), counted by the guard until it really sends.
+    planned_kbps: f64,
     /// True once its last FFmpeg has ended (a live started again waits for it: the destination
     /// takes one link per stream key).
     finished: watch::Sender<bool>,
@@ -274,7 +276,17 @@ impl Streams {
 
     /// What the streams send out now, kb/s.
     pub fn out_kbps(&self) -> f64 {
-        self.sessions.lock().unwrap().values().map(|s| s.stats.lock().unwrap().kbps).sum()
+        // A live still connecting sends nothing yet: what it will send is counted, so that several
+        // started at once cannot all pass the limit.
+        self.sessions
+            .lock()
+            .unwrap()
+            .values()
+            .map(|s| {
+                let st = s.stats.lock().unwrap();
+                if st.kbps > 0.0 || st.state == "live" { st.kbps } else { s.planned_kbps }
+            })
+            .sum()
     }
 
     /// What sending this source to this destination would take (the resources' guard); None
@@ -298,7 +310,12 @@ impl Streams {
         } else {
             rec.config().bitrate.max(8.0) * 1000.0
         };
-        Ok(Some(crate::limits::stream(format!("{} → {}", rec.config().name, dest.name), again, d.height, height, kbps)))
+        let mut cost = crate::limits::stream(format!("{} → {}", rec.config().name, dest.name), again, d.height, height, kbps);
+        // A source not received yet is started by the stream: its receiver and preview count too.
+        if !matches!(rec.status.lock().unwrap().state, crate::recorder::State::Recording | crate::recorder::State::Starting) {
+            cost.cores += crate::limits::recording(&rec.config()).cores;
+        }
+        Ok(Some(cost))
     }
 
     /// The lives under way.
@@ -333,6 +350,7 @@ impl Streams {
         let dest = self.get(dest_id).ok_or("no such destination")?;
         let rec = self.recorders.get(source).ok_or("no such source")?;
         let d = effective(&dest, o)?;
+        let planned_kbps = self.cost(dest_id, source, o).ok().flatten().map(|c| c.kbps).unwrap_or(0.0);
         // Looked at and taken in one go: two starts at once make one live. A live being stopped
         // (its FFmpeg ends within a second) does not count: the new one starts after it.
         let (session, previous) = {
@@ -344,7 +362,7 @@ impl Streams {
                 Some(s) => Some(s.clone()),
                 None => None,
             };
-            let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), stop: watch::channel(false).0, finished: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
+            let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), planned_kbps, stop: watch::channel(false).0, finished: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
             sessions.insert(dest_id.to_string(), session.clone());
             (session, previous)
         };

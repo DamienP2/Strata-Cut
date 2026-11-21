@@ -33,6 +33,8 @@ enum Outcome {
     Stopped,
     /// FFmpeg ended by itself.
     Exited { had_data: bool, message: String },
+    /// The source has no sound: started again at once without it (not a failure).
+    NoAudio,
 }
 
 pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
@@ -81,6 +83,7 @@ pub async fn supervise(m: Arc<Manager>, rec: Arc<Rec>) {
                 failures = 0;
             }
             Outcome::Stopped => break,
+            Outcome::NoAudio => failures = 0,
             Outcome::Exited { had_data, message } => {
                 let bot = message == super::web::BOT || message == super::web::BOT_COOKIES;
                 if had_data {
@@ -875,7 +878,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 if audio && lines.iter().any(|l| l.contains("matches no streams") && l.contains("0:a:0")) {
                     rec.no_audio.store(true, Ordering::Relaxed);
                     tracing::info!("{}: no audio in the source", cfg.name);
-                    break Outcome::Exited { had_data: scan.had_data, message: String::new() };
+                    break Outcome::NoAudio;
                 }
                 let message = best_line(&lines);
                 match status {
