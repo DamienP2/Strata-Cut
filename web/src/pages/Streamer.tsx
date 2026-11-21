@@ -22,6 +22,7 @@ import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
 import { explainGuard } from '../ui/guard';
 import { SourceGroups } from '../ui/SourceGroups';
+import { SlateRow } from './StreamerSlate';
 
 const COLORS = ['var(--accent)', 'var(--pvw)', 'var(--warn)', '#c084fc', '#38bdf8'];
 
@@ -203,6 +204,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
         <span>{t('Destinations')}</span>
         {mine.length > 0 && <em>{`${tn(mine.length, '{n} live', '{n} live')} · ${mbps(out, locale())}`}</em>}
       </header>
+      <SlateRow rec={rec} />
       {run && ready.length > 1 && (
         <button type="button" className="btn primary st-all" disabled={starting} onClick={() => void startAll()}>
           <Play size={13} /> {t('Start all ({n})', { n: ready.length })}

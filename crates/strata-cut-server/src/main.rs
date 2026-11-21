@@ -24,6 +24,7 @@ mod perf;
 mod prefs;
 mod recorder;
 mod service;
+mod slates;
 mod sso;
 mod state;
 mod storage;

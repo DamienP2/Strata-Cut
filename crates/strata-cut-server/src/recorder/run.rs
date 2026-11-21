@@ -33,7 +33,8 @@ enum Outcome {
     Stopped,
     /// FFmpeg ended by itself.
     Exited { had_data: bool, message: String },
-    /// The source has no sound: started again at once without it (not a failure).
+    /// The source has no sound, or fewer tracks than expected: started again at once with what
+    /// it has (not a failure).
     NoAudio,
 }
 
@@ -926,6 +927,14 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 let lines: Vec<String> = plog.lock().unwrap().iter().cloned().collect();
                 stop_child(&mut child).await;
                 tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
+                // Fewer sound tracks than its last recording had (another programme, another
+                // source): the preview makes only those it has, at once.
+                let missing = lines.iter().filter(|l| l.contains("matches no streams")).filter_map(|l| l.split("0:a:").nth(1)?.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<u32>().ok()).filter(|k| *k >= 1).min();
+                if let Some(k) = missing {
+                    rec.audio_extra.store(k - 1, Ordering::Relaxed);
+                    tracing::info!("{}: {} sound track(s) in the source now", cfg.name, k);
+                    break Outcome::NoAudio;
+                }
                 if audio && lines.iter().any(|l| l.contains("matches no streams") && l.contains("0:a:0")) {
                     rec.no_audio.store(true, Ordering::Relaxed);
                     tracing::info!("{}: no audio in the source", cfg.name);

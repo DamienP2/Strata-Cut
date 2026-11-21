@@ -209,15 +209,28 @@ fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
 
 /// The picture sent while the source is lost: the source's size and rate (the platform sees the
 /// same stream), a dark ground, the source's name and that the live comes back; silence.
-fn slate_args(d: &Destination, text: &std::path::Path, (w, h, fps): (u32, u32, u32)) -> Vec<String> {
+fn slate_args(d: &Destination, text: &std::path::Path, image: Option<&std::path::Path>, (w, h, fps): (u32, u32, u32)) -> Vec<String> {
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
     let (w, h) = if d.height > 0 && d.encode == "h264" { ((d.height * 16 / 9 + 1) & !1, d.height) } else { (w, h) };
     let size = (h / 16).max(16);
     let file = text.to_string_lossy().replace('\\', "/").replace(':', "\\\\:").replace('\'', "");
-    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-re", "-f", "lavfi", "-i"]);
-    a.push(format!("color=c=0x0b0e16:s={w}x{h}:r={fps}"));
+    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-re"]);
+    match image {
+        // The source's own image (Streamer), fitted in the picture.
+        Some(img) => {
+            a.extend(s(&["-loop", "1", "-framerate", &fps.to_string(), "-i"]));
+            a.push(img.to_string_lossy().into_owned());
+        }
+        None => {
+            a.extend(s(&["-f", "lavfi", "-i"]));
+            a.push(format!("color=c=0x0b0e16:s={w}x{h}:r={fps}"));
+        }
+    }
     a.extend(s(&["-re", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-map", "0:v", "-map", "1:a", "-vf"]));
-    a.push(format!("drawtext=textfile='{file}':fontcolor=white:fontsize={size}:line_spacing={}:x=(w-tw)/2:y=(h-th)/2,format=yuv420p", size / 2));
+    a.push(match image {
+        Some(_) => format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=0x0b0e16,setsar=1,fps={fps},format=yuv420p"),
+        None => format!("drawtext=textfile='{file}':fontcolor=white:fontsize={size}:line_spacing={}:x=(w-tw)/2:y=(h-th)/2,format=yuv420p", size / 2),
+    });
     let k = if d.video_kbps > 0 { d.video_kbps.min(4000) } else { 2500 };
     a.extend(s(&["-c:v", "libx264", "-preset", "veryfast", "-tune", "stillimage", "-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string()]));
     let ak = if d.audio_kbps > 0 { d.audio_kbps } else { 128 };
@@ -510,8 +523,13 @@ impl Streams {
         tracing::warn!("streaming to {}: the source is no longer received, a slate is sent", d.name);
         loop {
             let mut cmd = Command::new(&self.recorders.ffmpeg);
-            cmd.args(slate_args(d, &text, size)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
+            // The source's image (chosen in the Streamer), else its name on a dark picture.
+            let image = crate::slates::image_for(&self.data_dir, &s.source);
+            cmd.args(slate_args(d, &text, image.as_deref(), size)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
             let mut child = cmd.spawn().ok();
+            // Back: received without a break for 2 s (a receiver that stops flushes its last
+            // packets: not a return).
+            let mut back_since: Option<std::time::Instant> = None;
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_millis(500)) => {}
@@ -523,7 +541,8 @@ impl Streams {
                     }
                     return false;
                 }
-                if rec.flowing() {
+                back_since = if rec.flowing() { back_since.or(Some(std::time::Instant::now())) } else { None };
+                if back_since.is_some_and(|t| t.elapsed() >= Duration::from_secs(2)) {
                     if let Some(c) = child.as_mut() {
                         let _ = c.kill().await;
                     }

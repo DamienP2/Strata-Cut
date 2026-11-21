@@ -213,6 +213,10 @@ const RULES: Rule[] = [
     (m) =>
       `${m[1]} : fin ${m[2] === "silence" ? "du silence" : `de l’${CONTENT[m[2]]}`}`,
   ],
+  [
+    /^(.+?): (\d+) sound track\(s\) in the source now$/,
+    (m) => `${m[1]} : ${m[2]} piste(s) son dans la source désormais`,
+  ],
   [/^listening on (.+)$/, (m) => `À l’écoute sur ${m[1]}`],
   [/^stopping: recorders stopped$/, () => "Arrêt : enregistreurs arrêtés"],
   [
