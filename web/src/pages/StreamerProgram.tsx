@@ -235,16 +235,43 @@ export function Antenne({ rec, prog, live, kbps, onStopAll, onSettings }: { rec:
   );
 }
 
-/** A level meter (two channels), dB from -60 to 0. */
+/** Where a meter's level is (a share of its height): dB from -60 to 0. */
+const vuShare = (db: number) => Math.max(0, Math.min(1, (db + 60) / 60));
+/** The meter's marks (dB). */
+const VU_MARKS = [0, -6, -12, -18, -24, -36, -48];
+
+/** A level meter (two channels), dB from -60 to 0, with its marks. */
 function Vu({ l, r }: { l: number; r: number }) {
-  const h = (db: number) => `${Math.max(0, Math.min(100, ((db + 60) / 60) * 100))}%`;
   return (
     <span className="pg-vu" aria-hidden="true">
-      <i style={{ height: h(l) }} />
-      <i style={{ height: h(r) }} />
+      <i style={{ height: `${vuShare(l) * 100}%` }} />
+      <i style={{ height: `${vuShare(r) * 100}%` }} />
+      {VU_MARKS.map((m) => (
+        <b key={m} className="pg-vu-mark" style={{ bottom: `${vuShare(m) * 100}%` }} />
+      ))}
     </span>
   );
 }
+
+/**
+ * A scale beside a fader or a meter: its marks where the thumb or the level stands (`share`: 0 at
+ * the bottom, 1 at the top). A fader's thumb travels its height less its own size.
+ */
+function Scale({ marks, share, fader }: { marks: number[]; share: (v: number) => number; fader?: boolean }) {
+  return (
+    <span className={`pg-scale ${fader ? "fader" : ""}`} aria-hidden="true">
+      {marks.map((m) => (
+        <i key={m} style={{ bottom: fader ? `calc(8px + (100% - 16px) * ${share(m)})` : `${share(m) * 100}%` }}>
+          {m > 0 ? `+${m}` : m}
+        </i>
+      ))}
+    </span>
+  );
+}
+
+/** The track faders' marks (dB of gain, -40 to +12). */
+const GAIN_MARKS = [12, 6, 0, -6, -12, -20, -30, -40];
+const gainShare = (db: number) => (db + 40) / 52;
 
 /** The levels of the source's tracks, measured by the server (5 a second while shown). */
 function useLevels(recId: string, n: number): number[][] {
@@ -359,6 +386,7 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
                 </span>
                 <span className="pg-strip-body">
                   <Fader value={tr.gain} min={-40} max={12} step={1} disabled={!run || !tr.on} label={t("Track {n}", { n: k + 1 })} onChange={(gain) => setTrack(k, { gain })} onReset={() => setTrack(k, { gain: 0 })} />
+                  <Scale marks={GAIN_MARKS} share={gainShare} fader />
                   <Vu l={lv[0]} r={lv[1]} />
                 </span>
                 <b className="pg-db">
@@ -380,6 +408,7 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
                 <small>{tc("channels", CHANNEL_LABEL[p.channels])}</small>
               </span>
               <span className="pg-strip-body">
+                <Scale marks={VU_MARKS} share={vuShare} />
                 <Vu l={out[0]} r={out[1]} />
               </span>
               <b className="pg-db">{p.imageOn ? t("Image") : " "}</b>
