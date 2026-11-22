@@ -421,7 +421,10 @@ impl Programs {
                     None => (picture_args(&sh), FrameBytes::Fixed(sh.frame_bytes() * 3 / 5)),
                     Some(k) => (sound_args(k), FrameBytes::PerSample(8)),
                 };
-                let why = decoding(&ffmpeg, &rec, args, bytes, &mut stop, |pts, b| match track {
+                // The pictures waiting are few: the decoder waits for room (what comes waits
+                // before it, compressed); the sound takes little room.
+                let room = || track.is_some() || inputs.room();
+                let why = decoding(&ffmpeg, &rec, args, bytes, &mut stop, room, |pts, b| match track {
                     None => inputs.picture(pts, b),
                     Some(k) => inputs.sound(k, pts, &b.as_chunks::<4>().0.iter().map(|x| f32::from_le_bytes(*x)).collect::<Vec<_>>()),
                 })
@@ -538,14 +541,16 @@ fn decoder_head() -> Vec<String> {
     ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", "-copyts", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i", INPUT].map(String::from).to_vec()
 }
 
-/// The source's picture: deinterlaced, at the programme's size (its shape kept, bands added) and
-/// rate, raw.
+/// The source's picture: deinterlaced, at the programme's size (its shape kept, bands added),
+/// raw, at its own rate (the mixer takes the one of each moment: no frames made up to fill a
+/// hole, they would show a frozen picture where the slate goes).
 fn picture_args(sh: &Shape) -> Vec<String> {
-    let (w, h, fps) = (sh.w, sh.h, sh.fps);
+    let (w, h) = (sh.w, sh.h);
     let mut a = decoder_head();
     a.extend(["-map", "0:v:0", "-an", "-sn", "-dn", "-vf"].map(String::from));
-    a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p,showinfo=checksum=0"));
-    a.extend(["-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"].map(String::from));
+    a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,showinfo=checksum=0"));
+    // Each picture decoded goes out once (none repeated to keep a rate: each is said, then read).
+    a.extend(["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"].map(String::from));
     a
 }
 
@@ -592,12 +597,14 @@ fn frame_said(line: &str) -> Option<(Option<f64>, Option<usize>)> {
 
 /// One run of a decoder: it reads the source's relay (a tap of its own), and gives each frame it
 /// makes to `take` with its timestamp, until it ends (its last words) or the programme stops.
-async fn decoding(ffmpeg: &str, rec: &Arc<Rec>, args: Vec<String>, bytes: FrameBytes, stop: &mut watch::Receiver<bool>, mut take: impl FnMut(f64, Vec<u8>)) -> String {
+async fn decoding(ffmpeg: &str, rec: &Arc<Rec>, args: Vec<String>, bytes: FrameBytes, stop: &mut watch::Receiver<bool>, room: impl Fn() -> bool, mut take: impl FnMut(f64, Vec<u8>)) -> String {
     let port = match free_udp() {
         Ok(p) => p,
         Err(e) => return e,
     };
-    let input = format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000");
+    // 30 s without anything before it ends: a source that comes in bursts (HLS: a segment every
+    // few seconds) is not lost between them.
+    let input = format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=30000000");
     let args: Vec<String> = args.into_iter().map(|a| if a == INPUT { input.clone() } else { a }).collect();
     let key = rand_key();
     rec.taps.lock().unwrap().push((key, port));
@@ -642,6 +649,15 @@ async fn decoding(ffmpeg: &str, rec: &Arc<Rec>, args: Vec<String>, bytes: FrameB
         // Without one (rare): just after the one before.
         pts = t.unwrap_or(pts + 0.04);
         take(pts, buf);
+        while !room() {
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(20)) => {}
+                _ = stop.changed() => {
+                    let _ = child.kill().await;
+                    return String::new();
+                }
+            }
+        }
     }
     let _ = child.kill().await;
     // Its error, not its descriptions (the input, the mapping).
@@ -1079,8 +1095,8 @@ mod tests {
         assert_eq!(frame_said("[Parsed_showinfo_2 @ 0x5] config in time_base: 1/25"), None);
         let v = picture_args(&sh);
         assert!(v.contains(&INPUT.to_string()) && v.windows(2).any(|w| w == ["-map", "0:v:0"]));
-        assert!(v.iter().any(|x| x.starts_with("bwdif") && x.contains("scale=1920:1080") && x.contains("fps=25")));
-        assert!(v.ends_with(&["-f".into(), "rawvideo".into(), "-pix_fmt".into(), "yuv420p".into(), "pipe:1".into()]));
+        assert!(v.iter().any(|x| x.starts_with("bwdif") && x.contains("scale=1920:1080") && !x.contains("fps=")));
+        assert!(v.ends_with(&["-fps_mode".into(), "passthrough".into(), "-f".into(), "rawvideo".into(), "-pix_fmt".into(), "yuv420p".into(), "pipe:1".into()]));
         let a = sound_args(1);
         assert!(a.windows(2).any(|w| w == ["-map", "0:a:1"]) && a.contains(&"f32le".to_string()));
         let e = encoder_args(&sh, 1, 2, 3);

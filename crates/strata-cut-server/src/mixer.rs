@@ -34,9 +34,9 @@ const LOST_MS: i64 = 1000;
 const OVERLAY_FADE: f64 = 0.3;
 
 /// What the decoders give the mixer, with their timestamps (the source's own, in seconds): each
-/// is played at its moment, the source's time mapped to ours, a margin after the soonest any came
-/// (`DELAY`). A picture or a sound that came in a burst, or late, is played at its moment all
-/// the same: neither faster nor out of step with the other.
+/// is played at its moment, the source's time mapped to ours: a margin (`DELAY`) after the
+/// latest any came lately. A source that comes in bursts (HLS: a segment of some seconds at a
+/// time) plays as smoothly as one that comes evenly, only later; neither faster nor out of step.
 pub struct Inputs {
     clock: Mutex<Clock>,
     pictures: Mutex<VecDeque<(f64, Vec<u8>)>>,
@@ -45,36 +45,49 @@ pub struct Inputs {
     tracks: Vec<Mutex<Sound>>,
 }
 
-/// The margin between the soonest a picture came after its timestamp and its playing (s): what a
-/// picture may come later than that and still be played at its moment.
+/// The margin after the latest a picture came after its timestamp (s).
 const DELAY: f64 = 0.5;
-/// Pictures waiting at most (more: the oldest dropped).
-const PICTURES_MOST: usize = 50;
+/// Pictures waiting at most: the decoder waits meanwhile (what comes waits before it, compressed).
+pub const PICTURES_MOST: usize = 75;
+/// The delays looked at (s).
+const WINDOW: f64 = 30.0;
 
-/// The source's time and ours: the least delay (our time minus its timestamp) of the last 10 s.
+/// The source's time and ours: the greatest delay (our time minus its timestamp) of the last
+/// 30 s: everything that came since was there before its moment.
 #[derive(Default)]
 struct Clock {
     delays: VecDeque<(f64, f64)>,
-    least: Option<f64>,
+    most: Option<f64>,
 }
 
 impl Clock {
     fn seen(&mut self, pts: f64, now: f64) {
         let d = now - pts;
-        // Another timeline (the source started again, its clock jumped far): from now on.
-        if self.least.is_some_and(|l| (d - l).abs() > 30.0) {
+        // Another timeline (the source started again, its clock jumped): from now on.
+        if self.most.is_some_and(|l| (d - l).abs() > 25.0) {
             self.delays.clear();
         }
+        // Kept: the delays that may still be the greatest (a smaller one before a greater is
+        // never again).
+        while self.delays.back().is_some_and(|x| x.1 <= d) {
+            self.delays.pop_back();
+        }
         self.delays.push_back((now, d));
-        while self.delays.front().is_some_and(|x| x.0 < now - 10.0) {
+        while self.delays.front().is_some_and(|x| x.0 < now - WINDOW) {
             self.delays.pop_front();
         }
-        self.least = self.delays.iter().map(|x| x.1).reduce(f64::min);
+        self.most = self.delays.front().map(|x| x.1);
     }
 
     /// The source's moment to play now.
     fn play(&self, now: f64) -> Option<f64> {
-        Some(now - self.least? - DELAY)
+        Some(now - self.most? - DELAY)
+    }
+
+    /// Played `by` s sooner (the delay was taken too great).
+    fn sooner(&mut self, by: f64) {
+        self.delays.iter_mut().for_each(|x| x.1 -= by);
+        self.most = self.most.map(|m| m - by);
     }
 }
 
@@ -99,6 +112,10 @@ impl Default for Inputs {
 impl Inputs {
     /// A picture of the source (YUV 4:2:0 at the programme's size), of the moment `pts`.
     pub fn picture(&self, pts: f64, f: Vec<u8>) {
+        // Back after it was lost: its time again from what comes now (not from what was late).
+        if self.lost() {
+            *self.clock.lock().unwrap() = Clock::default();
+        }
         self.clock.lock().unwrap().seen(pts, now_s());
         let mut q = self.pictures.lock().unwrap();
         // Before the last one (the source started again): those waiting are of before.
@@ -106,7 +123,8 @@ impl Inputs {
             q.clear();
         }
         q.push_back((pts, f));
-        while q.len() > PICTURES_MOST {
+        // The decoder waits for room (`room`): more, only if it did not.
+        while q.len() > PICTURES_MOST * 2 {
             q.pop_front();
         }
         self.last_picture.store(now_ms(), Ordering::Relaxed);
@@ -132,13 +150,18 @@ impl Inputs {
             t.buf.extend(std::iter::repeat_n(0.0, n));
         }
         t.buf.extend(samples);
-        // 4 s at most ahead.
-        let most = RATE * 2 * 4;
+        // 30 s at most ahead.
+        let most = RATE * 2 * 30;
         if t.buf.len() > most {
             let drop = (t.buf.len() - most) & !1;
             t.buf.drain(..drop);
             t.head += (drop / 2) as f64 / RATE as f64;
         }
+    }
+
+    /// Room for another picture (else the decoder waits).
+    pub fn room(&self) -> bool {
+        self.pictures.lock().unwrap().len() < PICTURES_MOST
     }
 
     /// The source's moment to play now (none before anything came).
@@ -170,6 +193,20 @@ impl Inputs {
         count > 0
     }
 
+    /// Pictures waiting, none of them yet due at `at`, and all the room taken or none shown
+    /// for a while (`stalled`): by how much the first is ahead (the delay was taken too great:
+    /// a picture that came very late, from before a loss).
+    fn too_late(&self, at: f64, stalled: bool) -> Option<f64> {
+        let q = self.pictures.lock().unwrap();
+        let first = q.front()?.0;
+        ((q.len() >= PICTURES_MOST || stalled) && first > at).then_some(first - at)
+    }
+
+    /// Played sooner by `by` s.
+    fn sooner(&self, by: f64) {
+        self.clock.lock().unwrap().sooner(by);
+    }
+
     /// The source's picture of the moment `at` (the last one up to it), the older ones dropped.
     fn picture_at(&self, at: f64) -> Option<Vec<u8>> {
         let mut q = self.pictures.lock().unwrap();
@@ -180,9 +217,10 @@ impl Inputs {
         found
     }
 
-    /// The source's pictures come (one in the last second).
+    /// The source is lost: none of its pictures waits to be played, and none came for a second
+    /// (a source in bursts has some waiting between them).
     pub fn lost(&self) -> bool {
-        now_ms() - self.last_picture.load(Ordering::Relaxed) > LOST_MS
+        now_ms() - self.last_picture.load(Ordering::Relaxed) > LOST_MS && self.pictures.lock().unwrap().is_empty()
     }
 }
 
@@ -274,6 +312,8 @@ impl Mixer {
         let mut longest = Duration::ZERO;
         let mut said = Instant::now();
         let mut pos: Option<f64> = None;
+        // When a picture of the source was last shown.
+        let mut shown = Instant::now();
         let step = n as f64 / RATE as f64;
         while !self.done.load(Ordering::Relaxed) {
             let now = Instant::now();
@@ -297,10 +337,16 @@ impl Mixer {
                     _ => p,
                 });
             }
+            let stalled = shown.elapsed() > Duration::from_millis(LOST_MS as u64);
+            if let Some(by) = pos.and_then(|at| self.inputs.too_late(at, stalled)) {
+                self.inputs.sooner(by);
+                pos = pos.map(|x| x + by);
+            }
             match pos.and_then(|at| self.inputs.picture_at(at + period.as_secs_f64() / 2.0)) {
                 Some(f) if f.len() == yuv => {
                     last = f;
                     ever = true;
+                    shown = Instant::now();
                 }
                 _ if ever && !self.inputs.lost() => held += 1,
                 _ => {}
@@ -584,12 +630,43 @@ mod tests {
         assert_eq!(inputs.picture_at(100.05), None);
         // Late: the last up to the moment, those before it dropped.
         assert_eq!(inputs.picture_at(100.2), Some(vec![3]));
-        // The moment: the soonest after its timestamp, plus the margin.
+        // The moment: the latest after its timestamp, plus the margin.
         let play = inputs.play().unwrap();
-        assert!((now_s() - play - DELAY - (now_s() - 100.12)).abs() < 1.0);
+        assert!((now_s() - play - DELAY - (now_s() - 100.0)).abs() < 1.0);
         // The source started again (timestamps back): from the new ones.
         inputs.picture(3.0, vec![9]);
         assert_eq!(inputs.picture_at(3.0), Some(vec![9]));
+        // All waiting, none due: the delay was too great.
+        let inputs = Inputs::default();
+        for k in 0..PICTURES_MOST {
+            inputs.picture(50.0 + k as f64 * 0.04, vec![0]);
+        }
+        assert_eq!(inputs.too_late(49.0, false), Some(1.0));
+        assert_eq!(inputs.too_late(50.0, false), None);
+        // A few waiting, none shown for a while: the same.
+        let inputs = Inputs::default();
+        inputs.picture(80.0, vec![0]);
+        assert_eq!(inputs.too_late(78.0, false), None);
+        assert_eq!(inputs.too_late(78.0, true), Some(2.0));
+    }
+
+    #[test]
+    fn the_latest_delay_of_the_last_30_s() {
+        let mut c = Clock::default();
+        // A segment of 6 s at once (its first picture 6 s late), then the pictures of the next.
+        c.seen(0.0, 6.0);
+        c.seen(5.96, 6.0);
+        assert_eq!(c.play(6.0), Some(6.0 - 6.0 - DELAY));
+        c.seen(6.0, 12.1);
+        assert!((c.play(12.1).unwrap() - (12.1 - 6.1 - DELAY)).abs() < 1e-9);
+        // Even for 30 s: then the delays since.
+        c.seen(40.0, 41.0);
+        assert!((c.play(41.0).unwrap() - (41.0 - 6.1 - DELAY)).abs() < 1e-9);
+        c.seen(70.0, 71.0);
+        assert!((c.play(71.0).unwrap() - (71.0 - 1.0 - DELAY)).abs() < 1e-9);
+        // Another timeline: from it.
+        c.seen(5.0, 200.0);
+        assert!((c.play(200.0).unwrap() - (5.0 - DELAY)).abs() < 1e-9);
     }
 
     #[test]
