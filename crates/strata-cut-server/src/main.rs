@@ -18,6 +18,7 @@ mod streams;
 mod guard;
 mod health;
 mod logs;
+mod mixer;
 mod ntp;
 mod paths;
 mod perf;

@@ -1,13 +1,14 @@
-//! Streamer: the programme of a source — what its lives send when they take the programme rather
-//! (all of them). The source, or an image passed at once or by a fade (1 s); a PNG overlay
-//! placed anywhere over both; the sound of the tracks chosen, at their level, on the channels chosen (none under
-//! the image). Its settings are the source's, shared by all its lives (`program.json`).
+//! Streamer: the programme of a source — what its lives send. The source, or an image passed at
+//! once or by a fade (1 s); a PNG overlay placed anywhere over both; the sound of the tracks
+//! chosen, at their level, on the channels chosen (none under the image); while the source is
+//! lost, the slate. Its settings are the source's, shared by all its lives (`program.json`).
 //!
-//! One FFmpeg a source, started by the first live that takes the programme and stopped after the
-//! last: it reads the source's relay, and the image and the overlay as raw pictures the server
-//! sends it (TCP: a new image or overlay goes in without stopping it). The switches reach its
-//! filters through ZMQ, frame by frame. What it makes (H.264 and AAC in MPEG-TS) goes to a relay
-//! the lives read, as they read the source's.
+//! Made like a mixer, from the first live that takes it to the last: decoders read the source's
+//! relay (its picture, each of its sound tracks: each on its own, a track that sends nothing holds
+//! nothing back) and give raw pictures and sound to the mixer (`crate::mixer`), which makes a
+//! picture every frame and its sound on its own clock, whatever comes in; an encoder makes H.264
+//! and AAC of it, in MPEG-TS, to a relay the lives read. The decoders come and go with the source;
+//! the mixer, the encoder and the lives do not stop.
 use std::{
     collections::{BTreeMap, HashMap},
     io::Write,
@@ -15,7 +16,8 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
+        mpsc::{sync_channel, Receiver, RecvTimeoutError},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -29,8 +31,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+    io::{AsyncBufReadExt, AsyncReadExt},
     process::Command,
     sync::{mpsc, watch},
 };
@@ -38,6 +39,7 @@ use tokio::{
 use crate::{
     api::{bad, not_found, require, ApiResult},
     auth::CurrentUser,
+    mixer::{Inputs, Mixer, Pics, Sink, TRACKS},
     recorder::{now_ms, Manager, Rec},
     state::{Audience, Events, Shared},
 };
@@ -82,7 +84,7 @@ pub struct Program {
     pub channels: String,
     /// The level of what goes out, dB (after the tracks' own).
     pub master: f64,
-    /// While the source is lost, its lives send the slate (else they wait for it).
+    /// While the source is lost, the slate goes out (else its last picture).
     pub slate: bool,
 }
 
@@ -127,38 +129,12 @@ impl Program {
         Ok(())
     }
 
-    fn track(&self, k: usize) -> Track {
+    pub(crate) fn track(&self, k: usize) -> Track {
         self.tracks.get(k).cloned().unwrap_or(Track { on: k == 0, gain: 0.0 })
     }
 
-    /// The tracks on, among the source's `n`: the only ones mixed (a track off that sends nothing,
-    /// or no longer, would hold the whole programme back).
-    fn on(&self, n: usize) -> Vec<usize> {
-        (0..n).filter(|&k| self.track(k).on).collect()
-    }
-
-    /// The weight of each track mixed, as amix takes them ("1|0.5").
-    fn weights(&self, mixed: &[usize]) -> String {
-        mixed.iter().map(|&k| trim(10f64.powf(self.track(k).gain / 20.0))).collect::<Vec<_>>().join("|")
-    }
-
-    /// The left and right outputs, each as a mix of the left and right inputs.
-    fn channel_weights(&self) -> (&'static str, &'static str) {
-        match self.channels.as_str() {
-            "l" => ("1|0", "1|0"),
-            "r" => ("0|1", "0|1"),
-            "mono" => ("0.5|0.5", "0.5|0.5"),
-            _ => ("1|0", "0|1"),
-        }
-    }
-
-    /// The master level, as a factor.
-    fn master_gain(&self) -> String {
-        trim(10f64.powf(self.master / 20.0))
-    }
-
     /// The overlay's opacity on air (0 when it is not).
-    fn overlay_alpha(&self) -> f64 {
+    pub(crate) fn overlay_alpha(&self) -> f64 {
         if self.overlay_on && self.overlay.is_some() { self.opacity / 100.0 } else { 0.0 }
     }
 
@@ -167,24 +143,14 @@ impl Program {
     }
 }
 
-/// What goes out never passes -1 dBFS, whatever the levels set (a limiter, not a level that moves).
-const LIMIT: &str = "0.891";
-
-/// A number short ("0.5", "1", "0.251189").
-fn trim(v: f64) -> String {
-    let s = format!("{v:.6}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s.is_empty() || s == "-0" { "0".into() } else { s.to_string() }
-}
-
 /// What the programme is made of: its size and rate, its tracks, its bitrate.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Shape {
-    w: u32,
-    h: u32,
-    fps: u32,
-    tracks: usize,
-    kbps: u32,
+pub(crate) struct Shape {
+    pub w: u32,
+    pub h: u32,
+    pub fps: u32,
+    pub tracks: usize,
+    pub kbps: u32,
 }
 
 impl Shape {
@@ -201,74 +167,9 @@ impl Shape {
         }
     }
     /// The bytes of one raw picture (YUVA 4:2:0).
-    fn frame_bytes(&self) -> usize {
+    pub fn frame_bytes(&self) -> usize {
         (self.w * self.h) as usize * 5 / 2
     }
-}
-
-/// The ports of one run of the programme's FFmpeg.
-struct Ports {
-    tap: u16,
-    image: u16,
-    overlay: u16,
-    zmq: u16,
-    out: u16,
-}
-
-/// The programme's FFmpeg: the source (0), the image (1) and the overlay (2) as raw pictures,
-/// silence (3) when no track is mixed (none on, none sending anything, or the source has none).
-fn ffmpeg_args(p: &Program, sh: &Shape, ports: &Ports, on: &[usize]) -> Vec<String> {
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
-    let (w, h, fps) = (sh.w, sh.h, sh.fps);
-    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error"]);
-    a.extend(s(&["-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i"]));
-    a.push(format!("udp://127.0.0.1:{}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000", ports.tap));
-    for port in [ports.image, ports.overlay] {
-        a.extend(s(&["-thread_queue_size", "2", "-f", "rawvideo", "-pix_fmt", "yuva420p", "-s", &format!("{w}x{h}"), "-framerate", "5", "-i"]));
-        a.push(format!("tcp://127.0.0.1:{port}"));
-    }
-    if on.is_empty() {
-        a.extend(s(&["-re", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]));
-    }
-    let image = if p.image_on { 1.0 } else { 0.0 };
-    let (ei, eo) = (u8::from(p.image_on), u8::from(p.overlay_alpha() > 0.0));
-    let mut g = format!(
-        "[0:v:0]bwdif=mode=send_frame:deint=interlaced,scale={w}:{h},setsar=1,format=yuv420p,zmq=bind_address=tcp\\\\://127.0.0.1\\\\:{zmq}[src];\
-         [1:v]fps={fps},lutyuv@img=a=val*{ki}:enable={ei}[img];\
-         [2:v]fps={fps},lutyuv@ovl=a=val*{ko}:enable={eo}[ovl];\
-         [src][img]overlay@img=eof_action=repeat:format=yuv420:enable={ei}[mix];\
-         [mix][ovl]overlay@ovl=eof_action=repeat:format=yuv420:enable={eo},fps={fps}[v];",
-        zmq = ports.zmq,
-        ki = trim(image),
-        ko = trim(p.overlay_alpha()),
-    );
-    let volume = trim(1.0 - image);
-    if on.is_empty() {
-        g.push_str(&format!("[3:a]volume@pgm={volume}[a]"));
-    } else {
-        for &k in on {
-            g.push_str(&format!("[0:a:{k}]aresample=48000:async=1,aformat=sample_fmts=fltp:channel_layouts=stereo[t{k}];"));
-        }
-        let inputs: String = on.iter().map(|k| format!("[t{k}]")).collect();
-        let (cl, cr) = p.channel_weights();
-        g.push_str(&format!(
-            "{inputs}amix@trk=inputs={n}:weights={wt}:normalize=0:dropout_transition=0,channelsplit=channel_layout=stereo[L][R];\
-             [L]asplit[L1][L2];[R]asplit[R1][R2];\
-             [L1][R1]amix@cl=inputs=2:weights={cl}:normalize=0[OL];\
-             [L2][R2]amix@cr=inputs=2:weights={cr}:normalize=0[OR];\
-             [OL][OR]join=inputs=2:channel_layout=stereo,volume@pgm={volume},volume@mst={mst},alimiter=limit={LIMIT}:attack=5:release=50:level=0[a]",
-            n = on.len(),
-            mst = p.master_gain(),
-            wt = p.weights(on),
-        ));
-    }
-    a.extend(s(&["-filter_complex", &g, "-map", "[v]", "-map", "[a]"]));
-    let k = sh.kbps;
-    a.extend(s(&["-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p"]));
-    a.extend(s(&["-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string(), "-sc_threshold", "0"]));
-    a.extend(s(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-max_interleave_delta", "1000000", "-f", "mpegts"]));
-    a.push(format!("udp://127.0.0.1:{}?pkt_size=1316", ports.out));
-    a
 }
 
 /// The filter that places the overlay on a transparent picture of the programme's size.
@@ -296,7 +197,7 @@ async fn render(ffmpeg: &str, input: &[String], filter: &str, sh: &Shape) -> Opt
 }
 
 /// A plain picture: transparent (the overlay without one), or the dark ground.
-fn plain(sh: &Shape, opaque: bool) -> Vec<u8> {
+pub(crate) fn plain(sh: &Shape, opaque: bool) -> Vec<u8> {
     let n = (sh.w * sh.h) as usize;
     let mut v = Vec::with_capacity(sh.frame_bytes());
     v.resize(n, if opaque { 18 } else { 16 });
@@ -305,84 +206,13 @@ fn plain(sh: &Shape, opaque: bool) -> Vec<u8> {
     v
 }
 
-// ---------------------------------------------------------------- ZMQ (ZMTP 3, a REQ socket)
-
-/// The commands to the programme's filters: FFmpeg's `zmq` filter (a REP socket).
-struct Zmq {
-    s: TcpStream,
-}
-
-fn zmq_frame(body: &[u8], flags: u8) -> Vec<u8> {
-    let mut f = Vec::with_capacity(body.len() + 9);
-    if body.len() > 255 {
-        f.push(flags | 2);
-        f.extend((body.len() as u64).to_be_bytes());
-    } else {
-        f.push(flags);
-        f.push(body.len() as u8);
-    }
-    f.extend(body);
-    f
-}
-
-impl Zmq {
-    async fn connect(port: u16) -> std::io::Result<Zmq> {
-        let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await?;
-        let mut greeting = vec![0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0x7F, 3, 0];
-        greeting.extend(b"NULL");
-        greeting.resize(64, 0);
-        s.write_all(&greeting).await?;
-        let mut theirs = [0u8; 64];
-        s.read_exact(&mut theirs).await?;
-        let mut ready = b"\x05READY\x0bSocket-Type".to_vec();
-        ready.extend(3u32.to_be_bytes());
-        ready.extend(b"REQ");
-        s.write_all(&zmq_frame(&ready, 4)).await?;
-        let mut z = Zmq { s };
-        z.read_frame().await?;
-        Ok(z)
-    }
-
-    async fn read_frame(&mut self) -> std::io::Result<(u8, Vec<u8>)> {
-        let flags = self.s.read_u8().await?;
-        let n = if flags & 2 != 0 { self.s.read_u64().await? as usize } else { self.s.read_u8().await? as usize };
-        if n > 1 << 20 {
-            return Err(std::io::Error::other("zmq: frame too large"));
-        }
-        let mut b = vec![0u8; n];
-        self.s.read_exact(&mut b).await?;
-        Ok((flags, b))
-    }
-
-    /// "target command argument" → FFmpeg's answer ("0 Success").
-    async fn send(&mut self, msg: &str) -> std::io::Result<String> {
-        let mut out = zmq_frame(b"", 1);
-        out.extend(zmq_frame(msg.as_bytes(), 0));
-        let ask = async {
-            self.s.write_all(&out).await?;
-            let mut last = Vec::new();
-            loop {
-                let (flags, body) = self.read_frame().await?;
-                if flags & 4 == 0 {
-                    last = body;
-                }
-                if flags & 1 == 0 {
-                    return Ok::<_, std::io::Error>(String::from_utf8_lossy(&last).into_owned());
-                }
-            }
-        };
-        // Answered at the next frame: the source stopped, FFmpeg waits; this does not.
-        tokio::time::timeout(Duration::from_secs(3), ask).await.map_err(|_| std::io::Error::other("zmq: no answer"))?
-    }
-}
-
 // ---------------------------------------------------------------- the programmes
 
 /// A change for a running programme, and how it is shown.
-struct Change {
-    program: Program,
+pub(crate) struct Change {
+    pub program: Program,
     /// The image passed: by a fade of this many seconds (0: cut).
-    image_fade: f64,
+    pub image_fade: f64,
 }
 
 /// A programme being made.
@@ -393,7 +223,7 @@ pub struct Runner {
     users: AtomicUsize,
     tx: mpsc::UnboundedSender<Change>,
     stop: watch::Sender<bool>,
-    /// Why its FFmpeg stopped last (said to the lives waiting for it).
+    /// Why its encoder stopped last (said to the lives waiting for it).
     failed: Mutex<String>,
 }
 
@@ -430,16 +260,11 @@ impl Programs {
         self.all.lock().unwrap().get(source).cloned().unwrap_or_default()
     }
 
-    /// While the source is lost, its lives send the slate.
-    pub fn slate(&self, source: &str) -> bool {
-        self.get(source).slate
-    }
-
     pub fn is_running(&self, source: &str) -> bool {
         self.running.lock().unwrap().contains_key(source)
     }
 
-    /// Saves a programme, and gives it to its FFmpeg if it runs.
+    /// Saves a programme, and gives it to its mixer if it runs.
     fn put(&self, source: &str, p: Program, image_fade: f64) -> Result<(), String> {
         let all = {
             let mut all = self.all.lock().unwrap();
@@ -479,40 +304,122 @@ impl Programs {
         }
     }
 
-    /// Made again and again while it is wanted (the source lost: when it comes back).
+    /// Made while it is wanted: the mixer and the encoder from the first live to the last, the
+    /// decoders as long as the source comes (started again when it comes back).
     async fn run(self: Arc<Self>, source: String, r: Arc<Runner>, mut rx: mpsc::UnboundedReceiver<Change>) {
         let mut stop = r.stop.subscribe();
-        let inlet = match Inlet::open() {
-            Ok(i) => i,
+        let ffmpeg = self.recorders.ffmpeg.clone();
+        // Its size and rate are the source's: a moment to know them when it was not received yet.
+        let since = Instant::now();
+        loop {
+            if *stop.borrow() {
+                return;
+            }
+            let Some(rec) = self.recorders.get(&source) else { return };
+            if (rec.flowing() && rec.status.lock().unwrap().media.is_some()) || since.elapsed() > Duration::from_secs(20) {
+                break;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(300)) => {}
+                _ = stop.changed() => {}
+            }
+        }
+        let Some(rec) = self.recorders.get(&source) else { return };
+        let (sh, name) = (Shape::of(&rec), rec.config().name);
+        let mut p = self.get(&source);
+        let mut slate_file = crate::slates::image_for(&self.data_dir, &source);
+        let pics = Arc::new(Mutex::new(Pics {
+            image: Arc::new(self.image(&ffmpeg, &p, &sh, &name).await),
+            overlay: Arc::new(self.overlay(&ffmpeg, &p, &sh).await),
+            slate: Arc::new(self.picture(&ffmpeg, slate_file.as_deref(), &sh, &name).await),
+        }));
+        let inputs = Arc::new(Inputs::default());
+        let sink = Arc::new(Mutex::new(None));
+        let done = Arc::new(AtomicBool::new(false));
+        let _end = Ended(done.clone());
+        let (changes, crx) = std::sync::mpsc::channel();
+        if let Err(e) = (Mixer { shape: sh, program: p.clone(), inputs: inputs.clone(), pics: pics.clone(), changes: crx, sink: sink.clone(), done: done.clone() }).spawn() {
+            *r.failed.lock().unwrap() = e.to_string();
+            return;
+        }
+        // The source's sound tracks, read as they pass (which send something).
+        let watch = match Watch::open() {
+            Ok(w) => Arc::new(w),
             Err(e) => {
                 *r.failed.lock().unwrap() = e;
                 return;
             }
         };
-        // The tracks mixed by the last run (None: none yet).
-        let mut was: Option<Vec<usize>> = None;
+        let key = rand_key();
+        rec.taps.lock().unwrap().push((key, watch.port));
+        let _untap = Untap(rec.clone(), key);
+        tokio::spawn(self.clone().encode(r.clone(), sh, sink, r.stop.subscribe()));
+        tokio::spawn(self.clone().decode(source.clone(), sh, None, inputs.clone(), watch.clone(), r.stop.subscribe()));
+        for k in 0..TRACKS {
+            tokio::spawn(self.clone().decode(source.clone(), sh, Some(k), inputs.clone(), watch.clone(), r.stop.subscribe()));
+        }
+        tracing::info!("programme of {name}: made ({}x{}, {} fps, {} kb/s)", sh.w, sh.h, sh.fps, sh.kbps);
+        let mut look = tokio::time::interval(Duration::from_secs(3));
         loop {
-            if *stop.borrow() {
-                break;
-            }
-            let Some(rec) = self.recorders.get(&source) else { break };
-            if rec.flowing() {
-                let made = self.once(&rec, &r, &inlet, &mut was, &mut rx, &mut stop).await;
-                if *stop.borrow() {
-                    break;
+            tokio::select! {
+                _ = stop.changed() => break,
+                c = rx.recv() => {
+                    let Some(c) = c else { break };
+                    if c.program.image != p.image {
+                        let img = self.image(&ffmpeg, &c.program, &sh, &name).await;
+                        pics.lock().unwrap().image = Arc::new(img);
+                    }
+                    if c.program.overlay_look() != p.overlay_look() {
+                        let ovl = self.overlay(&ffmpeg, &c.program, &sh).await;
+                        pics.lock().unwrap().overlay = Arc::new(ovl);
+                    }
+                    p = c.program.clone();
+                    let _ = changes.send(c);
                 }
-                match made {
-                    // Made again at once (other tracks on).
-                    Ok(()) => continue,
-                    Err(e) => {
-                        was = None;
-                        tracing::warn!("programme of {}: {e}", rec.config().name);
-                        *r.failed.lock().unwrap() = e;
+                // The source's slate (chosen in the settings): made again when it changes.
+                _ = look.tick() => {
+                    let now = crate::slates::image_for(&self.data_dir, &source);
+                    if now != slate_file {
+                        slate_file = now;
+                        let s = self.picture(&ffmpeg, slate_file.as_deref(), &sh, &name).await;
+                        pics.lock().unwrap().slate = Arc::new(s);
                     }
                 }
             }
-            // The changes meanwhile are in the settings: the next run starts with them.
-            while rx.try_recv().is_ok() {}
+            if *stop.borrow() {
+                break;
+            }
+        }
+        tracing::info!("programme of {name}: stopped");
+    }
+
+    /// A decoder of the source: its picture (`track` None), at the programme's size and rate, or
+    /// one of its sound tracks, to the mixer. Started again while the programme is wanted, when
+    /// the source comes (a track: when it sends something).
+    async fn decode(self: Arc<Self>, source: String, sh: Shape, track: Option<usize>, inputs: Arc<Inputs>, watch: Arc<Watch>, mut stop: watch::Receiver<bool>) {
+        let ffmpeg = self.recorders.ffmpeg.clone();
+        let mut said = String::new();
+        loop {
+            if *stop.borrow() {
+                return;
+            }
+            let ready = |rec: &Arc<Rec>| rec.flowing() && track.is_none_or(|k| watch.alive(k));
+            if let Some(rec) = self.recorders.get(&source).filter(ready) {
+                let (args, chunk) = match track {
+                    None => (picture_args(&sh), sh.frame_bytes() * 3 / 5),
+                    Some(k) => (sound_args(k), 3840),
+                };
+                let why = decoding(&ffmpeg, &rec, args, chunk, &mut stop, |b| match track {
+                    None => inputs.picture(b),
+                    Some(k) => inputs.sound(k, &b.as_chunks::<4>().0.iter().map(|x| f32::from_le_bytes(*x)).collect::<Vec<_>>()),
+                })
+                .await;
+                // Said once (a source that comes and goes would fill the journal).
+                if !why.is_empty() && why != said {
+                    tracing::debug!("programme of {}: decoder {track:?}: {why}", rec.config().name);
+                    said = why;
+                }
+            }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                 _ = stop.changed() => {}
@@ -520,128 +427,61 @@ impl Programs {
         }
     }
 
-    /// One run of the programme's FFmpeg; Ok: to be made again at once (other tracks to mix), or
-    /// stopped.
-    async fn once(&self, rec: &Arc<Rec>, r: &Arc<Runner>, inlet: &Inlet, was: &mut Option<Vec<usize>>, rx: &mut mpsc::UnboundedReceiver<Change>, stop: &mut watch::Receiver<bool>) -> Result<(), String> {
-        let ffmpeg = self.recorders.ffmpeg.clone();
-        let mut sh = Shape::of(rec);
-        let mut p = self.get(&rec.id);
-        let name = rec.config().name;
-        let image = Arc::new(Mutex::new(Arc::new(self.image(&ffmpeg, &p, &sh, &name).await)));
-        let overlay = Arc::new(Mutex::new(Arc::new(self.overlay(&ffmpeg, &p, &sh).await)));
-        let done = Arc::new(AtomicBool::new(false));
-        let _end = Ended(done.clone());
-        let listen = || TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string());
-        let (li, lo) = (listen()?, listen()?);
-        let out = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
-        let key = rand_key();
-        rec.taps.lock().unwrap().push((key, inlet.port));
-        let _untap = Untap(rec.clone(), key);
-        // The first time, a moment to read the source's tracks (which send something).
-        if was.is_none() {
-            let t = Instant::now();
-            while t.elapsed() < Duration::from_millis(2500) {
-                if let Some(n) = inlet.count() {
-                    if n == 0 || t.elapsed() > Duration::from_millis(1500) || inlet.mixed(&p.on(n), n, None, now_ms()) == p.on(n) {
-                        break;
-                    }
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
+    /// The encoder, made again if it stops (or does not keep up), until the programme ends.
+    async fn encode(self: Arc<Self>, r: Arc<Runner>, sh: Shape, sink: Arc<Mutex<Option<Sink>>>, mut stop: watch::Receiver<bool>) {
+        loop {
+            if *stop.borrow() {
+                return;
+            }
+            if let Err(e) = self.encode_once(&r, &sh, &sink, &mut stop).await {
+                tracing::warn!("programme: {e}");
+                *r.failed.lock().unwrap() = e;
+            }
+            *sink.lock().unwrap() = None;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                _ = stop.changed() => {}
             }
         }
-        // Its tracks as they come (what was said of the source may be of before).
-        if let Some(n) = inlet.count() {
-            sh.tracks = n;
-        }
-        let mixed = inlet.mixed(&p.on(sh.tracks), sh.tracks, was.as_deref(), now_ms());
-        if was.as_ref().is_some_and(|w| *w != mixed) || was.is_none() && mixed != p.on(sh.tracks) {
-            tracing::warn!("programme of {name}: tracks mixed {mixed:?} (on: {:?}; the others send nothing)", p.on(sh.tracks));
-        }
-        *was = Some(mixed.clone());
-        let ports = Ports {
-            tap: free_udp()?,
-            image: li.local_addr().map_err(|e| e.to_string())?.port(),
-            overlay: lo.local_addr().map_err(|e| e.to_string())?.port(),
-            zmq: listen()?.local_addr().map_err(|e| e.to_string())?.port(),
-            out: out.local_addr().map_err(|e| e.to_string())?.port(),
-        };
-        feed(li, image.clone(), done.clone());
-        feed(lo, overlay.clone(), done.clone());
+    }
+
+    async fn encode_once(&self, r: &Arc<Runner>, sh: &Shape, sink: &Arc<Mutex<Option<Sink>>>, stop: &mut watch::Receiver<bool>) -> Result<(), String> {
+        let listen = || TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string());
+        let (lv, la) = (listen()?, listen()?);
+        let port = |l: &TcpListener| l.local_addr().map(|a| a.port()).map_err(|e| e.to_string());
+        let (vp, ap) = (port(&lv)?, port(&la)?);
+        let out = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
+        let op = out.local_addr().map_err(|e| e.to_string())?.port();
+        let done = Arc::new(AtomicBool::new(false));
+        let _end = Ended(done.clone());
+        let broken = Arc::new(AtomicBool::new(false));
+        // A second of pictures and of sound waiting at most (the encoder connecting).
+        let (vtx, vrx) = sync_channel(sh.fps.max(1) as usize);
+        let (atx, arx) = sync_channel(sh.fps.max(1) as usize * 2);
+        write_to(lv, vrx, done.clone(), broken.clone());
+        write_to(la, arx, done.clone(), broken.clone());
         relay(out, r.clone(), done.clone());
-        inlet.to.store(ports.tap, Ordering::Relaxed);
-        let _off = Off(inlet.to.clone());
-        let mut cmd = Command::new(&ffmpeg);
-        cmd.args(ffmpeg_args(&p, &sh, &ports, &mixed)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| format!("cannot start {ffmpeg}: {e}"))?;
-        let last: Arc<Mutex<Vec<String>>> = Default::default();
-        if let Some(err) = child.stderr.take() {
-            let last = last.clone();
-            tokio::spawn(async move {
-                let mut lines = tokio::io::BufReader::new(err).lines();
-                while let Ok(Some(l)) = lines.next_line().await {
-                    let mut v = last.lock().unwrap();
-                    v.push(l);
-                    let n = v.len();
-                    if n > 20 {
-                        v.drain(..n - 20);
-                    }
-                }
-            });
-        }
-        tracing::info!("programme of {name}: made ({}x{}, {} fps, {} kb/s)", sh.w, sh.h, sh.fps, sh.kbps);
-        let mut zmq: Option<Zmq> = None;
-        let started = Instant::now();
-        let mut tick = tokio::time::interval(Duration::from_millis(250));
-        let mut watch = tokio::time::interval(Duration::from_millis(500));
+        *sink.lock().unwrap() = Some(Sink { video: vtx, audio: atx, broken: broken.clone() });
+        let mut cmd = Command::new(&self.recorders.ffmpeg);
+        cmd.args(encoder_args(sh, vp, ap, op)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
+        let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", self.recorders.ffmpeg))?;
+        let last = last_words(&mut child);
+        let mut look = tokio::time::interval(Duration::from_millis(500));
         loop {
             tokio::select! {
                 status = child.wait() => {
                     let why = last.lock().unwrap().last().cloned().unwrap_or_else(|| format!("{status:?}"));
-                    return Err(format!("FFmpeg stopped: {why}"));
+                    return Err(format!("the encoder stopped: {why}"));
                 }
                 _ = stop.changed() => {
                     let _ = child.kill().await;
                     return Ok(());
                 }
-                // A track mixed that no longer sends anything, or one on that sends again: another
-                // mix (the source lost: what comes next is the source's matter).
-                _ = watch.tick() => {
-                    let other = inlet.count().is_some_and(|n| n != sh.tracks);
-                    if rec.flowing() && (other || inlet.mixed(&p.on(sh.tracks), sh.tracks, Some(&mixed), now_ms()) != mixed) {
+                _ = look.tick() => {
+                    if broken.load(Ordering::Relaxed) {
                         let _ = child.kill().await;
-                        return Ok(());
+                        return Err("the encoder does not keep up: made again".into());
                     }
-                }
-                _ = tick.tick(), if zmq.is_none() => {
-                    // Its filters listen once the source is read (a few seconds).
-                    if let Ok(z) = Zmq::connect(ports.zmq).await {
-                        zmq = Some(z);
-                    } else if started.elapsed() > Duration::from_secs(30) {
-                        let _ = child.kill().await;
-                        return Err("its filters do not answer".into());
-                    }
-                }
-                change = rx.recv(), if zmq.is_some() => {
-                    let Some(c) = change else { continue };
-                    let Some(z) = zmq.as_mut() else { continue };
-                    let next = c.program;
-                    // Other tracks on: another mix, the programme is made again (a moment).
-                    if inlet.mixed(&next.on(sh.tracks), sh.tracks, Some(&mixed), now_ms()) != mixed {
-                        tracing::info!("programme of {name}: other tracks on, made again");
-                        let _ = child.kill().await;
-                        return Ok(());
-                    }
-                    if next.image != p.image {
-                        *image.lock().unwrap() = Arc::new(self.image(&ffmpeg, &next, &sh, &name).await);
-                    }
-                    if next.overlay_look() != p.overlay_look() {
-                        *overlay.lock().unwrap() = Arc::new(self.overlay(&ffmpeg, &next, &sh).await);
-                    }
-                    if let Err(e) = apply(z, &p, &next, &mixed, c.image_fade).await {
-                        tracing::warn!("programme of {name}: {e}");
-                        zmq = None;
-                    }
-                    p = next;
                 }
             }
         }
@@ -649,8 +489,14 @@ impl Programs {
 
     /// The image, at the programme's size: the one chosen, else the source's name on a dark picture.
     async fn image(&self, ffmpeg: &str, p: &Program, sh: &Shape, name: &str) -> Vec<u8> {
+        let file = p.image.as_deref().and_then(|id| crate::slates::file_of(&self.data_dir, id));
+        self.picture(ffmpeg, file.as_deref(), sh, name).await
+    }
+
+    /// A picture at the programme's size: a file, else the source's name on a dark picture.
+    async fn picture(&self, ffmpeg: &str, file: Option<&Path>, sh: &Shape, name: &str) -> Vec<u8> {
         let (w, h) = (sh.w, sh.h);
-        let made = match p.image.as_deref().and_then(|id| crate::slates::file_of(&self.data_dir, id)) {
+        let made = match file {
             Some(file) => {
                 let input = vec!["-i".to_string(), file.to_string_lossy().into_owned()];
                 render(ffmpeg, &input, &format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=0x0b0e16,setsar=1"), sh).await
@@ -679,80 +525,139 @@ impl Programs {
     }
 }
 
-/// Sends what changed to the running filters: the image by a fade (or a cut), the overlay by a
-/// short fade, the sound at once.
-async fn apply(z: &mut Zmq, was: &Program, next: &Program, mixed: &[usize], image_fade: f64) -> std::io::Result<()> {
-    if !mixed.is_empty() {
-        if next.weights(mixed) != was.weights(mixed) {
-            z.send(&format!("amix@trk weights {}", next.weights(mixed))).await?;
-        }
-        if next.master != was.master {
-            z.send(&format!("volume@mst volume {}", next.master_gain())).await?;
-        }
-        if next.channels != was.channels {
-            let (cl, cr) = next.channel_weights();
-            z.send(&format!("amix@cl weights {cl}")).await?;
-            z.send(&format!("amix@cr weights {cr}")).await?;
-        }
-    }
-    let (o0, o1) = (was.overlay_alpha(), next.overlay_alpha());
-    if o0 != o1 {
-        fade(z, "ovl", o0, o1, if was.overlay_on != next.overlay_on { 0.3 } else { 0.0 }, false).await?;
-    }
-    if was.image_on != next.image_on {
-        let (a, b) = if next.image_on { (0.0, 1.0) } else { (1.0, 0.0) };
-        fade(z, "img", a, b, image_fade, true).await?;
-    }
-    Ok(())
+/// The source's relay as a decoder reads it (`{input}` in the arguments).
+const INPUT: &str = "{input}";
+
+fn decoder_head() -> Vec<String> {
+    ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i", INPUT].map(String::from).to_vec()
 }
 
-/// A picture's opacity from `a` to `b` in `secs` (0: at once), one step a frame or so; with the
-/// image, the sound goes the other way (none under the image).
-async fn fade(z: &mut Zmq, which: &str, a: f64, b: f64, secs: f64, sound: bool) -> std::io::Result<()> {
-    if b > 0.0 {
-        z.send(&format!("lutyuv@{which} enable 1")).await?;
-        z.send(&format!("overlay@{which} enable 1")).await?;
-    }
-    let start = Instant::now();
+/// The source's picture: deinterlaced, at the programme's size (its shape kept, bands added) and
+/// rate, raw. Decoded without delay (slices, not frames, in parallel).
+fn picture_args(sh: &Shape) -> Vec<String> {
+    let (w, h, fps) = (sh.w, sh.h, sh.fps);
+    let mut a: Vec<String> = ["-flags", "low_delay", "-thread_type", "slice"].map(String::from).to_vec();
+    a.extend(decoder_head());
+    a.extend(["-map", "0:v:0", "-an", "-sn", "-dn", "-vf"].map(String::from));
+    a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p"));
+    a.extend(["-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"].map(String::from));
+    a
+}
+
+/// One of the source's sound tracks: 48 kHz stereo, raw.
+fn sound_args(k: usize) -> Vec<String> {
+    let mut a = decoder_head();
+    a.extend(["-map".to_string(), format!("0:a:{k}")]);
+    a.extend(["-vn", "-sn", "-dn", "-af", "aresample=48000,aformat=sample_fmts=flt:channel_layouts=stereo", "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1"].map(String::from));
+    a
+}
+
+/// The encoder: the mixer's pictures and sound (raw, over TCP: their timestamps are their count,
+/// so they stay together), H.264 and AAC in MPEG-TS to the programme's relay.
+fn encoder_args(sh: &Shape, video: u16, audio: u16, out: u16) -> Vec<String> {
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let (w, h, fps, k) = (sh.w, sh.h, sh.fps, sh.kbps);
+    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error"]);
+    a.extend(s(&["-thread_queue_size", "64", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", &format!("{w}x{h}"), "-framerate", &fps.to_string(), "-i"]));
+    a.push(format!("tcp://127.0.0.1:{video}"));
+    a.extend(s(&["-thread_queue_size", "256", "-f", "f32le", "-ar", "48000", "-ac", "2", "-i"]));
+    a.push(format!("tcp://127.0.0.1:{audio}"));
+    a.extend(s(&["-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p"]));
+    a.extend(s(&["-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string(), "-sc_threshold", "0"]));
+    a.extend(s(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-f", "mpegts"]));
+    a.push(format!("udp://127.0.0.1:{out}?pkt_size=1316"));
+    a
+}
+
+/// One run of a decoder: it reads the source's relay (a tap of its own), and gives what it makes
+/// to `take`, `chunk` bytes at a time, until it ends (its last words) or the programme stops.
+async fn decoding(ffmpeg: &str, rec: &Arc<Rec>, args: Vec<String>, chunk: usize, stop: &mut watch::Receiver<bool>, mut take: impl FnMut(Vec<u8>)) -> String {
+    let port = match free_udp() {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let input = format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000");
+    let args: Vec<String> = args.into_iter().map(|a| if a == INPUT { input.clone() } else { a }).collect();
+    let key = rand_key();
+    rec.taps.lock().unwrap().push((key, port));
+    let _untap = Untap(rec.clone(), key);
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => return format!("cannot start {ffmpeg}: {e}"),
+    };
+    let last = last_words(&mut child);
+    let Some(mut out) = child.stdout.take() else { return "no output".into() };
     loop {
-        let x = if secs <= 0.0 { 1.0 } else { (start.elapsed().as_secs_f64() / secs).min(1.0) };
-        let k = a + (b - a) * x;
-        z.send(&format!("lutyuv@{which} a val*{}", trim(k))).await?;
-        if sound {
-            z.send(&format!("volume@pgm volume {}", trim(1.0 - k))).await?;
-        }
-        if x >= 1.0 {
-            break;
+        let mut buf = vec![0u8; chunk];
+        tokio::select! {
+            r = out.read_exact(&mut buf) => match r {
+                Ok(_) => take(buf),
+                Err(_) => break,
+            },
+            _ = stop.changed() => {
+                let _ = child.kill().await;
+                return String::new();
+            }
         }
     }
-    if b <= 0.0 {
-        z.send(&format!("overlay@{which} enable 0")).await?;
-        z.send(&format!("lutyuv@{which} enable 0")).await?;
-    }
-    Ok(())
+    let _ = child.wait().await;
+    let words = last.lock().unwrap().last().cloned().unwrap_or_default();
+    words
 }
 
-/// Sends a raw picture over and over to the FFmpeg that connects (it takes them as it needs
-/// them); the picture may change meanwhile.
-fn feed(listener: TcpListener, slot: Arc<Mutex<Arc<Vec<u8>>>>, done: Arc<AtomicBool>) {
-    let _ = std::thread::Builder::new().name("program-feed".into()).spawn(move || {
+/// A child's last lines on its error output (20 at most).
+fn last_words(child: &mut tokio::process::Child) -> Arc<Mutex<Vec<String>>> {
+    let last: Arc<Mutex<Vec<String>>> = Default::default();
+    if let Some(err) = child.stderr.take() {
+        let last = last.clone();
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(err).lines();
+            while let Ok(Some(l)) = lines.next_line().await {
+                let mut v = last.lock().unwrap();
+                v.push(l);
+                let n = v.len();
+                if n > 20 {
+                    v.drain(..n - 20);
+                }
+            }
+        });
+    }
+    last
+}
+
+/// Writes what the mixer makes to the encoder that connects (the first that does). Broken: it is
+/// gone, or did not come.
+fn write_to<T: AsRef<[u8]> + Send + 'static>(listener: TcpListener, rx: Receiver<T>, done: Arc<AtomicBool>, broken: Arc<AtomicBool>) {
+    let _ = std::thread::Builder::new().name("program-write".into()).spawn(move || {
         let _ = listener.set_nonblocking(true);
+        let since = Instant::now();
         let mut stream = loop {
             if done.load(Ordering::Relaxed) {
                 return;
             }
             match listener.accept() {
                 Ok((s, _)) => break s,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(50)),
-                Err(_) => return,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && since.elapsed() < Duration::from_secs(10) => std::thread::sleep(Duration::from_millis(20)),
+                Err(_) => {
+                    broken.store(true, Ordering::Relaxed);
+                    return;
+                }
             }
         };
         let _ = stream.set_nonblocking(false);
-        while !done.load(Ordering::Relaxed) {
-            let frame = slot.lock().unwrap().clone();
-            // FFmpeg gone: the writes fail.
-            if stream.write_all(&frame).is_err() {
-                return;
+        let _ = stream.set_nodelay(true);
+        loop {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(b) => {
+                    if stream.write_all(b.as_ref()).is_err() {
+                        broken.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) if !done.load(Ordering::Relaxed) => {}
+                Err(_) => return,
             }
         }
     });
@@ -779,15 +684,7 @@ fn relay(sock: UdpSocket, r: Arc<Runner>, done: Arc<AtomicBool>) {
     });
 }
 
-/// Stops passing the source on, after a run.
-struct Off(Arc<AtomicU16>);
-impl Drop for Off {
-    fn drop(&mut self) {
-        self.0.store(0, Ordering::Relaxed);
-    }
-}
-
-/// Ends the feeding and relay threads of a run.
+/// Ends the threads of a run (writing to the encoder, relaying what it makes).
 struct Ended(Arc<AtomicBool>);
 impl Drop for Ended {
     fn drop(&mut self) {
@@ -803,15 +700,48 @@ impl Drop for Untap {
     }
 }
 
-/// The source on its way to the programme: read, to know when each of its audio tracks last
-/// sent something (a track that sends nothing holds the whole mix back: it is left out while it
-/// is silent), and passed on to the programme's FFmpeg.
-struct Inlet {
+/// The source's relay, read to know its sound tracks and which send something (a decoder of a
+/// track that sends nothing is not started: it would wait for it).
+struct Watch {
     port: u16,
-    /// Where it is passed on (0: nowhere, between two runs).
-    to: Arc<AtomicU16>,
     seen: Arc<Mutex<Seen>>,
     done: Arc<AtomicBool>,
+}
+
+impl Watch {
+    fn open() -> Result<Watch, String> {
+        let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
+        let port = sock.local_addr().map_err(|e| e.to_string())?.port();
+        let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
+        let (seen, done) = (Arc::new(Mutex::new(Seen::default())), Arc::new(AtomicBool::new(false)));
+        let (seen2, done2) = (seen.clone(), done.clone());
+        std::thread::Builder::new()
+            .name("program-watch".into())
+            .spawn(move || {
+                let mut buf = vec![0u8; 65536];
+                while !done2.load(Ordering::Relaxed) {
+                    let Ok(n) = sock.recv(&mut buf) else { continue };
+                    let now = now_ms();
+                    let mut s = seen2.lock().unwrap();
+                    for p in buf[..n].chunks(188) {
+                        s.packet(p, now);
+                    }
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Watch { port, seen, done })
+    }
+
+    /// Track `k` of the source sent something in the last 2 s.
+    fn alive(&self, k: usize) -> bool {
+        self.seen.lock().unwrap().tracks.get(k).is_some_and(|t| now_ms() - t.1 < 2000)
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::Relaxed);
+    }
 }
 
 /// The audio tracks of the source's MPEG-TS, in order: their PID, their last packet and the start
@@ -934,69 +864,6 @@ fn is_audio(kind: u8, desc: &[u8]) -> bool {
     }
 }
 
-impl Inlet {
-    fn open() -> Result<Inlet, String> {
-        let sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).map_err(|e| e.to_string())?;
-        let port = sock.local_addr().map_err(|e| e.to_string())?.port();
-        let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
-        let (to, seen, done) = (Arc::new(AtomicU16::new(0)), Arc::new(Mutex::new(Seen::default())), Arc::new(AtomicBool::new(false)));
-        let (to2, seen2, done2) = (to.clone(), seen.clone(), done.clone());
-        std::thread::Builder::new()
-            .name("program-inlet".into())
-            .spawn(move || {
-                let mut buf = vec![0u8; 65536];
-                while !done2.load(Ordering::Relaxed) {
-                    let Ok(n) = sock.recv(&mut buf) else { continue };
-                    {
-                        let now = now_ms();
-                        let mut s = seen2.lock().unwrap();
-                        for p in buf[..n].chunks(188) {
-                            s.packet(p, now);
-                        }
-                    }
-                    let to = to2.load(Ordering::Relaxed);
-                    if to != 0 {
-                        let _ = sock.send_to(&buf[..n], (Ipv4Addr::LOCALHOST, to));
-                    }
-                }
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(Inlet { port, to, seen, done })
-    }
-
-    /// The tracks to mix among those on, `was` the ones mixed until now (None: the first time):
-    /// a track is left out after 3 s without anything, taken back after 5 s coming again. All of
-    /// those on when the source's tracks are not known (not as many as said).
-    fn mixed(&self, on: &[usize], n: usize, was: Option<&[usize]>, now: i64) -> Vec<usize> {
-        let s = self.seen.lock().unwrap();
-        if s.tracks.len() != n {
-            return on.to_vec();
-        }
-        on.iter()
-            .copied()
-            .filter(|&k| {
-                let (_, last, since) = s.tracks[k];
-                match was {
-                    Some(was) if !was.contains(&k) => now - last < 1000 && now - since >= 5000,
-                    _ => now - last < 3000,
-                }
-            })
-            .collect()
-    }
-
-    /// The number of the source's audio tracks, once its PMT was read.
-    fn count(&self) -> Option<usize> {
-        let s = self.seen.lock().unwrap();
-        s.read.then_some(s.tracks.len().min(8))
-    }
-}
-
-impl Drop for Inlet {
-    fn drop(&mut self) {
-        self.done.store(true, Ordering::Relaxed);
-    }
-}
-
 fn free_udp() -> Result<u16, String> {
     UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).and_then(|s| s.local_addr()).map(|a| a.port()).map_err(|e| e.to_string())
 }
@@ -1102,23 +969,6 @@ mod tests {
     fn shape(tracks: usize) -> Shape {
         Shape { w: 1920, h: 1080, fps: 25, tracks, kbps: 8000 }
     }
-    fn ports() -> Ports {
-        Ports { tap: 1, image: 2, overlay: 3, zmq: 4, out: 5 }
-    }
-
-    #[test]
-    fn mixes() {
-        let mut p = Program::default();
-        assert_eq!(p.on(3), vec![0]);
-        p.tracks = vec![Track { on: false, gain: 0.0 }, Track { on: true, gain: -6.0 }, Track { on: true, gain: 0.0 }];
-        assert_eq!((p.weights(&p.on(3)), p.on(3)), ("0.501187|1".to_string(), vec![1, 2]));
-        assert_eq!(p.weights(&[2]), "1");
-        p.channels = "mono".into();
-        assert_eq!(p.channel_weights(), ("0.5|0.5", "0.5|0.5"));
-        assert_eq!(trim(1.0), "1");
-        assert_eq!(trim(0.0), "0");
-        assert_eq!(trim(0.25), "0.25");
-    }
 
     #[test]
     fn normalized() {
@@ -1130,27 +980,6 @@ mod tests {
         p.channels = "l".into();
         p.size = f64::NAN;
         assert!(p.normalize().is_err());
-    }
-
-    #[test]
-    fn args() {
-        let mut p = Program { image_on: true, ..Default::default() };
-        p.tracks = vec![Track { on: true, gain: 0.0 }, Track { on: true, gain: -6.0 }];
-        let a = ffmpeg_args(&p, &shape(3), &ports(), &p.on(3));
-        let g = &a[a.iter().position(|x| x == "-filter_complex").unwrap() + 1];
-        assert!(g.contains("zmq=bind_address=tcp\\\\://127.0.0.1\\\\:4"), "{g}");
-        assert!(g.contains("lutyuv@img=a=val*1:enable=1"));
-        assert!(g.contains("[0:a:1]aresample"));
-        assert!(g.contains("amix@trk=inputs=2:weights=1|0.501187") && !g.contains("[0:a:2]"), "{g}");
-        assert!(g.contains("volume@pgm=0,volume@mst=1,alimiter=limit=0.891"));
-        assert!(a.contains(&"tcp://127.0.0.1:2".to_string()) && a.contains(&"udp://127.0.0.1:5?pkt_size=1316".to_string()));
-        // No sound, or no track mixed: silence.
-        for (p, n) in [(Program::default(), 0), (p, 2)] {
-            let a = ffmpeg_args(&p, &shape(n), &ports(), &[]);
-            assert!(a.contains(&"anullsrc=r=48000:cl=stereo".to_string()));
-            let g = &a[a.iter().position(|x| x == "-filter_complex").unwrap() + 1];
-            assert!(g.contains("[3:a]volume@pgm=") && !g.contains("[0:a:"), "{g}");
-        }
     }
 
     /// A TS packet starting a section (PSI) on `pid`.
@@ -1192,22 +1021,27 @@ mod tests {
         }
         s.packet(&es(0x105), 5000);
         s.packet(&es(0x105), 6000);
-        let inlet = Inlet { port: 0, to: Default::default(), seen: Arc::new(Mutex::new(s)), done: Default::default() };
-        let all = [0, 1, 2];
-        // Track 1 silent since 2 s: left out; track 2, back for 1 s only: not yet.
-        assert_eq!(inlet.mixed(&all, 3, None, 6000), vec![0, 2]);
-        assert_eq!(inlet.mixed(&all, 3, Some(&[0]), 6000), vec![0]);
-        assert_eq!(inlet.mixed(&all, 3, Some(&[0, 1, 2]), 6000), vec![0, 2]);
-        {
-            let mut s = inlet.seen.lock().unwrap();
-            for t in (6100..=11000).step_by(100) {
-                s.packet(&es(0x102), t);
-                s.packet(&es(0x105), t);
-            }
-        }
-        assert_eq!(inlet.mixed(&all, 3, Some(&[0]), 11000), vec![0, 2]);
-        // Not as many tracks as said: all of those on.
-        assert_eq!(inlet.mixed(&all, 4, Some(&[0]), 6000), vec![0, 1, 2]);
+        assert_eq!(s.newest(), 6000);
+        let w = Watch { port: 0, seen: Arc::new(Mutex::new(s)), done: Default::default() };
+        // Track 1 silent since 2 s: not alive; the others are (as of now: their last packet
+        // is of the test's clock, so none is, a moment later).
+        let alive = |w: &Watch, k: usize| w.seen.lock().unwrap().tracks.get(k).is_some_and(|t| 6000 - t.1 < 2000);
+        assert!(alive(&w, 0) && !alive(&w, 1) && alive(&w, 2) && !alive(&w, 3));
+        assert!(!w.alive(0));
+    }
+
+    #[test]
+    fn decoders_and_encoder() {
+        let sh = shape(2);
+        let v = picture_args(&sh);
+        assert!(v.contains(&INPUT.to_string()) && v.windows(2).any(|w| w == ["-map", "0:v:0"]));
+        assert!(v.iter().any(|x| x.starts_with("bwdif") && x.contains("scale=1920:1080") && x.contains("fps=25")));
+        assert!(v.ends_with(&["-f".into(), "rawvideo".into(), "-pix_fmt".into(), "yuv420p".into(), "pipe:1".into()]));
+        let a = sound_args(1);
+        assert!(a.windows(2).any(|w| w == ["-map", "0:a:1"]) && a.contains(&"f32le".to_string()));
+        let e = encoder_args(&sh, 1, 2, 3);
+        assert!(e.contains(&"tcp://127.0.0.1:1".to_string()) && e.contains(&"tcp://127.0.0.1:2".to_string()));
+        assert!(e.contains(&"udp://127.0.0.1:3?pkt_size=1316".to_string()) && e.windows(2).any(|w| w == ["-b:v", "8000k"]));
     }
 
     #[test]
@@ -1222,14 +1056,5 @@ mod tests {
         let sh = Shape { w: 4, h: 2, fps: 25, tracks: 0, kbps: 1 };
         assert_eq!(plain(&sh, false), vec![16, 16, 16, 16, 16, 16, 16, 16, 128, 128, 128, 128, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(plain(&sh, true).len(), sh.frame_bytes());
-    }
-
-    #[test]
-    fn zmq_frames() {
-        assert_eq!(zmq_frame(b"ab", 1), vec![1, 2, b'a', b'b']);
-        let long = vec![0u8; 300];
-        let f = zmq_frame(&long, 0);
-        assert_eq!(f[0], 2);
-        assert_eq!(&f[1..9], &300u64.to_be_bytes());
     }
 }
