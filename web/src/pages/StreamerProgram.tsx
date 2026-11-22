@@ -6,7 +6,7 @@
  * the same fades).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Headphones, RotateCcw, Settings, Volume2, VolumeX, X } from "lucide-react";
+import { Headphones, RotateCcw, Settings, Volume2, VolumeX, Wand2, X } from "lucide-react";
 import { t, tc } from "../i18n";
 import { api, can, useApp, useChanged } from "../store";
 import { Switch } from "../settings/ui";
@@ -237,6 +237,28 @@ export function Antenne({ rec, prog, live, kbps, onStopAll, onSettings }: { rec:
 
 /** Where a meter's level is (a share of its height): dB from -60 to 0. */
 const vuShare = (db: number) => Math.max(0, Math.min(1, (db + 60) / 60));
+/**
+ * A good level, for whom is not a sound engineer: peaks between these (dBFS), the band drawn on
+ * the meters; above `LOUD`, too loud; at `CLIP`, saturated. AUTO puts a track's peaks at `TARGET`.
+ * (What goes out is limited at -1 dBFS anyway: never saturated.)
+ */
+const GOOD_LOW = -20;
+const GOOD_HIGH = -6;
+const LOUD = -3;
+const CLIP = -1;
+const TARGET = -9;
+const SILENT = -55;
+
+type Verdict = "silent" | "low" | "good" | "loud" | "clip";
+const verdictOf = (peak: number): Verdict => (peak <= SILENT ? "silent" : peak >= CLIP ? "clip" : peak > LOUD ? "loud" : peak < GOOD_LOW ? "low" : "good");
+const VERDICT_LABEL: Record<Verdict, string> = { silent: "Silent", low: "Too low", good: "Good", loud: "Too loud", clip: "Saturated" };
+
+/** Says how a level is, in words and a colour. */
+function Verdict({ peak }: { peak: number }) {
+  const v = verdictOf(peak);
+  return <span className={`pg-verdict ${v}`}>{t(VERDICT_LABEL[v])}</span>;
+}
+
 /** The meter's marks (dB). */
 const VU_MARKS = [0, -6, -12, -18, -24, -36, -48];
 
@@ -246,6 +268,7 @@ function Vu({ l, r }: { l: number; r: number }) {
     <span className="pg-vu" aria-hidden="true">
       <i style={{ height: `${vuShare(l) * 100}%` }} />
       <i style={{ height: `${vuShare(r) * 100}%` }} />
+      <em className="pg-vu-zone" style={{ bottom: `${vuShare(GOOD_LOW) * 100}%`, height: `${(vuShare(GOOD_HIGH) - vuShare(GOOD_LOW)) * 100}%` }} />
       {VU_MARKS.map((m) => (
         <b key={m} className="pg-vu-mark" style={{ bottom: `${vuShare(m) * 100}%` }} />
       ))}
@@ -273,16 +296,29 @@ function Scale({ marks, share, fader }: { marks: number[]; share: (v: number) =>
 const GAIN_MARKS = [12, 6, 0, -6, -12, -20, -30, -40];
 const gainShare = (db: number) => (db + 40) / 52;
 
-/** The levels of the source's tracks, measured by the server (5 a second while shown). */
-function useLevels(recId: string, n: number): number[][] {
+/**
+ * The levels of the source's tracks, measured by the server (5 a second while shown): as a meter
+ * shows them (a peak falls back slowly), and the highest of each track over its last readings.
+ */
+function useLevels(recId: string, n: number): { lv: number[][]; recent: (k: number, readings: number) => number } {
   const [lv, setLv] = useState<number[][]>([]);
+  const history = useRef<number[][]>([]);
   useEffect(() => {
     if (n === 0) return;
     let on = true;
+    history.current = [];
     const get = () =>
       api<{ tracks: number[][] }>("GET", `/api/program/${recId}/levels`).then(
-        // A peak falls back slowly (as a meter's needle), 6 dB a reading.
-        (r) => on && setLv((prev) => r.tracks.map((tr, k) => tr.map((db, c) => Math.max(db, (prev[k]?.[c] ?? -90) - 6)))),
+        (r) => {
+          if (!on) return;
+          r.tracks.forEach((tr, k) => {
+            const h = (history.current[k] ??= []);
+            h.push(Math.max(tr[0], tr[1]));
+            if (h.length > 50) h.shift();
+          });
+          // A peak falls back slowly (as a meter's needle), 6 dB a reading.
+          setLv((prev) => r.tracks.map((tr, k) => tr.map((db, c) => Math.max(db, (prev[k]?.[c] ?? -90) - 6))));
+        },
         () => {},
       );
     void get();
@@ -292,7 +328,8 @@ function useLevels(recId: string, n: number): number[][] {
       window.clearInterval(i);
     };
   }, [recId, n]);
-  return lv;
+  const recent = (k: number, readings: number) => Math.max(-90, ...(history.current[k] ?? []).slice(-readings));
+  return { lv, recent };
 }
 
 /** The browser's listening (headphones): which track, how loud; nothing of it goes out. */
@@ -329,7 +366,8 @@ function Fader({ value, min, max, step, disabled, label, onChange, onReset }: { 
 export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi; monitor: Monitor }) {
   const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
   const n = prog.state?.tracks.length ?? 0;
-  const levels = useLevels(rec.id, n);
+  const { lv: levels, recent } = useLevels(rec.id, n);
+  const toast = useApp((s) => s.toast);
   if (!prog.state) return <section className="pg-box pg-mixer" />;
   const { program: p, tracks } = prog.state;
   const all = () => Array.from({ length: Math.max(tracks.length, p.tracks.length) }, (_, i) => trackOf(p, i));
@@ -341,6 +379,15 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
   // The source's own levels again (each track at 0 dB; on and off kept).
   const reset = () => prog.set({ tracks: all().map((tr) => ({ ...tr, gain: 0 })) });
   const changed = all().some((tr) => tr.gain !== 0);
+  // AUTO: the track's peaks of the last 10 s brought to the target.
+  const auto = (k: number) => {
+    const peak = recent(k, 50);
+    if (peak <= SILENT) {
+      toast(t("This track is silent: nothing to set"), "info");
+      return;
+    }
+    setTrack(k, { gain: Math.max(-40, Math.min(12, Math.round(TARGET - peak))) });
+  };
   // What goes out, as heard: the loudest track on, at its level, on the channels chosen; none
   // under the image.
   const out = [0, 1].map((c) => {
@@ -355,7 +402,12 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
     });
     return best;
   });
-  const heard = Math.min(n, 4);
+  // The same over the last 3 s, for its verdict (limited at -1 dBFS when it goes out).
+  let outPeak = -90;
+  tracks.forEach((_, k) => {
+    const tr = trackOf(p, k);
+    if (tr.on) outPeak = Math.max(outPeak, recent(k, 15) + tr.gain);
+  });
   return (
     <section className="pg-box pg-mixer">
       <header>
@@ -377,13 +429,17 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
           {n === 0 && <span className="muted pg-nosound">{t("No sound")}</span>}
           {tracks.map((lang, k) => {
             const tr = trackOf(p, k);
-            const lv = levels[k] ?? [-90, -90];
+            // As it goes into the mix: the source's level with this track's.
+            const lv = (levels[k] ?? [-90, -90]).map((db) => (db <= -90 ? -90 : db + tr.gain));
+            const peak = recent(k, 15) + tr.gain;
+            const solo = monitor.track === k;
             return (
               <div key={k} className={`pg-strip ${tr.on ? "" : "off"}`}>
                 <span className="pg-strip-name" title={lang || undefined}>
                   {k + 1}
                   <small>{lang || "—"}</small>
                 </span>
+                {tr.on ? <Verdict peak={peak} /> : <span className="pg-verdict off">{tc("track", "Off")}</span>}
                 <span className="pg-strip-body">
                   <Fader value={tr.gain} min={-40} max={12} step={1} disabled={!run || !tr.on} label={t("Track {n}", { n: k + 1 })} onChange={(gain) => setTrack(k, { gain })} onReset={() => setTrack(k, { gain: 0 })} />
                   <Scale marks={GAIN_MARKS} share={gainShare} fader />
@@ -393,6 +449,14 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
                   {tr.gain > 0 ? "+" : ""}
                   {tr.gain}
                 </b>
+                <span className="pg-strip-tools">
+                  <button type="button" className={`pg-tool ${solo ? "on" : ""}`} disabled={k >= 4} aria-pressed={solo} data-tip={t("Hear in the headphones")} onClick={() => monitor.setTrack(k)}>
+                    <Headphones size={12} />
+                  </button>
+                  <button type="button" className="pg-tool" disabled={!run || !tr.on} data-tip={t("Set the level by itself")} onClick={() => auto(k)}>
+                    <Wand2 size={12} />
+                  </button>
+                </span>
                 <button type="button" className={`pg-on ${tr.on ? "on" : ""}`} disabled={!run} aria-pressed={tr.on} onClick={() => setTrack(k, { on: !tr.on })}>
                   {tr.on ? "ON" : "OFF"}
                 </button>
@@ -407,33 +471,28 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
                 {t("Output")}
                 <small>{tc("channels", CHANNEL_LABEL[p.channels])}</small>
               </span>
+              {p.imageOn ? <span className="pg-verdict off">{t("Image")}</span> : <Verdict peak={outPeak} />}
               <span className="pg-strip-body">
                 <Scale marks={VU_MARKS} share={vuShare} />
                 <Vu l={out[0]} r={out[1]} />
               </span>
-              <b className="pg-db">{p.imageOn ? t("Image") : " "}</b>
+              <b className="pg-db"> </b>
               <span className="pg-on-space" />
             </div>
           )}
           <div className="pg-strip phones">
             <span className="pg-strip-name">
-              <Headphones size={14} />
-              <small>{t("Headphones")}</small>
+              <span className="pg-phones-title">
+                <Headphones size={13} />
+                {t("Headphones")}
+              </span>
+              <small>{n > 0 ? t("Track {n}", { n: monitor.track + 1 }) : "—"}</small>
             </span>
             <span className="pg-strip-body">
               <Fader value={monitor.muted ? 0 : monitor.volume} min={0} max={1} step={0.01} label={t("Headphones")} onChange={(v) => {
                 monitor.setVolume(v);
                 if (monitor.muted) monitor.setMuted(false);
               }} />
-              {heard > 1 && (
-                <span className="pg-phones-tracks" role="radiogroup" aria-label={t("Track heard")}>
-                  {Array.from({ length: heard }, (_, k) => (
-                    <button key={k} type="button" role="radio" aria-checked={monitor.track === k} className={monitor.track === k ? "on" : ""} onClick={() => monitor.setTrack(k)}>
-                      {k + 1}
-                    </button>
-                  ))}
-                </span>
-              )}
             </span>
             <b className="pg-db">{Math.round((monitor.muted ? 0 : monitor.volume) * 100)} %</b>
             <button type="button" className={`pg-on ${monitor.muted ? "mute" : ""}`} aria-pressed={monitor.muted} onClick={() => monitor.setMuted(!monitor.muted)}>

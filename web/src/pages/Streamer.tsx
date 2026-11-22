@@ -97,6 +97,10 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
     setHeard(k);
     void player.current?.setAudioTrack(k, serverNow());
   };
+  // The headphones hear the track at its fader's level.
+  const soloGain = prog.state?.program.tracks[heard]?.gain ?? 0;
+  const { setTrim } = audio;
+  useEffect(() => setTrim(10 ** (soloGain / 20)), [soloGain, setTrim]);
   const m = st?.media;
   const fps = fpsOf(m?.fpsNum, m?.fpsDen);
   const stopAll = async () => {

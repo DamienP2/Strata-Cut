@@ -36,10 +36,11 @@ export class AudioOut {
     if (this.ctx.state === 'suspended') void this.ctx.resume();
   }
 
-  set(volume: number, muted: boolean) {
+  /** `trim`: a gain on top of the volume (the Streamer's headphones follow the track's fader). */
+  set(volume: number, muted: boolean, trim = 1) {
     this.vol = volume;
     this.muted = muted;
-    this.volume.gain.setTargetAtTime(muted ? 0 : volume * volume, this.ctx.currentTime, 0.015);
+    this.volume.gain.setTargetAtTime(muted ? 0 : volume * volume * trim, this.ctx.currentTime, 0.015);
   }
 
   get level() {

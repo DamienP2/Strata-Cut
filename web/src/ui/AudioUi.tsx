@@ -25,8 +25,9 @@ export function useAudioOut(video: RefObject<HTMLVideoElement | null>) {
       setOut(null);
     };
   }, [video]);
-  useEffect(() => out?.set(volume, muted), [out, volume, muted]);
-  return { out, volume, setVolume, muted, setMuted };
+  const [trim, setTrim] = useState(1);
+  useEffect(() => out?.set(volume, muted, trim), [out, volume, muted, trim]);
+  return { out, volume, setVolume, muted, setMuted, setTrim };
 }
 
 const FLOOR = -60;

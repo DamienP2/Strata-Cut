@@ -158,6 +158,9 @@ impl Program {
     }
 }
 
+/// What goes out never passes -1 dBFS, whatever the levels set (a limiter, not a level that moves).
+const LIMIT: &str = "0.891";
+
 /// A number short ("0.5", "1", "0.251189").
 fn trim(v: f64) -> String {
     let s = format!("{v:.6}");
@@ -244,7 +247,7 @@ fn ffmpeg_args(p: &Program, sh: &Shape, ports: &Ports) -> Vec<String> {
              [L]asplit[L1][L2];[R]asplit[R1][R2];\
              [L1][R1]amix@cl=inputs=2:weights={cl}:normalize=0[OL];\
              [L2][R2]amix@cr=inputs=2:weights={cr}:normalize=0[OR];\
-             [OL][OR]join=inputs=2:channel_layout=stereo,volume@pgm={volume}[a]",
+             [OL][OR]join=inputs=2:channel_layout=stereo,volume@pgm={volume},alimiter=limit={LIMIT}:attack=5:release=50:level=0[a]",
             n = sh.tracks,
             wt = p.weights(sh.tracks),
         ));
@@ -852,7 +855,7 @@ mod tests {
         assert!(g.contains("lutyuv@img=a=val*1:enable=1"));
         assert!(g.contains("[0:a:1]aresample"));
         assert!(g.contains("amix@trk=inputs=2:weights=1|0"));
-        assert!(g.contains("volume@pgm=0[a]"));
+        assert!(g.contains("volume@pgm=0,alimiter=limit=0.891"));
         assert!(a.contains(&"tcp://127.0.0.1:2".to_string()) && a.contains(&"udp://127.0.0.1:5?pkt_size=1316".to_string()));
         // No sound: silence.
         let a = ffmpeg_args(&Program::default(), &shape(0), &ports());
