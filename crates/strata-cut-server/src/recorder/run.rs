@@ -700,9 +700,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             while let Ok(Some(l)) = lines.next_line().await {
                 // What the picture and the sound show; its other info lines are not kept.
                 if let Some((k, ch, db)) = super::level_line(&l) {
-                    let mut lv = rec2.levels.lock().unwrap();
-                    lv.0[k][ch] = db;
-                    lv.1 = super::now_ms();
+                    rec2.levels.lock().unwrap().measured(k, ch, db, super::now_ms());
                     continue;
                 }
                 if rec2.content.lock().unwrap().read(&l, super::now_ms()) {

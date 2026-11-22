@@ -85,22 +85,39 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
     const p = new LoopPlayer(video.current!, rec.id, serverNow);
     p.onFrame = (w) => setWall(w);
     player.current = p;
-    void p.goLive(serverNow());
+    void p.goLive(serverNow()).then(() => {
+      if (heardRef.current) void p.setAudioTrack(heardRef.current, serverNow());
+    });
     return () => {
       player.current = null;
       p.destroy();
     };
   }, [rec.id, received]);
-  // The track heard in the headphones (the browser's own: nothing changes in what goes out).
-  const [heard, setHeard] = useState(0);
-  const hear = (k: number) => {
-    setHeard(k);
-    void player.current?.setAudioTrack(k, serverNow());
-  };
-  // The headphones hear the track at its fader's level.
-  const soloGain = prog.state?.program.tracks[heard]?.gain ?? 0;
-  const { setTrim } = audio;
-  useEffect(() => setTrim(10 ** (soloGain / 20)), [soloGain, setTrim]);
+  // The headphones (the browser's own: nothing of it goes out). A track alone (solo), at its
+  // fader's level; else the output as it goes out: the tracks on (the browser plays one, the
+  // first of them), their level and the output's, the channels, and silent under the image with
+  // the same fade.
+  const [solo, setSolo] = useState<number | null>(null);
+  const pg = prog.state?.program;
+  const nTracks = Math.min(4, prog.state?.tracks.length ?? 0);
+  const isOn = (k: number) => pg?.tracks[k]?.on ?? k === 0;
+  const firstOn = Array.from({ length: nTracks }, (_, k) => k).find(isOn);
+  const heard = solo ?? firstOn ?? 0;
+  const heardRef = useRef(heard);
+  heardRef.current = heard;
+  useEffect(() => {
+    void player.current?.setAudioTrack(heard, serverNow());
+  }, [heard]);
+  const gainOf = (k: number) => pg?.tracks[k]?.gain ?? 0;
+  const level = !pg ? 1 : solo !== null ? 10 ** (gainOf(solo) / 20) : pg.imageOn || firstOn === undefined ? 0 : 10 ** ((gainOf(heard) + pg.master) / 20);
+  // The image coming or going: the sound fades as the picture does; a fader: at once.
+  const imageWas = useRef(pg?.imageOn);
+  useEffect(() => {
+    const switched = imageWas.current !== undefined && imageWas.current !== pg?.imageOn;
+    imageWas.current = pg?.imageOn;
+    audio.out?.setProgram(level, switched && solo === null ? prog.lastFade : 0);
+  }, [audio.out, level]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => audio.out?.setChannels(solo !== null ? 'lr' : (pg?.channels ?? 'lr')), [audio.out, solo, pg?.channels]);
   const m = st?.media;
   const fps = fpsOf(m?.fpsNum, m?.fpsDen);
   const stopAll = async () => {
@@ -126,7 +143,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
         </div>
         <Antenne rec={rec} prog={prog} live={streams.length} kbps={mbps(streams.reduce((a, s) => a + s.kbps, 0), locale())} onStopAll={() => void stopAll()} onSettings={() => setSettings(true)} />
       </div>
-      <Mixer rec={rec} prog={prog} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, track: heard, setTrack: hear }} />
+      <Mixer rec={rec} prog={prog} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, solo, setSolo, heard }} />
       {settings && createPortal(<SettingsModal rec={rec} prog={prog} onClose={() => setSettings(false)} />, document.body)}
     </div>
   );

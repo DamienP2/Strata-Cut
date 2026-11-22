@@ -7,6 +7,9 @@ export class AudioOut {
   /** Everything heard goes here first (measured), then through the volume. */
   private readonly bus: GainNode;
   private readonly volume: GainNode;
+  /** The Streamer's programme as heard: its level (with the image's fade) and its channels. */
+  private readonly program: GainNode;
+  private readonly matrix: GainNode[];
   private readonly meters: AnalyserNode[];
   private readonly data: Float32Array<ArrayBuffer>;
   private grainSource: AudioBufferSourceNode | null = null;
@@ -28,7 +31,38 @@ export class AudioOut {
     this.bus.connect(split);
     split.connect(this.meters[0], 0);
     split.connect(this.meters[1], 1);
-    this.bus.connect(this.volume).connect(this.ctx.destination);
+    // bus → programme level → channels (left/right from left/right) → volume → out.
+    this.program = this.ctx.createGain();
+    const split2 = this.ctx.createChannelSplitter(2);
+    const merge = this.ctx.createChannelMerger(2);
+    this.matrix = [0, 1, 2, 3].map(() => this.ctx.createGain());
+    this.bus.connect(this.program).connect(split2);
+    // matrix: [left from left, left from right, right from left, right from right]
+    split2.connect(this.matrix[0], 0).connect(merge, 0, 0);
+    split2.connect(this.matrix[1], 1).connect(merge, 0, 0);
+    split2.connect(this.matrix[2], 0).connect(merge, 0, 1);
+    split2.connect(this.matrix[3], 1).connect(merge, 0, 1);
+    this.setChannels('lr');
+    merge.connect(this.volume).connect(this.ctx.destination);
+  }
+
+  /** The programme's level (a factor), reached in `ramp` seconds (a fade) or at once. */
+  setProgram(gain: number, ramp = 0) {
+    const g = this.program.gain;
+    const now = this.ctx.currentTime;
+    g.cancelScheduledValues(now);
+    if (ramp > 0.05) {
+      g.setValueAtTime(g.value, now);
+      g.linearRampToValueAtTime(gain, now + ramp);
+    } else {
+      g.setTargetAtTime(gain, now, 0.015);
+    }
+  }
+
+  /** The channels heard: as they are, the left or the right on both, or both mixed. */
+  setChannels(mode: 'lr' | 'l' | 'r' | 'mono') {
+    const m = { lr: [1, 0, 0, 1], l: [1, 0, 1, 0], r: [0, 1, 0, 1], mono: [0.5, 0.5, 0.5, 0.5] }[mode];
+    this.matrix.forEach((g, i) => g.gain.setTargetAtTime(m[i], this.ctx.currentTime, 0.015));
   }
 
   /** Browsers start sound only after a click or a key. */
@@ -36,11 +70,10 @@ export class AudioOut {
     if (this.ctx.state === 'suspended') void this.ctx.resume();
   }
 
-  /** `trim`: a gain on top of the volume (the Streamer's headphones follow the track's fader). */
-  set(volume: number, muted: boolean, trim = 1) {
+  set(volume: number, muted: boolean) {
     this.vol = volume;
     this.muted = muted;
-    this.volume.gain.setTargetAtTime(muted ? 0 : volume * volume * trim, this.ctx.currentTime, 0.015);
+    this.volume.gain.setTargetAtTime(muted ? 0 : volume * volume, this.ctx.currentTime, 0.015);
   }
 
   get level() {

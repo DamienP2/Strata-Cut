@@ -420,6 +420,37 @@ impl Content {
     }
 }
 
+/// The sound tracks' peaks as the meters read them (dB, -90: silence): each channel holds its
+/// highest measure a moment (a reader 5 times a second sees every peak, not just the last of
+/// the 10 measures a second), then takes the next.
+#[derive(Clone, Copy, Debug)]
+pub struct Levels {
+    peaks: [[(f32, i64); 2]; 4],
+}
+
+impl Default for Levels {
+    fn default() -> Self {
+        Levels { peaks: [[(-90.0, 0); 2]; 4] }
+    }
+}
+
+impl Levels {
+    /// How long a peak is held (ms): longer than a reader's interval.
+    const HOLD: i64 = 300;
+
+    pub fn measured(&mut self, track: usize, ch: usize, db: f32, now: i64) {
+        let p = &mut self.peaks[track][ch];
+        if db >= p.0 || now - p.1 > Self::HOLD {
+            *p = (db, now);
+        }
+    }
+
+    /// A track's peaks now (none measured for a second: silence, the source stopped).
+    pub fn read(&self, track: usize, now: i64) -> [f32; 2] {
+        self.peaks[track].map(|(db, at)| if now - at < 1000 { db } else { -90.0 })
+    }
+}
+
 /// A level measured by the preview (`ametadata@lv<k>`: `lavfi.astats.<channel>.Peak_level=<dB>`):
 /// (track, channel, dB; silence at -90).
 pub fn level_line(line: &str) -> Option<(usize, usize, f32)> {
@@ -493,9 +524,9 @@ pub struct Rec {
     /// The picture black, frozen, the sound silent: since (server time, ms), and whether the
     /// journal already said so.
     pub content: Mutex<Content>,
-    /// Each sound track's peak, left and right (dB), as the preview measures them (10 a second),
-    /// and when they were measured last (server ms).
-    pub levels: Mutex<([[f32; 2]; 4], i64)>,
+    /// Each sound track's peak, left and right: the preview measures them 10 times a second,
+    /// the highest of the last moment is kept (see `Levels`).
+    pub levels: Mutex<Levels>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Local UDP ports the stream as received is copied to (the streams to destinations: see
     /// `crate::streams`), each with its key.
@@ -1083,7 +1114,7 @@ impl Manager {
             rtp: false.into(),
             preview_lag: 0.into(),
             content: Mutex::new(Content::default()),
-            levels: Mutex::new(([[-90.0; 2]; 4], 0)),
+            levels: Mutex::new(Levels::default()),
             last_packet: 0.into(),
             audio_extra: extra_audio.into(),
             restart_run: tokio::sync::Notify::new(),
@@ -1576,6 +1607,17 @@ mod glitch_tests {
         assert!(glitch_lines(&[], 0, 0).is_empty());
         let l = glitch_lines(&recs, 0, 12);
         assert!(l[0].contains("network card of this server") && l.iter().any(|x| x.contains("dropped 12 packets")), "{l:?}");
+    }
+
+    #[test]
+    fn levels_held() {
+        let mut l = Levels::default();
+        l.measured(0, 0, -10.0, 1000);
+        l.measured(0, 0, -30.0, 1100);
+        assert_eq!(l.read(0, 1150)[0], -10.0, "the peak is held");
+        l.measured(0, 0, -30.0, 1400);
+        assert_eq!(l.read(0, 1450)[0], -30.0, "then the next measure");
+        assert_eq!(l.read(0, 2500)[0], -90.0, "nothing measured for a second: silence");
     }
 
     #[test]

@@ -318,8 +318,8 @@ function useLevels(recId: string, n: number): { lv: number[][]; recent: (k: numb
             h.push(Math.max(tr[0], tr[1]));
             if (h.length > 50) h.shift();
           });
-          // A peak falls back slowly (as a meter's needle), 6 dB a reading.
-          setLv((prev) => r.tracks.map((tr, k) => tr.map((db, c) => Math.max(db, (prev[k]?.[c] ?? -90) - 6))));
+          // A peak falls back slowly (as a meter's needle): 2.5 dB a reading, 12 dB a second.
+          setLv((prev) => r.tracks.map((tr, k) => tr.map((db, c) => Math.max(db, (prev[k]?.[c] ?? -90) - 2.5))));
         },
         () => {},
       );
@@ -340,9 +340,11 @@ export interface Monitor {
   setVolume: (v: number) => void;
   muted: boolean;
   setMuted: (m: boolean) => void;
-  /** The track heard (0: the first), among those the preview carries (4 at most). */
-  track: number;
-  setTrack: (k: number) => void;
+  /** The track heard alone (solo), or none: the output. Among those the preview carries (4 at most). */
+  solo: number | null;
+  setSolo: (k: number | null) => void;
+  /** The track played (the solo, else the first on). */
+  heard: number;
 }
 
 /** A vertical fader. */
@@ -435,7 +437,7 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
             // As it goes into the mix: the source's level with this track's.
             const lv = (levels[k] ?? [-90, -90]).map((db) => (db <= -90 ? -90 : db + tr.gain));
             const peak = recent(k, 15) + tr.gain;
-            const solo = monitor.track === k;
+            const solo = monitor.solo === k;
             return (
               <div key={k} className={`pg-strip ${tr.on ? "" : "off"}`}>
                 <span className="pg-strip-name" title={lang || undefined}>
@@ -453,7 +455,7 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
                   {tr.gain}
                 </b>
                 <span className="pg-strip-tools">
-                  <button type="button" className={`pg-tool ${solo ? "on" : ""}`} disabled={k >= 4} aria-pressed={solo} data-tip={t("Hear in the headphones")} onClick={() => monitor.setTrack(k)}>
+                  <button type="button" className={`pg-tool ${solo ? "on" : ""}`} disabled={k >= 4} aria-pressed={solo} data-tip={solo ? t("Back to the output in the headphones") : t("Hear alone in the headphones")} onClick={() => monitor.setSolo(solo ? null : k)}>
                     <Headphones size={12} />
                   </button>
                   <button type="button" className="pg-tool" disabled={!run || !tr.on} data-tip={t("Set the level by itself")} onClick={() => auto(k)}>
@@ -493,7 +495,7 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
                 <Headphones size={13} />
                 {t("Headphones")}
               </span>
-              <small>{n > 0 ? t("Track {n}", { n: monitor.track + 1 }) : "—"}</small>
+              <small>{monitor.solo !== null ? t("Track {n}", { n: monitor.solo + 1 }) : t("Output")}</small>
             </span>
             <span className="pg-strip-body">
               <Fader value={monitor.muted ? 0 : monitor.volume} min={0} max={1} step={0.01} label={t("Headphones")} onChange={(v) => {

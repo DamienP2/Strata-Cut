@@ -801,11 +801,10 @@ async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
 async fn levels(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>) -> ApiResult<Json<Value>> {
     require(me.can("stream.view") || me.is_admin())?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
-    let (lv, at) = *rec.levels.lock().unwrap();
+    let lv = *rec.levels.lock().unwrap();
     let n = rec.status.lock().unwrap().media.as_ref().map(|m| m.audio_tracks as usize).unwrap_or(0).min(4);
-    // Not measured for a second: none (the source stopped).
-    let fresh = now_ms() - at < 1000;
-    Ok(Json(json!({ "tracks": (0..n).map(|k| if fresh { lv[k] } else { [-90.0, -90.0] }).collect::<Vec<_>>() })))
+    let now = now_ms();
+    Ok(Json(json!({ "tracks": (0..n).map(|k| lv.read(k, now)).collect::<Vec<_>>() })))
 }
 
 #[derive(Deserialize)]
