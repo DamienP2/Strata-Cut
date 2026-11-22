@@ -156,10 +156,6 @@ export function ProgramLayer({ rec, prog, editable }: { rec: Recorder; prog: Pro
           {live && <span className="pg-handle" onPointerDown={(e) => start(e, true)} />}
         </div>
       )}
-      <span className="pg-tag">
-        <i />
-        {t("PROGRAMME")}
-      </span>
     </div>
   );
 }
@@ -222,9 +218,7 @@ export function Antenne({ rec, prog, live, kbps, onStopAll, onSettings }: { rec:
                 <b>{live}</b> {t("on air")} · <b>{kbps}</b>
               </span>
             </>
-          ) : (
-            <span className="muted">{t("Nothing sent")}</span>
-          )}
+          ) : null}
           <span className="spacer" />
           {run && live > 0 && (
             <button type="button" className="btn" onClick={onStopAll}>

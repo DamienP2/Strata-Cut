@@ -18,7 +18,7 @@ import { LoopPlayer } from '../player';
 import { fpsOf, timecode } from '../tc';
 import { Empty } from '../ui/Empty';
 import { NumberField } from '../ui/fields';
-import { Meters, useAudioOut } from '../ui/AudioUi';
+import { useAudioOut } from '../ui/AudioUi';
 import { clockOf, mbps, useDestinations, useStreams, volume, type Destination, type StreamInfo } from '../streams';
 import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
@@ -140,7 +140,6 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
             <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
             {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
             {received && <ProgramLayer rec={rec} prog={prog} editable={run} />}
-            {received && <Meters out={audio.out} />}
           </div>
           <div className="pg-meta">
             <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
