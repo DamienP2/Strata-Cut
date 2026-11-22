@@ -809,8 +809,9 @@ async fn levels(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(s
     require(me.can("stream.view") || me.is_admin())?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let n = rec.status.lock().unwrap().media.as_ref().map(|m| m.audio_tracks as usize).unwrap_or(0).min(4);
-    let at = q.at.unwrap_or_else(now_ms);
     let lv = rec.levels.lock().unwrap();
+    // Not said: the newest measured.
+    let at = q.at.or_else(|| lv.newest_at()).unwrap_or_else(now_ms);
     Ok(Json(json!({ "tracks": (0..n).map(|k| lv.read(k, at)).collect::<Vec<_>>() })))
 }
 
