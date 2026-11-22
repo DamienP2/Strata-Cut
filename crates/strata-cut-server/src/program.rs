@@ -80,6 +80,8 @@ pub struct Program {
     pub tracks: Vec<Track>,
     /// "lr" (as they are), "l" or "r" (that one on both), "mono".
     pub channels: String,
+    /// The level of what goes out, dB (after the tracks' own).
+    pub master: f64,
     /// While the source is lost, its lives send the slate (else they wait for it).
     pub slate: bool,
 }
@@ -98,6 +100,7 @@ impl Default for Program {
             opacity: 100.0,
             tracks: Vec::new(),
             channels: "lr".into(),
+            master: 0.0,
             slate: true,
         }
     }
@@ -109,9 +112,10 @@ impl Program {
             return Err("the channels are lr, l, r or mono".into());
         }
         let ok = |v: f64| v.is_finite();
-        if ![self.x, self.y, self.size, self.opacity].into_iter().all(ok) || self.tracks.iter().any(|t| !ok(t.gain)) {
+        if ![self.x, self.y, self.size, self.opacity, self.master].into_iter().all(ok) || self.tracks.iter().any(|t| !ok(t.gain)) {
             return Err("a value is not a number".into());
         }
+        self.master = self.master.clamp(-40.0, 12.0);
         self.x = self.x.clamp(0.0, 1.0);
         self.y = self.y.clamp(0.0, 1.0);
         self.size = self.size.clamp(2.0, 100.0);
@@ -146,6 +150,11 @@ impl Program {
             "mono" => ("0.5|0.5", "0.5|0.5"),
             _ => ("1|0", "0|1"),
         }
+    }
+
+    /// The master level, as a factor.
+    fn master_gain(&self) -> String {
+        trim(10f64.powf(self.master / 20.0))
     }
 
     /// The overlay's opacity on air (0 when it is not).
@@ -247,8 +256,9 @@ fn ffmpeg_args(p: &Program, sh: &Shape, ports: &Ports) -> Vec<String> {
              [L]asplit[L1][L2];[R]asplit[R1][R2];\
              [L1][R1]amix@cl=inputs=2:weights={cl}:normalize=0[OL];\
              [L2][R2]amix@cr=inputs=2:weights={cr}:normalize=0[OR];\
-             [OL][OR]join=inputs=2:channel_layout=stereo,volume@pgm={volume},alimiter=limit={LIMIT}:attack=5:release=50:level=0[a]",
+             [OL][OR]join=inputs=2:channel_layout=stereo,volume@pgm={volume},volume@mst={mst},alimiter=limit={LIMIT}:attack=5:release=50:level=0[a]",
             n = sh.tracks,
+            mst = p.master_gain(),
             wt = p.weights(sh.tracks),
         ));
     }
@@ -613,6 +623,9 @@ async fn apply(z: &mut Zmq, was: &Program, next: &Program, sh: &Shape, image_fad
         if next.weights(sh.tracks) != was.weights(sh.tracks) {
             z.send(&format!("amix@trk weights {}", next.weights(sh.tracks))).await?;
         }
+        if next.master != was.master {
+            z.send(&format!("volume@mst volume {}", next.master_gain())).await?;
+        }
         if next.channels != was.channels {
             let (cl, cr) = next.channel_weights();
             z.send(&format!("amix@cl weights {cl}")).await?;
@@ -855,7 +868,7 @@ mod tests {
         assert!(g.contains("lutyuv@img=a=val*1:enable=1"));
         assert!(g.contains("[0:a:1]aresample"));
         assert!(g.contains("amix@trk=inputs=2:weights=1|0"));
-        assert!(g.contains("volume@pgm=0,alimiter=limit=0.891"));
+        assert!(g.contains("volume@pgm=0,volume@mst=1,alimiter=limit=0.891"));
         assert!(a.contains(&"tcp://127.0.0.1:2".to_string()) && a.contains(&"udp://127.0.0.1:5?pkt_size=1316".to_string()));
         // No sound: silence.
         let a = ffmpeg_args(&Program::default(), &shape(0), &ports());

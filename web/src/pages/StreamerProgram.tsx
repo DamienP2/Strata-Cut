@@ -30,6 +30,8 @@ export interface Program {
   opacity: number;
   tracks: Track[];
   channels: "lr" | "l" | "r" | "mono";
+  /** The level of what goes out, dB. */
+  master: number;
   slate: boolean;
 }
 interface ProgramState {
@@ -377,8 +379,8 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
     prog.set({ tracks: next });
   };
   // The source's own levels again (each track at 0 dB; on and off kept).
-  const reset = () => prog.set({ tracks: all().map((tr) => ({ ...tr, gain: 0 })) });
-  const changed = all().some((tr) => tr.gain !== 0);
+  const reset = () => prog.set({ tracks: all().map((tr) => ({ ...tr, gain: 0 })), master: 0 });
+  const changed = all().some((tr) => tr.gain !== 0) || p.master !== 0;
   // AUTO: the track's peaks of the last 10 s brought to the target.
   const auto = (k: number) => {
     const peak = recent(k, 50);
@@ -400,7 +402,7 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
       const src = p.channels === "l" ? lv[0] : p.channels === "r" ? lv[1] : p.channels === "mono" ? Math.max(lv[0], lv[1]) - 3 : lv[c];
       best = Math.max(best, src + tr.gain);
     });
-    return best;
+    return best <= -90 ? -90 : Math.min(-1, best + p.master);
   });
   // The same over the last 3 s, for its verdict (limited at -1 dBFS when it goes out).
   let outPeak = -90;
@@ -408,6 +410,7 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
     const tr = trackOf(p, k);
     if (tr.on) outPeak = Math.max(outPeak, recent(k, 15) + tr.gain);
   });
+  outPeak = outPeak <= -90 ? -90 : outPeak + p.master;
   return (
     <section className="pg-box pg-mixer">
       <header>
@@ -473,10 +476,14 @@ export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi;
               </span>
               {p.imageOn ? <span className="pg-verdict off">{t("Image")}</span> : <Verdict peak={outPeak} />}
               <span className="pg-strip-body">
-                <Scale marks={VU_MARKS} share={vuShare} />
+                <Fader value={p.master} min={-40} max={12} step={1} disabled={!run} label={t("Output")} onChange={(master) => prog.set({ master })} onReset={() => prog.set({ master: 0 })} />
+                <Scale marks={GAIN_MARKS} share={gainShare} fader />
                 <Vu l={out[0]} r={out[1]} />
               </span>
-              <b className="pg-db"> </b>
+              <b className="pg-db">
+                {p.master > 0 ? "+" : ""}
+                {p.master}
+              </b>
               <span className="pg-on-space" />
             </div>
           )}
