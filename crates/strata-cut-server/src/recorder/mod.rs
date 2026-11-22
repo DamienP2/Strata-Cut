@@ -580,6 +580,8 @@ pub struct Rec {
     /// When the relay last passed the stream on (server time, ms): a live sees the source lost
     /// at once, before its recorder notices.
     pub last_packet: std::sync::atomic::AtomicI64,
+    /// When the source last sent sound (an audio packet, server time, ms; 0: never).
+    pub last_sound: std::sync::atomic::AtomicI64,
     /// Sound tracks the preview makes besides the first (0 to 3: the player's choice of track),
     /// and a run started again when the source turns out to have more.
     pub audio_extra: std::sync::atomic::AtomicU32,
@@ -1182,6 +1184,7 @@ impl Manager {
             content: Mutex::new(Content::default()),
             levels: Mutex::new(Levels::default()),
             last_packet: 0.into(),
+            last_sound: 0.into(),
             audio_extra: extra_audio.into(),
             empty_streams: Mutex::new(Vec::new()),
             restart_run: tokio::sync::Notify::new(),

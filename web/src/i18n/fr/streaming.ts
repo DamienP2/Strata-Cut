@@ -229,5 +229,7 @@ export const streaming: Record<string, string> = {
   'the source is no longer received, a slate is sent': 'la source n’est plus reçue, image de secours envoyée',
   'the source is back, the live goes on': 'la source est revenue, le direct reprend',
   'the source does not answer': 'La source ne répond pas',
+  'the source does not answer: waiting for it': 'La source ne répond pas : en attente',
+  'no free local port for the stream: trying again': 'Aucun port local libre : nouvel essai',
   'no free local port for the stream': 'Aucun port local libre pour la diffusion',
 };

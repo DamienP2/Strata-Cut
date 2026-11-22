@@ -346,14 +346,16 @@ pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Op
     // 1. The stream as received, in segments.
     a.extend(s(&["-map", &video, "-map", &sounds, "-map", &subs]));
     a.extend(left_out.clone());
-    a.extend(s(&["-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
+    // A sound that stops (an encoder that no longer sends it) does not hold the picture back:
+    // FFmpeg waits for it 1 s at most (10 s by default, the source said lost meanwhile).
+    a.extend(s(&["-c", "copy", "-max_interleave_delta", "1000000", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
     a.push(d("master/list.csv"));
     a.push(d("master/s%08d.ts"));
     // 2. The same picture, its sounds and subtitles, same timestamps, for the preview and the
     // streams (UDP never waits for them).
     a.extend(s(&["-map", &video, "-map", &sounds, "-map", &subs]));
     a.extend(left_out);
-    a.extend(s(&["-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts"]));
+    a.extend(s(&["-c", "copy", "-max_interleave_delta", "1000000", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts"]));
     a.push(format!("udp://127.0.0.1:{preview_port}?pkt_size=1316"));
     // 3. The programme guide (DVB EIT sections), decoded by the recorder.
     if let Some(map) = epg {
@@ -434,13 +436,20 @@ impl Relay {
             let mut buf = vec![0u8; 65536];
             let mut taps: Vec<u16> = Vec::new();
             let mut packets = 0u32;
+            // Its audio tracks, read as they pass: does the source still send sound?
+            let mut seen = crate::program::Seen::default();
             while !done.load(Ordering::Relaxed) {
                 let Ok(n) = sock.recv(&mut buf) else { continue };
                 let _ = sock.send_to(&buf[..n], (local, preview));
+                let now = super::now_ms();
+                for p in buf[..n].chunks(188) {
+                    seen.packet(p, now);
+                }
                 // The taps, looked at again every 64 packets (a few hundredths of a second).
                 if packets.is_multiple_of(64) {
                     taps = rec.taps.lock().unwrap().iter().map(|t| t.1).collect();
-                    rec.last_packet.store(super::now_ms(), Ordering::Relaxed);
+                    rec.last_packet.store(now, Ordering::Relaxed);
+                    rec.last_sound.store(seen.newest(), Ordering::Relaxed);
                 }
                 packets = packets.wrapping_add(1);
                 for &port in &taps {
@@ -1037,8 +1046,13 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     audio_seen = (scan.last_audio, now_ms());
                 }
                 let stuck = |seen: &(Option<u32>, i64)| seen.0.is_some() && now_ms() - seen.1 > PREVIEW_STUCK_MS;
-                let sound = !rec.no_audio.load(Ordering::Relaxed);
-                if (stuck(&video_seen) || (sound && stuck(&audio_seen))) && now_ms() - master_seen.1 < 15_000 {
+                // The sound: only when the source still sends it (one that stopped sending sound
+                // is not the preview's fault, and a new recording would cut the lives).
+                let sound = !rec.no_audio.load(Ordering::Relaxed) && now_ms() - rec.last_sound.load(Ordering::Relaxed) < 10_000;
+                // Not while lives send the source: a new recording would cut them (a person stops
+                // or starts them again, never the server).
+                let lives = !rec.taps.lock().unwrap().is_empty();
+                if !lives && (stuck(&video_seen) || (sound && stuck(&audio_seen))) && now_ms() - master_seen.1 < 15_000 {
                     let (what, since) = if stuck(&video_seen) { ("pictures", video_seen.1) } else { ("sound", audio_seen.1) };
                     let lines: Vec<String> = plog.lock().unwrap().iter().cloned().collect();
                     // Its last error, if it said one (not its mere warnings).

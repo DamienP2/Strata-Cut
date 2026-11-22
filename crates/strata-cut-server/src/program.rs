@@ -266,7 +266,7 @@ fn ffmpeg_args(p: &Program, sh: &Shape, ports: &Ports, on: &[usize]) -> Vec<Stri
     let k = sh.kbps;
     a.extend(s(&["-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p"]));
     a.extend(s(&["-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string(), "-sc_threshold", "0"]));
-    a.extend(s(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-f", "mpegts"]));
+    a.extend(s(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-max_interleave_delta", "1000000", "-f", "mpegts"]));
     a.push(format!("udp://127.0.0.1:{}?pkt_size=1316", ports.out));
     a
 }
@@ -524,7 +524,7 @@ impl Programs {
     /// stopped.
     async fn once(&self, rec: &Arc<Rec>, r: &Arc<Runner>, inlet: &Inlet, was: &mut Option<Vec<usize>>, rx: &mut mpsc::UnboundedReceiver<Change>, stop: &mut watch::Receiver<bool>) -> Result<(), String> {
         let ffmpeg = self.recorders.ffmpeg.clone();
-        let sh = Shape::of(rec);
+        let mut sh = Shape::of(rec);
         let mut p = self.get(&rec.id);
         let name = rec.config().name;
         let image = Arc::new(Mutex::new(Arc::new(self.image(&ffmpeg, &p, &sh, &name).await)));
@@ -541,12 +541,17 @@ impl Programs {
         if was.is_none() {
             let t = Instant::now();
             while t.elapsed() < Duration::from_millis(2500) {
-                let now = now_ms();
-                if inlet.known() && (t.elapsed() > Duration::from_millis(1500) || inlet.mixed(&p.on(sh.tracks), sh.tracks, None, now) == p.on(sh.tracks)) {
-                    break;
+                if let Some(n) = inlet.count() {
+                    if n == 0 || t.elapsed() > Duration::from_millis(1500) || inlet.mixed(&p.on(n), n, None, now_ms()) == p.on(n) {
+                        break;
+                    }
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
+        }
+        // Its tracks as they come (what was said of the source may be of before).
+        if let Some(n) = inlet.count() {
+            sh.tracks = n;
         }
         let mixed = inlet.mixed(&p.on(sh.tracks), sh.tracks, was.as_deref(), now_ms());
         if was.as_ref().is_some_and(|w| *w != mixed) || was.is_none() && mixed != p.on(sh.tracks) {
@@ -601,7 +606,8 @@ impl Programs {
                 // A track mixed that no longer sends anything, or one on that sends again: another
                 // mix (the source lost: what comes next is the source's matter).
                 _ = watch.tick() => {
-                    if rec.flowing() && inlet.mixed(&p.on(sh.tracks), sh.tracks, Some(&mixed), now_ms()) != mixed {
+                    let other = inlet.count().is_some_and(|n| n != sh.tracks);
+                    if rec.flowing() && (other || inlet.mixed(&p.on(sh.tracks), sh.tracks, Some(&mixed), now_ms()) != mixed) {
                         let _ = child.kill().await;
                         return Ok(());
                     }
@@ -811,14 +817,21 @@ struct Inlet {
 /// The audio tracks of the source's MPEG-TS, in order: their PID, their last packet and the start
 /// of the packets coming without a break (ms).
 #[derive(Default)]
-struct Seen {
+pub(crate) struct Seen {
     pmt: Option<u16>,
+    /// Its PMT was read (the tracks below are the source's).
+    read: bool,
     tracks: Vec<(u16, i64, i64)>,
 }
 
 impl Seen {
+    /// When an audio track last sent something (0: never).
+    pub(crate) fn newest(&self) -> i64 {
+        self.tracks.iter().map(|t| t.1).max().unwrap_or(0)
+    }
+
     /// One 188-byte packet.
-    fn packet(&mut self, p: &[u8], now: i64) {
+    pub(crate) fn packet(&mut self, p: &[u8], now: i64) {
         if p.len() < 188 || p[0] != 0x47 {
             return;
         }
@@ -851,6 +864,7 @@ impl Seen {
                 self.pmt = Some(pmt);
             }
         } else if let Some(pids) = pmt_audio(sec) {
+            self.read = true;
             let old = std::mem::take(&mut self.tracks);
             self.tracks = pids.into_iter().map(|pid| old.iter().find(|t| t.0 == pid).copied().unwrap_or((pid, 0, 0))).collect();
         }
@@ -970,10 +984,10 @@ impl Inlet {
             .collect()
     }
 
-    /// The source's tracks were read (its PMT), or not.
-    fn known(&self) -> bool {
+    /// The number of the source's audio tracks, once its PMT was read.
+    fn count(&self) -> Option<usize> {
         let s = self.seen.lock().unwrap();
-        s.pmt.is_some() && !s.tracks.is_empty()
+        s.read.then_some(s.tracks.len().min(8))
     }
 }
 

@@ -552,14 +552,10 @@ impl Streams {
         }
     }
 
-    /// One FFmpeg after another until stopped. A live that never started (the destination did
-    /// not take it: its key, its address) ends there, with why; a live lost on the way is made
-    /// again until it is stopped (2 s, then every 5 s).
-    /// Waits until the source is received. False: the live was stopped, or the source did not
-    /// come within `limit` (then said, with the failed).
-    async fn source_ready(&self, s: &Session, d: &Destination, rec: &crate::recorder::Rec, stop: &mut watch::Receiver<bool>, limit: Option<Duration>) -> bool {
+    /// Waits until the source is received (however long). False: the live was stopped.
+    async fn source_ready(&self, s: &Session, rec: &crate::recorder::Rec, stop: &mut watch::Receiver<bool>) -> bool {
         let since = std::time::Instant::now();
-        let mut said = false;
+        let mut said = "";
         loop {
             if *stop.borrow() {
                 return false;
@@ -567,15 +563,11 @@ impl Streams {
             if rec.flowing() {
                 return true;
             }
-            if limit.is_some_and(|l| since.elapsed() > l) {
-                self.give_up(s, d, "the source does not answer".into());
-                return false;
-            }
-            if !said {
-                said = true;
-                self.set(s, |st| {
-                    st.message = "waiting for the source".into();
-                });
+            // Long waited: said, and waited on (a person stops the live).
+            let now = if since.elapsed() > Duration::from_secs(120) { "the source does not answer: waiting for it" } else { "waiting for the source" };
+            if said != now {
+                said = now;
+                self.set(s, |st| st.message = now.into());
             }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(500)) => {}
@@ -584,9 +576,9 @@ impl Streams {
         }
     }
 
-    /// Waits until the programme comes. False: the live was stopped, or it did not come within
-    /// `limit` (then said, with the failed).
-    async fn program_ready(&self, s: &Session, d: &Destination, r: &crate::program::Runner, stop: &mut watch::Receiver<bool>, limit: Option<Duration>) -> bool {
+    /// Waits until the programme comes (however long, said with why it fails). False: the live
+    /// was stopped.
+    async fn program_ready(&self, s: &Session, r: &crate::program::Runner, stop: &mut watch::Receiver<bool>) -> bool {
         let since = std::time::Instant::now();
         let mut said = false;
         loop {
@@ -600,11 +592,6 @@ impl Streams {
                     }
                 });
                 return true;
-            }
-            if limit.is_some_and(|l| since.elapsed() > l) {
-                let why = r.why();
-                self.give_up(s, d, if why.is_empty() { "the programme does not start".into() } else { format!("the programme does not start: {why}") });
-                return false;
             }
             // The source is here: what is waited for now is the programme (said, with why it failed).
             if !said || since.elapsed() > Duration::from_secs(5) {
@@ -680,6 +667,20 @@ impl Streams {
         self.failed.lock().unwrap().insert(s.dest.clone(), Failed { source: s.source.clone(), message: why, at: now_ms() });
     }
 
+    /// Said, and 5 s before trying again. False: the live was stopped meanwhile.
+    async fn wait_again(&self, s: &Session, d: &Destination, why: String, stop: &mut watch::Receiver<bool>) -> bool {
+        tracing::warn!("streaming to {}: {why}", d.name);
+        self.set(s, |st| {
+            st.state = "retrying";
+            st.message = why;
+        });
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+            _ = stop.changed() => {}
+        }
+        !*stop.borrow()
+    }
+
     async fn run(&self, s: Arc<Session>, d: Destination) {
         let mut stop = s.stop.subscribe();
         let mut failures = 0u32;
@@ -718,21 +719,24 @@ impl Streams {
                 continue;
             }
             // The source first: woken by this live it takes a few seconds (a web page, an encoder
-            // that has to call, longer). Lost during a live, the live waits for it as long as it
-            // is not stopped; never live, two minutes.
-            if !self.source_ready(&s, &d, &rec, &mut stop, if ever_live { None } else { Some(Duration::from_secs(120)) }).await {
+            // that has to call, longer). The live waits for it, and for its programme, as long as
+            // it is not stopped.
+            if !self.source_ready(&s, &rec, &mut stop).await {
                 break;
             }
-            if !self.program_ready(&s, &d, &runner, &mut stop, if ever_live { None } else { Some(Duration::from_secs(40)) }).await {
+            if !self.program_ready(&s, &runner, &mut stop).await {
                 break;
             }
-            // The programme is H.264.
+            // The programme is H.264, a key frame every 2 s: read 3 s to be sure to find one (its
+            // size, without which nothing can be sent).
             let codec = "h264";
             let Some(port) = free_port() else {
-                self.give_up(&s, &d, "no free local port for the stream".into());
-                break;
+                if !self.wait_again(&s, &d, "no free local port for the stream: trying again".into(), &mut stop).await {
+                    break;
+                }
+                continue;
             };
-            let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-progress", "pipe:1", "-stats_period", "1", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i"].map(String::from).to_vec();
+            let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-progress", "pipe:1", "-stats_period", "1", "-thread_queue_size", "4096", "-analyzeduration", "3000000", "-probesize", "10000000", "-f", "mpegts", "-i"].map(String::from).to_vec();
             args.push(format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000"));
             let (out, note) = output_args(&d, codec);
             args.extend(out);
@@ -741,8 +745,10 @@ impl Streams {
             let mut child = match cmd.spawn() {
                 Ok(c) => c,
                 Err(e) => {
-                    self.give_up(&s, &d, format!("cannot start {ffmpeg}: {e}"));
-                    break;
+                    if !self.wait_again(&s, &d, format!("cannot start {ffmpeg}: {e}"), &mut stop).await {
+                        break;
+                    }
+                    continue;
                 }
             };
             self.set(&s, |st| {
@@ -797,12 +803,10 @@ impl Streams {
             } else {
                 explain(&text, &hide(&crate::recorder::run::best_line(&lines), &d))
             };
-            // Never live: it did not start, there is nothing to make again.
+            // Never live: it did not start (its key, its address…): said, and tried again, as long
+            // as a person does not stop it.
             if !ever_live {
-                let why = why.replace(": connecting again", "").replace(": trying again", "").replace(": waiting for it", "");
-                tracing::warn!("streaming to {}: could not start: {why}", d.name);
-                self.failed.lock().unwrap().insert(s.dest.clone(), Failed { source: s.source.clone(), message: why, at: now_ms() });
-                break;
+                tracing::debug!("streaming to {}: FFmpeg said:\n{}", d.name, hide(&text, &d));
             }
             if started.elapsed() > Duration::from_secs(60) {
                 failures = 0;
@@ -947,7 +951,7 @@ fn hide(msg: &str, d: &Destination) -> String {
 /// A line of the decoder about the source's pictures or sound (a damaged packet), not about the link.
 fn decoder_noise(line: &str) -> bool {
     let l = line.trim_start();
-    ["[h264 @", "[hevc @", "[mpeg2video @", "[aac @", "[mp2 @", "[ac3 @", "[eac3 @", "[aac_latm @"].iter().any(|p| l.starts_with(p))
+    ["[h264 @", "[hevc @", "[mpeg2video @", "[aac @", "[mp2 @", "[ac3 @", "[eac3 @", "[aac_latm @"].iter().any(|p| l.contains(p))
         || ["Consider increasing the value for the 'analyzeduration'", "Increasing reorder buffer", "corrupt input packet", "Packet corrupt", "PES packet size mismatch", "Non-monotonic DTS", "changing to", "Last message repeated"].iter().any(|k| l.contains(k))
 }
 
