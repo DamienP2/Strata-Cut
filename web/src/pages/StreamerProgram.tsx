@@ -302,7 +302,7 @@ const gainShare = (db: number) => (db + 40) / 52;
  * The levels of the source's tracks, measured by the server (5 a second while shown): as a meter
  * shows them (a peak falls back slowly), and the highest of each track over its last readings.
  */
-function useLevels(recId: string, n: number): { lv: number[][]; recent: (k: number, readings: number) => number } {
+function useLevels(recId: string, n: number, shown: () => number | null): { lv: number[][]; recent: (k: number, readings: number) => number } {
   const [lv, setLv] = useState<number[][]>([]);
   const history = useRef<number[][]>([]);
   useEffect(() => {
@@ -310,7 +310,7 @@ function useLevels(recId: string, n: number): { lv: number[][]; recent: (k: numb
     let on = true;
     history.current = [];
     const get = () =>
-      api<{ tracks: number[][] }>("GET", `/api/program/${recId}/levels`).then(
+      api<{ tracks: number[][] }>("GET", `/api/program/${recId}/levels${shown() ? `?at=${Math.round(shown()!)}` : ""}`).then(
         (r) => {
           if (!on) return;
           r.tracks.forEach((tr, k) => {
@@ -367,10 +367,10 @@ function Fader({ value, min, max, step, disabled, label, onChange, onReset }: { 
 }
 
 /** The sound: each track's level, meter and switch (left); what goes out, and the headphones (right). */
-export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi; monitor: Monitor }) {
+export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: ProgramApi; monitor: Monitor; shown: () => number | null }) {
   const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
   const n = prog.state?.tracks.length ?? 0;
-  const { lv: levels, recent } = useLevels(rec.id, n);
+  const { lv: levels, recent } = useLevels(rec.id, n, shown);
   const toast = useApp((s) => s.toast);
   if (!prog.state) return <section className="pg-box pg-mixer" />;
   const { program: p, tracks } = prog.state;

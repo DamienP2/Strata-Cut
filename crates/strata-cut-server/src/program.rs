@@ -797,14 +797,21 @@ async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
     Ok(Json(json!(p)))
 }
 
-/// Each sound track's peak, left and right (dB, -90: silence), measured 10 times a second.
-async fn levels(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>) -> ApiResult<Json<Value>> {
+#[derive(Deserialize)]
+struct At {
+    /// The moment (server ms) the page shows; now if not said.
+    at: Option<i64>,
+}
+
+/// Each sound track's peaks, left and right (dB, -90: silence), of a moment: the one the page's
+/// picture shows (it plays some seconds behind the source).
+async fn levels(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, axum::extract::Query(q): axum::extract::Query<At>) -> ApiResult<Json<Value>> {
     require(me.can("stream.view") || me.is_admin())?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
-    let lv = *rec.levels.lock().unwrap();
     let n = rec.status.lock().unwrap().media.as_ref().map(|m| m.audio_tracks as usize).unwrap_or(0).min(4);
-    let now = now_ms();
-    Ok(Json(json!({ "tracks": (0..n).map(|k| lv.read(k, now)).collect::<Vec<_>>() })))
+    let at = q.at.unwrap_or_else(now_ms);
+    let lv = rec.levels.lock().unwrap();
+    Ok(Json(json!({ "tracks": (0..n).map(|k| lv.read(k, at)).collect::<Vec<_>>() })))
 }
 
 #[derive(Deserialize)]

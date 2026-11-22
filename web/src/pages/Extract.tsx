@@ -617,7 +617,7 @@ function Editor({ rec }: { rec: Recorder }) {
               onChange={(e) => {
                 const k = Number(e.target.value);
                 setAudioTrack(k);
-                void p()?.setAudioTrack(k, serverNow());
+                void p()?.setAudioTrack(k);
               }}
             >
               {Array.from({ length: (run?.extraAudio ?? 0) + 1 }, (_, k) => (

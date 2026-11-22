@@ -32,7 +32,8 @@ class Buffer {
   segs = new Map<number, Seg>();
   constructor(
     sb: SourceBuffer,
-    readonly url: (file: string) => string,
+    /** Where its files are (another sound track: changed while it plays). */
+    public url: (file: string) => string,
   ) {
     this.sb = sb;
   }
@@ -614,18 +615,28 @@ export class LoopPlayer {
     return !this.video.paused || this.reverse !== 0;
   }
 
-  /** Hears another sound track: the run opened again on it, where it was (live, playing or not). */
-  async setAudioTrack(k: number, now: number) {
+  /**
+   * Hears another sound track, without touching the picture: its fragments are appended over the
+   * other track's where it plays (the tracks have the same times), the picture goes on.
+   */
+  async setAudioTrack(k: number) {
     if (k === this.audioTrack) return;
     this.audioTrack = k;
     const r = this.run;
-    if (!r) return;
+    const b = this.audioBuf;
+    if (!r || !b) return;
+    const want = k > 0 && (r.extraAudio ?? 0) >= k ? k : 0;
+    const dir = want ? `audio${want}` : 'audio';
+    b.url = (f) => `/api/recorders/${this.recorder}/runs/${r.id}/${dir}/${f}`;
+    b.appended.clear();
+    const alive = this.alive;
+    await b.append('init', alive);
     const t = this.playhead();
-    const playing = !this.video.paused;
-    const live = this.live;
-    await this.open(r);
-    if (live) await this.goLive(now);
-    else await this.seekT(t, playing);
+    const need = [...b.segs.values()].filter((s) => s[2] > t - 0.5 && s[1] < t + 12).sort((a, c) => a[0] - c[0]);
+    for (const s of need) {
+      if (alive.dead || this.audioTrack !== k) return;
+      await b.append(s[0], alive);
+    }
   }
 
   /** Follows the newest frames. */

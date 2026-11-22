@@ -703,6 +703,10 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     rec2.levels.lock().unwrap().measured(k, ch, db, super::now_ms());
                     continue;
                 }
+                if let Some((k, pts)) = super::level_moment(&l) {
+                    rec2.levels.lock().unwrap().moment(k, pts);
+                    continue;
+                }
                 if rec2.content.lock().unwrap().read(&l, super::now_ms()) {
                     continue;
                 }

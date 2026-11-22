@@ -74,6 +74,8 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   const [wall, setWall] = useState<number | null>(null);
   const [settings, setSettings] = useState(false);
   const player = useRef<LoopPlayer | null>(null);
+  // The moment the picture shows (server ms): the meters show the sound of that moment.
+  const shown = useRef<number | null>(null);
   const received = st?.state === 'recording';
   // Only what is received now is shown: a stopped source shows nothing (not what is left of
   // its last recording).
@@ -83,10 +85,13 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
       return;
     }
     const p = new LoopPlayer(video.current!, rec.id, serverNow);
-    p.onFrame = (w) => setWall(w);
+    p.onFrame = (w) => {
+      setWall(w);
+      shown.current = w;
+    };
     player.current = p;
     void p.goLive(serverNow()).then(() => {
-      if (heardRef.current) void p.setAudioTrack(heardRef.current, serverNow());
+      if (heardRef.current) void p.setAudioTrack(heardRef.current);
     });
     return () => {
       player.current = null;
@@ -106,7 +111,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   const heardRef = useRef(heard);
   heardRef.current = heard;
   useEffect(() => {
-    void player.current?.setAudioTrack(heard, serverNow());
+    void player.current?.setAudioTrack(heard);
   }, [heard]);
   const gainOf = (k: number) => pg?.tracks[k]?.gain ?? 0;
   const level = !pg ? 1 : solo !== null ? 10 ** (gainOf(solo) / 20) : pg.imageOn || firstOn === undefined ? 0 : 10 ** ((gainOf(heard) + pg.master) / 20);
@@ -143,7 +148,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
         </div>
         <Antenne rec={rec} prog={prog} live={streams.length} kbps={mbps(streams.reduce((a, s) => a + s.kbps, 0), locale())} onStopAll={() => void stopAll()} onSettings={() => setSettings(true)} />
       </div>
-      <Mixer rec={rec} prog={prog} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, solo, setSolo, heard }} />
+      <Mixer rec={rec} prog={prog} shown={() => shown.current} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, solo, setSolo, heard }} />
       {settings && createPortal(<SettingsModal rec={rec} prog={prog} onClose={() => setSettings(false)} />, document.body)}
     </div>
   );

@@ -420,35 +420,75 @@ impl Content {
     }
 }
 
-/// The sound tracks' peaks as the meters read them (dB, -90: silence): each channel holds its
-/// highest measure a moment (a reader 5 times a second sees every peak, not just the last of
-/// the 10 measures a second), then takes the next.
-#[derive(Clone, Copy, Debug)]
+/// The sound tracks' peaks as the preview measures them (10 a second, dB, -90: silence), kept a
+/// while with the server time of the moment they are of: the Streamer shows those of the moment
+/// its picture shows (the picture plays some seconds behind the source). That time comes from the
+/// measure's own timestamp (the preview may measure a few at once when it is busy): its least
+/// delay seen to the server's clock, added to it.
+#[derive(Clone, Debug, Default)]
 pub struct Levels {
-    peaks: [[(f32, i64); 2]; 4],
-}
-
-impl Default for Levels {
-    fn default() -> Self {
-        Levels { peaks: [[(-90.0, 0); 2]; 4] }
-    }
+    /// Each track's measures: (their timestamp, ms; left, right).
+    kept: [std::collections::VecDeque<(i64, [f32; 2])>; 4],
+    /// The measure being read, of each track: its timestamp (ms) and the channels read.
+    reading: [(Option<i64>, [Option<f32>; 2]); 4],
+    /// Server ms minus timestamp ms: the least seen (it creeps up, to follow the clocks' drift).
+    offset: Option<i64>,
 }
 
 impl Levels {
-    /// How long a peak is held (ms): longer than a reader's interval.
-    const HOLD: i64 = 300;
+    /// How long the measures are kept (ms): more than the picture's delay may be.
+    const KEEP: i64 = 70_000;
+
+    /// A measure's timestamp (ms), its line before its levels.
+    pub fn moment(&mut self, track: usize, pts_ms: i64) {
+        self.reading[track] = (Some(pts_ms), [None, None]);
+    }
 
     pub fn measured(&mut self, track: usize, ch: usize, db: f32, now: i64) {
-        let p = &mut self.peaks[track][ch];
-        if db >= p.0 || now - p.1 > Self::HOLD {
-            *p = (db, now);
+        let r = &mut self.reading[track];
+        r.1[ch] = Some(db);
+        let (Some(pts), [Some(l), Some(rr)]) = (r.0, r.1) else { return };
+        r.0 = None;
+        let d = now - pts;
+        // The least delay; a jump in the timestamps (a cut, a new run): taken again from there.
+        let off = match self.offset {
+            Some(o) if d >= o - 5_000 && d <= o + 5_000 => d.min(o + 1),
+            _ => {
+                self.kept.iter_mut().for_each(|q| q.clear());
+                d
+            }
+        };
+        self.offset = Some(off);
+        let q = &mut self.kept[track];
+        q.push_back((pts, [l, rr]));
+        while q.front().is_some_and(|x| x.0 < pts - Self::KEEP) {
+            q.pop_front();
         }
     }
 
-    /// A track's peaks now (none measured for a second: silence, the source stopped).
-    pub fn read(&self, track: usize, now: i64) -> [f32; 2] {
-        self.peaks[track].map(|(db, at)| if now - at < 1000 { db } else { -90.0 })
+    /// A track's peaks of the moment `at` (server ms): the highest of the quarter second before.
+    pub fn read(&self, track: usize, at: i64) -> [f32; 2] {
+        let mut p = [-90.0f32; 2];
+        let Some(off) = self.offset else { return p };
+        let at = at - off;
+        for (t, v) in self.kept[track].iter().rev() {
+            if *t > at {
+                continue;
+            }
+            if *t <= at - 250 {
+                break;
+            }
+            p = [p[0].max(v[0]), p[1].max(v[1])];
+        }
+        p
     }
+}
+
+/// A measure's timestamp line (`ametadata@lv<k>`: `frame:.. pts:.. pts_time:<s>`): (track, ms).
+pub fn level_moment(line: &str) -> Option<(usize, i64)> {
+    let k = line.split_once("[ametadata@lv")?.1.chars().next()?.to_digit(10)? as usize;
+    let t: f64 = line.split_once("pts_time:")?.1.split_whitespace().next()?.parse().ok()?;
+    (k < 4 && t.is_finite()).then_some((k, (t * 1000.0).round() as i64))
 }
 
 /// A level measured by the preview (`ametadata@lv<k>`: `lavfi.astats.<channel>.Peak_level=<dB>`):
@@ -1610,14 +1650,19 @@ mod glitch_tests {
     }
 
     #[test]
-    fn levels_held() {
+    fn levels_of_their_moment() {
         let mut l = Levels::default();
-        l.measured(0, 0, -10.0, 1000);
-        l.measured(0, 0, -30.0, 1100);
-        assert_eq!(l.read(0, 1150)[0], -10.0, "the peak is held");
-        l.measured(0, 0, -30.0, 1400);
-        assert_eq!(l.read(0, 1450)[0], -30.0, "then the next measure");
-        assert_eq!(l.read(0, 2500)[0], -90.0, "nothing measured for a second: silence");
+        // Measured late and all at once (a busy preview): each keeps its own moment.
+        for i in 0..10 {
+            l.moment(0, 5_000 + i * 100);
+            l.measured(0, 0, -10.0 - i as f32, 20_000);
+            l.measured(0, 1, -12.0, 20_000);
+        }
+        // The last came with the least delay (14.1 s): the others are placed from it.
+        assert_eq!(l.read(0, 20_000)[0], -17.0, "the newest, at its moment");
+        assert_eq!(l.read(0, 19_500)[0], -12.0, "half a second before: the third");
+        assert_eq!(l.read(0, 30_000)[0], -90.0, "none then");
+        assert_eq!(level_moment("[ametadata@lv1 @ 0x5] [info] frame:3    pts:14400   pts_time:0.3"), Some((1, 300)));
     }
 
     #[test]
