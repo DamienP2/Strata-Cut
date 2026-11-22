@@ -420,6 +420,17 @@ impl Content {
     }
 }
 
+/// A level measured by the preview (`ametadata@lv<k>`: `lavfi.astats.<channel>.Peak_level=<dB>`):
+/// (track, channel, dB; silence at -90).
+pub fn level_line(line: &str) -> Option<(usize, usize, f32)> {
+    let k = line.split_once("[ametadata@lv")?.1.chars().next()?.to_digit(10)? as usize;
+    let rest = line.split_once("lavfi.astats.")?.1;
+    let (ch, v) = rest.split_once(".Peak_level=")?;
+    let ch: usize = ch.parse().ok()?;
+    let db = v.trim().parse::<f32>().unwrap_or(-90.0);
+    (k < 4 && (1..=2).contains(&ch)).then_some((k, ch - 1, if db.is_finite() { db.max(-90.0) } else { -90.0 }))
+}
+
 /// `scheme://user:pass@host:port/path?query` → `scheme://host:port`; a name (NDI, DeckLink) as it is.
 pub fn only_host(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else { return url.to_string() };
@@ -482,6 +493,9 @@ pub struct Rec {
     /// The picture black, frozen, the sound silent: since (server time, ms), and whether the
     /// journal already said so.
     pub content: Mutex<Content>,
+    /// Each sound track's peak, left and right (dB), as the preview measures them (10 a second),
+    /// and when they were measured last (server ms).
+    pub levels: Mutex<([[f32; 2]; 4], i64)>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Local UDP ports the stream as received is copied to (the streams to destinations: see
     /// `crate::streams`), each with its key.
@@ -1069,6 +1083,7 @@ impl Manager {
             rtp: false.into(),
             preview_lag: 0.into(),
             content: Mutex::new(Content::default()),
+            levels: Mutex::new(([[-90.0; 2]; 4], 0)),
             last_packet: 0.into(),
             audio_extra: extra_audio.into(),
             restart_run: tokio::sync::Notify::new(),
@@ -1561,6 +1576,13 @@ mod glitch_tests {
         assert!(glitch_lines(&[], 0, 0).is_empty());
         let l = glitch_lines(&recs, 0, 12);
         assert!(l[0].contains("network card of this server") && l.iter().any(|x| x.contains("dropped 12 packets")), "{l:?}");
+    }
+
+    #[test]
+    fn levels_read() {
+        assert_eq!(level_line("[ametadata@lv0 @ 0x55c1] [info] lavfi.astats.2.Peak_level=-24.08"), Some((0, 1, -24.08)));
+        assert_eq!(level_line("[ametadata@lv2 @ 0x55c1] [info] lavfi.astats.1.Peak_level=-inf"), Some((2, 0, -90.0)));
+        assert_eq!(level_line("[ametadata@lv0 @ 0x55c1] [info] frame:3 pts:14400"), None);
     }
 
     #[test]

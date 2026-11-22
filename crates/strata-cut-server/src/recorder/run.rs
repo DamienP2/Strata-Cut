@@ -386,7 +386,9 @@ pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool
         // Lost or damaged audio packets leave a hole in the times: filled with silence (and
         // overlaps cut), else the sound after it is joined early and drifts ahead of the picture.
         let mut track = |k: u32, filter: &str, dir: &str| {
-            a.extend(s(&["-map", &format!("0:a:{k}"), "-vn", "-af", filter, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
+            // Its level, 10 times a second (the Streamer's meters).
+            let meter = format!("{filter},asetnsamples=n=4800,astats@lv{k}=metadata=1:reset=1:measure_overall=none:measure_perchannel=Peak_level,ametadata@lv{k}=mode=print");
+            a.extend(s(&["-map", &format!("0:a:{k}"), "-vn", "-af", &meter, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
             a.push(d(&format!("{dir}/p%08d.m4s")));
             a.push(d(&format!("{dir}/index.m3u8")));
         };
@@ -697,6 +699,12 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             let mut lines = tokio::io::BufReader::new(err).lines();
             while let Ok(Some(l)) = lines.next_line().await {
                 // What the picture and the sound show; its other info lines are not kept.
+                if let Some((k, ch, db)) = super::level_line(&l) {
+                    let mut lv = rec2.levels.lock().unwrap();
+                    lv.0[k][ch] = db;
+                    lv.1 = super::now_ms();
+                    continue;
+                }
                 if rec2.content.lock().unwrap().read(&l, super::now_ms()) {
                     continue;
                 }

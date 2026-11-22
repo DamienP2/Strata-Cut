@@ -1,6 +1,6 @@
 //! Streamer: the programme of a source — what its lives send when they take the programme rather
-//! than the clean source. The source, or an image passed by CUT or AUTO (a fade); a PNG overlay
-//! over both; the sound of the tracks chosen, at their level, on the channels chosen (none under
+//! (all of them). The source, or an image passed at once or by a fade (1 s); a PNG overlay
+//! placed anywhere over both; the sound of the tracks chosen, at their level, on the channels chosen (none under
 //! the image). Its settings are the source's, shared by all its lives (`program.json`).
 //!
 //! One FFmpeg a source, started by the first live that takes the programme and stopped after the
@@ -65,16 +65,16 @@ pub struct Program {
     pub image: Option<String>,
     /// The image is on air (rather than the source).
     pub image_on: bool,
-    /// AUTO's length, s.
-    pub fade: f64,
+    /// The image and the source pass by a fade (1 s), else at once.
+    pub fade_on: bool,
     /// The overlay (a PNG of the Streamer's overlays), and whether it is on air.
     pub overlay: Option<String>,
     pub overlay_on: bool,
-    /// Where: 0 top left … 2 top right … 8 bottom right.
-    pub position: u8,
-    /// Its width, % of the picture's; its margin, % of the picture's height; its opacity, %.
+    /// Its top left corner, a share of the picture's width and height (0 to 1).
+    pub x: f64,
+    pub y: f64,
+    /// Its width, % of the picture's; its opacity, %.
     pub size: f64,
-    pub margin: f64,
     pub opacity: f64,
     /// The source's tracks, in order (a track not said: the first on, the others off).
     pub tracks: Vec<Track>,
@@ -89,12 +89,12 @@ impl Default for Program {
         Program {
             image: None,
             image_on: false,
-            fade: 1.0,
+            fade_on: true,
             overlay: None,
             overlay_on: false,
-            position: 2,
+            x: 0.79,
+            y: 0.05,
             size: 18.0,
-            margin: 4.0,
             opacity: 100.0,
             tracks: Vec::new(),
             channels: "lr".into(),
@@ -109,13 +109,12 @@ impl Program {
             return Err("the channels are lr, l, r or mono".into());
         }
         let ok = |v: f64| v.is_finite();
-        if ![self.fade, self.size, self.margin, self.opacity].into_iter().all(ok) || self.tracks.iter().any(|t| !ok(t.gain)) {
+        if ![self.x, self.y, self.size, self.opacity].into_iter().all(ok) || self.tracks.iter().any(|t| !ok(t.gain)) {
             return Err("a value is not a number".into());
         }
-        self.fade = self.fade.clamp(0.2, 5.0);
-        self.position = self.position.min(8);
+        self.x = self.x.clamp(0.0, 1.0);
+        self.y = self.y.clamp(0.0, 1.0);
         self.size = self.size.clamp(2.0, 100.0);
-        self.margin = self.margin.clamp(0.0, 20.0);
         self.opacity = self.opacity.clamp(0.0, 100.0);
         self.tracks.truncate(8);
         for t in &mut self.tracks {
@@ -154,8 +153,8 @@ impl Program {
         if self.overlay_on && self.overlay.is_some() { self.opacity / 100.0 } else { 0.0 }
     }
 
-    fn overlay_look(&self) -> (Option<&String>, u8, u64, u64) {
-        (self.overlay.as_ref(), self.position, (self.size * 100.0) as u64, (self.margin * 100.0) as u64)
+    fn overlay_look(&self) -> (Option<&String>, u64, u64, u64) {
+        (self.overlay.as_ref(), (self.x * 10_000.0) as u64, (self.y * 10_000.0) as u64, (self.size * 100.0) as u64)
     }
 }
 
@@ -263,17 +262,9 @@ fn ffmpeg_args(p: &Program, sh: &Shape, ports: &Ports) -> Vec<String> {
 fn overlay_filter(p: &Program, sh: &Shape) -> String {
     let (w, h) = (sh.w, sh.h);
     let bw = ((w as f64 * p.size / 100.0).round() as u32).clamp(2, w) & !1;
-    let m = ((h as f64 * p.margin / 100.0).round() as u32) & !1;
-    let x = match p.position % 3 {
-        0 => m.to_string(),
-        1 => "(ow-iw)/2".into(),
-        _ => format!("ow-iw-{m}"),
-    };
-    let y = match p.position / 3 {
-        0 => m.to_string(),
-        1 => "(oh-ih)/2".into(),
-        _ => format!("oh-ih-{m}"),
-    };
+    // Where it was put, kept inside the picture.
+    let x = format!("min({}\\,ow-iw)", (w as f64 * p.x).round() as u32);
+    let y = format!("min({}\\,oh-ih)", (h as f64 * p.y).round() as u32);
     format!("scale=w={bw}:h={h}:force_original_aspect_ratio=decrease,format=rgba,pad={w}:{h}:{x}:{y}:color=black@0,format=yuva420p")
 }
 
@@ -743,6 +734,7 @@ pub fn routes() -> Router<Shared> {
         .route("/api/program/{source}", get(read).put(write))
         .route("/api/program/{source}/take", post(take))
         .route("/api/program/{source}/overlay", post(overlay_on))
+        .route("/api/program/{source}/levels", get(levels))
 }
 
 async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>) -> ApiResult<Json<Value>> {
@@ -770,10 +762,10 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(so
 struct Take {
     /// The image on air (else the source).
     image: bool,
-    /// AUTO (a fade of the programme's length), else CUT.
-    #[serde(default)]
-    auto: bool,
 }
+
+/// The length of the fade between the source and the image, s.
+const FADE_SECS: f64 = 1.0;
 
 async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, Json(t): Json<Take>) -> ApiResult<Json<Value>> {
     require(me.can("stream.run"))?;
@@ -782,11 +774,22 @@ async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
     let mut p = programs.get(&source);
     if p.image_on != t.image {
         p.image_on = t.image;
-        let secs = if t.auto { p.fade } else { 0.0 };
+        let secs = if p.fade_on { FADE_SECS } else { 0.0 };
         programs.put(&source, p.clone(), secs).map_err(bad)?;
-        tracing::info!("{} puts {} on air ({}) for {}", me.username, if t.image { "the image" } else { "the source" }, if t.auto { "auto" } else { "cut" }, rec.config().name);
+        tracing::info!("{} puts {} on air for {}", me.username, if t.image { "the image" } else { "the source" }, rec.config().name);
     }
     Ok(Json(json!(p)))
+}
+
+/// Each sound track's peak, left and right (dB, -90: silence), measured 10 times a second.
+async fn levels(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>) -> ApiResult<Json<Value>> {
+    require(me.can("stream.view") || me.is_admin())?;
+    let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
+    let (lv, at) = *rec.levels.lock().unwrap();
+    let n = rec.status.lock().unwrap().media.as_ref().map(|m| m.audio_tracks as usize).unwrap_or(0).min(4);
+    // Not measured for a second: none (the source stopped).
+    let fresh = now_ms() - at < 1000;
+    Ok(Json(json!({ "tracks": (0..n).map(|k| if fresh { lv[k] } else { [-90.0, -90.0] }).collect::<Vec<_>>() })))
 }
 
 #[derive(Deserialize)]
@@ -830,9 +833,9 @@ mod tests {
 
     #[test]
     fn normalized() {
-        let mut p = Program { fade: 60.0, position: 12, size: 500.0, channels: "lr".into(), ..Default::default() };
+        let mut p = Program { x: 3.0, y: -1.0, size: 500.0, channels: "lr".into(), ..Default::default() };
         p.normalize().unwrap();
-        assert_eq!((p.fade, p.position, p.size), (5.0, 8, 100.0));
+        assert_eq!((p.x, p.y, p.size), (1.0, 0.0, 100.0));
         p.channels = "x".into();
         assert!(p.normalize().is_err());
         p.channels = "l".into();
@@ -860,11 +863,9 @@ mod tests {
 
     #[test]
     fn overlay_places() {
-        let mut p = Program { size: 20.0, margin: 4.0, position: 2, ..Default::default() };
+        let p = Program { size: 20.0, x: 0.5, y: 0.25, ..Default::default() };
         let f = overlay_filter(&p, &shape(1));
-        assert!(f.contains("scale=w=384:h=1080") && f.contains("pad=1920:1080:ow-iw-42:42:color=black@0"), "{f}");
-        p.position = 7;
-        assert!(overlay_filter(&p, &shape(1)).contains("pad=1920:1080:(ow-iw)/2:oh-ih-42"));
+        assert!(f.contains("scale=w=384:h=1080") && f.contains("pad=1920:1080:min(960\\,ow-iw):min(270\\,oh-ih):color=black@0"), "{f}");
     }
 
     #[test]

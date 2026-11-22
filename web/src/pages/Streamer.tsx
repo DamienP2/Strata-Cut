@@ -1,14 +1,15 @@
 /*
- * Streamer: a source sent live to destinations (Système › Destinations). Laid out as
- * Extraction: the sources on the left; the programme in the middle (the picture as it goes out,
- * the source and the image switched by CUT or AUTO, the overlay, the sound, the source lost);
- * the destinations on the right (each sends the programme or the clean source), the bandwidth
- * going out below. A destination already sending another source is greyed; one whose key is
- * given for each live asks for it here; each can be tried before going live.
+ * Streamer: a source sent live to destinations (Système › Destinations). The sources on the left,
+ * the destinations on the right (as cards: each live's bitrate, time and sent); in the middle the
+ * programme: the picture as it goes out (its overlay placed and sized on it), what is on air (the
+ * source or its image, the fade, the overlay), the sound of its tracks; the source's pictures in
+ * its settings. A destination already sending another source is greyed; one whose key is given
+ * for each live asks for it here; each can be tried before going live.
  */
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
-import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Square } from 'lucide-react';
+import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Settings, Square } from 'lucide-react';
 import { useDisplayPref } from '../displayPrefs';
 import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tc, tn } from '../i18n';
@@ -23,16 +24,14 @@ import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
 import { explainGuard } from '../ui/guard';
 import { SourceGroups } from '../ui/SourceGroups';
-import { ProgramCards, ProgramLayer, Switcher, useProgram } from './StreamerProgram';
-
-const COLORS = ['var(--accent)', 'var(--pvw)', 'var(--warn)', '#c084fc', '#38bdf8'];
+import { Antenne, Mixer, ProgramLayer, SettingsModal, useProgram } from './StreamerProgram';
 
 export function Streamer({ source }: { source?: string }) {
   const { recorders, status } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status })));
   // With the lives that could not start (said on their destination, with why).
   const all = useStreams(1000, true);
   const streams = all.filter((s) => s.state !== 'failed');
-  const [dests, reloadDests] = useDestinations();
+  const [dests] = useDestinations();
   const [last, setLast] = useDisplayPref<string | null>('streamer.source', null);
   const known = (x?: string | null) => !!x && recorders.some((r) => r.id === x);
   // The source asked for; else the last one seen if it is received now, else the first received.
@@ -43,7 +42,6 @@ export function Streamer({ source }: { source?: string }) {
     if (id && id !== last) setLast(id);
   }, [id, source]); // eslint-disable-line react-hooks/exhaustive-deps
   const rec = recorders.find((r) => r.id === id);
-  const mine = streams.filter((s) => s.source === id);
   return (
     <section className="sc-edit st-page">
       <SourceGroups
@@ -60,22 +58,21 @@ export function Streamer({ source }: { source?: string }) {
           ) : null;
         }}
       />
- {rec ? <Center key={rec.id} rec={rec} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
-      <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} reload={reloadDests} streams={streams} failed={all.filter((s) => s.state === 'failed')} />}</aside>
-      <div className="st-bw">
-        <Bandwidth streams={mine} dests={dests ?? []} />
-      </div>
+      {rec ? <Center key={rec.id} rec={rec} streams={streams.filter((s) => s.source === rec.id)} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
+      <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} streams={streams} failed={all.filter((s) => s.state === 'failed')} />}</aside>
     </section>
   );
 }
 
-/** The programme of the source, live: the picture as it goes out, what it receives, its switches and settings. */
-function Center({ rec }: { rec: Recorder }) {
-  const { st, timezone } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone })));
+/** The programme of the source: the picture as it goes out, what is on air, the sound. */
+function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
+  const { st, timezone, toast } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone, toast: s.toast })));
+  const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const prog = useProgram(rec.id);
   const video = useRef<HTMLVideoElement>(null);
   const audio = useAudioOut(video);
   const [wall, setWall] = useState<number | null>(null);
+  const [settings, setSettings] = useState(false);
   const received = st?.state === 'recording';
   // Only what is received now is shown: a stopped source shows nothing (not what is left of
   // its last recording).
@@ -91,31 +88,41 @@ function Center({ rec }: { rec: Recorder }) {
   }, [rec.id, received]);
   const m = st?.media;
   const fps = fpsOf(m?.fpsNum, m?.fpsDen);
+  const stopAll = async () => {
+    try {
+      await api('POST', '/api/streams/stop', { source: rec.id });
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
   return (
-    <div className="sc-center">
-      <div className="sc-viewer-wrap">
-        <div className="sc-viewer">
-          <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
-          {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
-          {received && prog.state && <ProgramLayer rec={rec} program={prog.state.program} lastFade={prog.lastFade} />}
-          {received && <Meters out={audio.out} />}
+    <div className="sc-center pg-center">
+      <div className="pg-top">
+        <div className="pg-picture">
+          <div className="pg-viewer">
+            <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
+            {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
+            {received && <ProgramLayer rec={rec} prog={prog} editable={run} />}
+            {received && <Meters out={audio.out} />}
+          </div>
+          <div className="pg-meta">
+            <b>{rec.name}</b>
+            <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
+            <span className="pg-info">
+              {received && m ? `${m.width}×${m.height} · ${formatName(scanFormat(m), lang() === 'fr')}` : ''}
+              {received && st?.bitrate ? ` · ${t('{b} received', { b: mbps(st.bitrate / 1000, locale()) })}` : ''}
+            </span>
+            <span className="spacer" />
+            <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
+            <button type="button" className="btn small" onClick={() => setSettings(true)}>
+              <Settings size={13} /> {t('Settings')}
+            </button>
+          </div>
         </div>
+        <Antenne rec={rec} prog={prog} live={streams.length} kbps={mbps(streams.reduce((a, s) => a + s.kbps, 0), locale())} onStopAll={() => void stopAll()} />
       </div>
-      <div className="sc-transport">
-        <div className="sc-tc-big">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</div>
-        <div className="sc-sep" />
-        <span className="st-info">
-          <b>{rec.name}</b>
-          {received && m ? ` · ${m.width}×${m.height} · ${formatName(scanFormat(m), lang() === 'fr')}` : ''}
-          {received && st?.bitrate ? ` · ${t('{b} received', { b: mbps(st.bitrate / 1000, locale()) })}` : ''}
-        </span>
-        <div className="spacer" />
-        <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
-      </div>
-      <div className="pg-zone">
-        <Switcher rec={rec} prog={prog} />
-        <ProgramCards rec={rec} prog={prog} />
-      </div>
+      <Mixer rec={rec} prog={prog} />
+      {settings && createPortal(<SettingsModal rec={rec} prog={prog} onClose={() => setSettings(false)} />, document.body)}
     </div>
   );
 }
@@ -128,7 +135,7 @@ interface Draft {
   test?: { busy: boolean; ok?: boolean; text?: string };
 }
 
-function DestPanel({ rec, dests, reload, streams, failed }: { rec: Recorder; dests: Destination[] | null; reload: () => void; streams: StreamInfo[]; failed: StreamInfo[] }) {
+function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Destination[] | null; streams: StreamInfo[]; failed: StreamInfo[] }) {
   const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const { recorders, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast })));
   const [starting, setStarting] = useState(false);
@@ -136,7 +143,6 @@ function DestPanel({ rec, dests, reload, streams, failed }: { rec: Recorder; des
   const draft = (d: Destination): Draft => drafts[d.id] ?? { key: '', url: d.url ?? '', videoKbps: d.videoKbps ?? 6000 };
   const setDraft = (d: Destination, p: Partial<Draft>) => setDrafts((x) => ({ ...x, [d.id]: { ...draft(d), ...p } }));
   const nameOf = (id: string) => recorders.find((r) => r.id === id)?.name ?? id;
-  const mine = streams.filter((s) => s.source === rec.id);
   const overrides = (d: Destination) => {
     const x = draft(d);
     return { key: d.keyLive ? x.key : '', url: d.exposeUrl ? x.url : '', videoKbps: d.exposeBitrate ? x.videoKbps : 0 };
@@ -174,44 +180,18 @@ function DestPanel({ rec, dests, reload, streams, failed }: { rec: Recorder; des
       setDraft(d, { test: { busy: false, ok: false, text: t('Test failed: {why}', { why: t((e as Error).message) }) } });
     }
   };
-  const out = mine.reduce((a, s) => a + s.kbps, 0);
-  const stopAll = async () => {
-    try {
-      await api('POST', '/api/streams/stop', { source: rec.id });
-    } catch (e) {
-      toast(t((e as Error).message), 'error');
-    }
-  };
-  const setFeed = async (d: Destination, clean: boolean) => {
-    try {
-      await api('PUT', `/api/destinations/${d.id}/feed`, { clean });
-      reload();
-    } catch (e) {
-      toast(t((e as Error).message), 'error');
-    }
-  };
   return (
-    <section className="insp-section sc-guide-sec">
-      <header className="st-panel-head">
-        <span>{t('Destinations')}</span>
-        {mine.length > 0 && <em>{`${tn(mine.length, '{n} live', '{n} live')} · ${mbps(out, locale())}`}</em>}
+    <section className="st-dests-panel">
+      <header className="st-dests-head">
+        <span className="label">{t('Destinations')}</span>
+        {run && ready.length > 1 && (
+          <button type="button" className="btn primary small" disabled={starting} onClick={() => void startAll()}>
+            <Play size={12} /> {t('Start all ({n})', { n: ready.length })}
+          </button>
+        )}
       </header>
-      {run && (ready.length > 1 || mine.length > 0) && (
-        <div className="st-alls">
-          {ready.length > 1 && (
-            <button type="button" className="btn primary st-all" disabled={starting} onClick={() => void startAll()}>
-              <Play size={13} /> {t('Start all ({n})', { n: ready.length })}
-            </button>
-          )}
-          {mine.length > 0 && (
-            <button type="button" className="btn st-stop st-all" onClick={() => void stopAll()}>
-              <Square size={12} /> {t('Stop all')} ({mine.length})
-            </button>
-          )}
-        </div>
-      )}
       {dests && dests.length === 0 && <Empty icon={Radio} text={t('No destination')} />}
-      <div className="st-dests">
+      <div className="st-cards">
         {[...(dests ?? [])]
           // Those sending this source first, then the free ones, the busy ones last.
           .sort((a, b) => {
@@ -222,181 +202,74 @@ function DestPanel({ rec, dests, reload, streams, failed }: { rec: Recorder; des
             return rank(a) - rank(b);
           })
           .map((d) => {
-          const s = streams.find((x) => x.destination === d.id);
-          const busy = !!s && s.source !== rec.id;
-          const on = !!s && !busy;
-          const x = draft(d);
-          // Started from here and refused by the destination: why (no new try by itself).
-          const refused = !s ? failed.find((f) => f.destination === d.id && f.source === rec.id) : undefined;
-          return (
-            <div key={d.id} className={`st-dest ${on ? 'on' : ''} ${busy ? 'busy' : ''}`}>
-              <div className="st-dest-top">
-                <ProtoTag p={d.protocol} />
-                <strong data-tip={`${d.host} · ${encodingOf(d)}`}>{d.name}</strong>
-                {!run ? null : on ? (
-                  <button type="button" className="btn small st-stop-one" onClick={() => void stop(d)}>
-                    <Square size={11} /> {t('Stop')}
-                  </button>
-                ) : busy ? (
-                  <button type="button" className="btn small" disabled>
-                    {t('Busy')}
-                  </button>
-                ) : (
-                  <button type="button" className="btn small primary" disabled={starting || (d.keyLive && !x.key.trim())} onClick={() => void start(d)}>
-                    <Play size={11} /> {t('Go live')}
-                  </button>
+            const s = streams.find((x) => x.destination === d.id);
+            const busy = !!s && s.source !== rec.id;
+            const on = !!s && !busy;
+            const x = draft(d);
+            // Started from here and refused by the destination: why (no new try by itself).
+            const refused = !s ? failed.find((f) => f.destination === d.id && f.source === rec.id) : undefined;
+            const state = on && s ? (s.state === 'live' ? clockOf(s.liveSince ? serverNow() - s.liveSince : 0) : s.state === 'connecting' ? t('Connecting…') : s.state === 'slate' ? t('Slate') : t('Reconnecting')) : busy && s ? t('Busy · {source}', { source: nameOf(s.source) }) : tc('dest', 'Ready');
+            return (
+              <div key={d.id} className={`st-card ${on ? 'on' : ''} ${busy ? 'busy' : ''}`}>
+                <div className="st-card-head">
+                  <ProtoTag p={d.protocol} />
+                  <strong data-tip={`${d.host} · ${encodingOf(d)}`}>{d.name}</strong>
+                  <span className={`st-state ${on && s?.state === 'live' ? 'live' : ''} ${on && s?.state !== 'live' ? 'warn' : ''}`}>{state}</span>
+                </div>
+                {on && s && (
+                  <>
+                    <Spark values={s.history} />
+                    <div className="st-card-nums">
+                      <b>{mbps(s.kbps, locale())}</b>
+                      <span>{volume(s.bytes, locale(), lang() === 'fr')}</span>
+                      <span className="spacer" />
+                      {run && (
+                        <button type="button" className="btn small st-stop-btn" onClick={() => void stop(d)}>
+                          <Square size={10} /> {t('Stop')}
+                        </button>
+                      )}
+                    </div>
+                    {(s.message || s.note) && (
+                      <div className={`st-note ${s.message ? 'bad' : ''}`}>
+                        {s.message ? <AlertTriangle size={11} /> : null} {t(s.message || s.note)}
+                      </div>
+                    )}
+                  </>
+                )}
+                {refused && (
+                  <div className="st-note bad">
+                    <AlertTriangle size={11} /> {t('Could not start: {why}', { why: t(refused.message) })}
+                  </div>
+                )}
+                {run && !on && !busy && (
+                  <>
+                    {d.keyLive && <input className="st-input" type="password" value={x.key} autoComplete="off" spellCheck={false} placeholder={t('Stream key of this live')} onChange={(e) => setDraft(d, { key: e.target.value, test: undefined })} />}
+                    {d.exposeUrl && <input className="st-input" value={x.url} spellCheck={false} placeholder={t('Server address')} onChange={(e) => setDraft(d, { url: e.target.value, test: undefined })} />}
+                    {d.exposeBitrate && (
+                      <label className="st-field">
+                        <span>{t('Video bitrate')}</span>
+                        <NumberField value={x.videoKbps / 1000} min={0.3} max={50} step={0.5} precision={1} suffix="Mb/s" onChange={(v) => setDraft(d, { videoKbps: Math.round(v * 1000) })} />
+                      </label>
+                    )}
+                    {x.test?.text && (
+                      <span className={`st-note ${x.test.ok ? 'ok' : 'bad'}`}>
+                        {x.test.ok ? <Check size={11} /> : <AlertTriangle size={11} />} {x.test.text}
+                      </span>
+                    )}
+                    <div className="st-card-act">
+                      <button type="button" className="btn ghost" disabled={x.test?.busy} onClick={() => void test(d)}>
+                        <Plug size={12} className={x.test?.busy ? 'spin' : undefined} /> {x.test?.busy ? t('Testing…') : t('Test')}
+                      </button>
+                      <button type="button" className="btn primary" disabled={starting || (d.keyLive && !x.key.trim())} onClick={() => void start(d)}>
+                        <Play size={12} /> {t('Go live')}
+                      </button>
+                    </div>
+                  </>
                 )}
               </div>
-              <div className="st-feed">
-                <span className="segmented" data-tip={on || busy ? t('Stop this live to change it') : undefined}>
-                  <button type="button" className={!d.clean ? 'on' : ''} disabled={!run || on || busy} onClick={() => void setFeed(d, false)}>
-                    {tc('feed', 'Programme')}
-                  </button>
-                  <button type="button" className={d.clean ? 'on' : ''} disabled={!run || on || busy} onClick={() => void setFeed(d, true)}>
-                    {t('Clean')}
-                  </button>
-                </span>
-              </div>
-              {refused && (
-                <div className="st-note bad">
-                  <AlertTriangle size={11} /> {t('Could not start: {why}', { why: t(refused.message) })}
-                </div>
-              )}
-              {busy && s && (
-                <div className="st-note">
-                  {t('Busy: sends {source}', { source: nameOf(s.source) })}
-                  {s.liveSince ? ` ${t('for {d}', { d: clockOf(serverNow() - s.liveSince) })}` : ''}
-                </div>
-              )}
-              {on && s && (
-                <>
-                  <Spark values={s.history} />
-                  <div className="st-metrics">
-                    <div>
-                      <span>{t('Bitrate')}</span>
-                      <b className="live">{mbps(s.kbps, locale())}</b>
-                    </div>
-                    <div>
-                      <span>{t('For')}</span>
-                      <b>{s.liveSince ? clockOf(serverNow() - s.liveSince) : '—'}</b>
-                    </div>
-                    <div>
-                      <span>{t('Sent')}</span>
-                      <b>{volume(s.bytes, locale(), lang() === 'fr')}</b>
-                    </div>
-                    <div>
-                      <span>{t('State')}</span>
-                      <b className={s.state === 'live' ? 'ok' : 'bad'}>{s.state === 'live' ? t('Live') : s.state === 'connecting' ? t('Connecting…') : s.state === 'slate' ? t('Slate') : t('Reconnecting')}</b>
-                    </div>
-                  </div>
-                  {(s.message || s.note) && (
-                    <div className={`st-note ${s.message ? 'bad' : ''}`}>
-                      {s.message ? <AlertTriangle size={11} /> : null} {t(s.message || s.note)}
-                    </div>
-                  )}
-                </>
-              )}
-              {run && !on && !busy && (
-                <>
-                  {d.keyLive && (
-                    <label className="st-field">
-                      <span>{t('Stream key of this live')}</span>
-                      <input type="password" value={x.key} autoComplete="off" spellCheck={false} placeholder={t('Paste the key given by the platform')} onChange={(e) => setDraft(d, { key: e.target.value, test: undefined })} />
-                    </label>
-                  )}
-                  {d.exposeUrl && (
-                    <label className="st-field">
-                      <span>{t('Server address')}</span>
-                      <input value={x.url} spellCheck={false} onChange={(e) => setDraft(d, { url: e.target.value, test: undefined })} />
-                    </label>
-                  )}
-                  {d.exposeBitrate && (
-                    <label className="st-field">
-                      <span>{t('Video bitrate')}</span>
-                      <NumberField value={x.videoKbps / 1000} min={0.3} max={50} step={0.5} precision={1} suffix="Mb/s" onChange={(v) => setDraft(d, { videoKbps: Math.round(v * 1000) })} />
-                    </label>
-                  )}
-                  <div className="st-test">
-                    <button type="button" className="btn small" disabled={x.test?.busy} onClick={() => void test(d)}>
-                      <Plug size={12} className={x.test?.busy ? 'spin' : undefined} /> {x.test?.busy ? t('Testing…') : t('Test')}
-                    </button>
-                    {x.test?.text && <span className={`st-note ${x.test.ok ? 'ok' : 'bad'}`}>{x.test.ok ? <Check size={11} /> : <AlertTriangle size={11} />} {x.test.text}</span>}
-                  </div>
-                </>
-              )}
-            </div>
-          );
-        })}
+            );
+          })}
       </div>
     </section>
   );
 }
-
-/** The bandwidth going out (this source's lives), the last 10 minutes: the lines in an SVG
- * stretched to the width, the numbers in HTML (not stretched with it). */
-function Bandwidth({ streams, dests }: { streams: StreamInfo[]; dests: Destination[] }) {
-  const n = 600;
-  const lines = streams.map((s) => {
-    const h = s.history.slice(-n);
-    return Array.from({ length: n }, (_, i) => h[i - (n - h.length)] ?? 0);
-  });
-  const total = Array.from({ length: n }, (_, i) => lines.reduce((a, l) => a + l[i], 0));
-  const peak = Math.max(0, ...total);
-  const max = Math.max(1000, Math.ceil((peak * 1.2) / 4000) * 4000);
-  const pts = (vals: number[]) => vals.map((v, i) => `${((i / (n - 1)) * 1000).toFixed(1)},${(100 - (v / max) * 100).toFixed(2)}`).join(' ');
-  const now = total[n - 1] ?? 0;
-  const name = (id: string) => dests.find((d) => d.id === id)?.name ?? id;
-  return (
-    <div className="st-bw-in">
-      <div className="st-bw-head">
-        <strong>{t('Outgoing bandwidth')}</strong>
-        {streams.length > 0 && <span>{t('{now} now · peak {peak} · last 10 minutes', { now: mbps(now, locale()), peak: mbps(peak, locale()) })}</span>}
-        <div className="spacer" />
-        {streams.length > 0 && (
-          <span className="lg">
-            <i style={{ background: 'var(--live)' }} />
-            {t('Total')}
-          </span>
-        )}
-        {streams.length > 1 &&
-          streams.map((s, i) => (
-            <span key={s.destination} className="lg">
-              <i style={{ background: COLORS[i % COLORS.length] }} />
-              {name(s.destination)}
-            </span>
-          ))}
-      </div>
-      <div className="st-bw-chart">
-        <div className="st-bw-plot">
-          <svg viewBox="0 0 1000 100" preserveAspectRatio="none" aria-hidden="true">
-            {[0, 25, 50, 75, 100].map((y) => (
-              <line key={y} x1="0" x2="1000" y1={y} y2={y} className="grid" vectorEffect="non-scaling-stroke" />
-            ))}
-            {streams.length > 0 && (
-              <>
-                <polygon points={`0,100 ${pts(total)} 1000,100`} className="area" />
-                <polyline points={pts(total)} fill="none" stroke="var(--live)" strokeWidth="1.6" vectorEffect="non-scaling-stroke" />
-                {lines.length > 1 && lines.map((l, i) => <polyline key={i} points={pts(l)} fill="none" stroke={COLORS[i % COLORS.length]} strokeWidth="1.2" vectorEffect="non-scaling-stroke" />)}
-              </>
-            )}
-          </svg>
-          <div className="st-bw-x">
-            {['−10 min', '−8', '−6', '−4', '−2', t('now')].map((l) => (
-              <span key={l}>{l}</span>
-            ))}
-          </div>
-        </div>
-        <div className="st-bw-y">
-          {[1, 0.75, 0.5, 0.25, 0].map((f) => (
-            <span key={f}>
-              {((max * f) / 1000).toLocaleString(locale(), { maximumFractionDigits: 1 })}
-              {f === 1 && ' Mb/s'}
-            </span>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-

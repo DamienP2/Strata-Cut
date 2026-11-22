@@ -61,15 +61,6 @@ pub struct Destination {
     /// What the operator may change in the Streamer: the server's address, the video bitrate.
     pub expose_url: bool,
     pub expose_bitrate: bool,
-    /// No longer used: the source's programme says it (`program::Program::slate`).
-    #[serde(default = "yes")]
-    pub slate: bool,
-    /// Sends the clean source, rather than its programme (image, overlay, sound: Streamer).
-    pub clean: bool,
-}
-
-fn yes() -> bool {
-    true
 }
 
 impl Destination {
@@ -122,7 +113,7 @@ impl Destination {
         json!({
             "id": self.id, "name": self.name, "protocol": self.protocol, "host": self.host(),
             "keyLive": self.key_live, "exposeUrl": self.expose_url, "exposeBitrate": self.expose_bitrate,
-            "encode": self.encode, "height": self.height, "clean": self.clean,
+            "encode": self.encode, "height": self.height,
             "url": if self.expose_url { json!(self.url) } else { Value::Null },
             "videoKbps": if self.expose_bitrate || self.encode == "h264" { json!(self.video_kbps) } else { Value::Null },
         })
@@ -284,8 +275,6 @@ struct Session {
     token: u64,
     /// Started again after a restart of the server: it was live, and is made again until stopped.
     resumed: bool,
-    /// Sends the source's programme (else the clean source).
-    program: bool,
     stop: watch::Sender<bool>,
     /// What it is expected to send (kb/s), counted by the guard until it really sends.
     planned_kbps: f64,
@@ -414,14 +403,13 @@ impl Streams {
         let dest = self.get(dest_id).ok_or("no such destination")?;
         let rec = self.recorders.get(source).ok_or("no such source")?;
         let d = effective(&dest, o)?;
-        let (codec, height, bits) = {
+        let (height, bits) = {
             let st = rec.status.lock().unwrap();
-            (st.media.as_ref().map(|m| m.codec.clone()).unwrap_or_default(), st.media.as_ref().map(|m| m.height).unwrap_or(1080), st.bitrate)
+            (st.media.as_ref().map(|m| m.height).unwrap_or(1080), st.bitrate)
         };
         // The programme is encoded once for all the lives of its source (H.264): counted with the first.
-        let program = !dest.clean;
-        let again = d.encode == "h264" || (!program && !d.srt() && !codec.is_empty() && codec != "h264") || (program && !self.programs.is_running(source));
-        let kbps = if program && d.encode != "h264" {
+        let again = d.encode == "h264" || !self.programs.is_running(source);
+        let kbps = if d.encode != "h264" {
             if bits > 0 { (bits as f64 / 1000.0).clamp(4000.0, 12000.0) } else { 8000.0 }
         } else if again {
             (if d.video_kbps > 0 { d.video_kbps } else { 6000 } + if d.audio_kbps > 0 { d.audio_kbps } else { 160 }) as f64
@@ -487,7 +475,7 @@ impl Streams {
                 Some(s) => Some(s.clone()),
                 None => None,
             };
-            let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), token: live.token, resumed, program: !dest.clean, planned_kbps, stop: watch::channel(false).0, finished: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
+            let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), token: live.token, resumed, planned_kbps, stop: watch::channel(false).0, finished: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
             sessions.insert(dest_id.to_string(), session.clone());
             (session, previous)
         };
@@ -699,7 +687,7 @@ impl Streams {
         }
         let ffmpeg = self.recorders.ffmpeg.clone();
         // The programme, made while this live reads it.
-        let runner = s.program.then(|| self.programs.acquire(&s.source));
+        let runner = self.programs.acquire(&s.source);
         loop {
             if *stop.borrow() {
                 break;
@@ -722,20 +710,18 @@ impl Streams {
             if !self.source_ready(&s, &d, &rec, &mut stop, if ever_live { None } else { Some(Duration::from_secs(120)) }).await {
                 break;
             }
-            if let Some(r) = &runner {
-                if !self.program_ready(&s, &d, r, &mut stop, if ever_live { None } else { Some(Duration::from_secs(40)) }).await {
-                    break;
-                }
+            if !self.program_ready(&s, &d, &runner, &mut stop, if ever_live { None } else { Some(Duration::from_secs(40)) }).await {
+                break;
             }
             // The programme is H.264.
-            let codec = if runner.is_some() { "h264".to_string() } else { rec.status.lock().unwrap().media.as_ref().map(|m| m.codec.clone()).unwrap_or_default() };
+            let codec = "h264";
             let Some(port) = free_port() else {
                 self.give_up(&s, &d, "no free local port for the stream".into());
                 break;
             };
             let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-progress", "pipe:1", "-stats_period", "1", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i"].map(String::from).to_vec();
             args.push(format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000"));
-            let (out, note) = output_args(&d, &codec);
+            let (out, note) = output_args(&d, codec);
             args.extend(out);
             let mut cmd = Command::new(&ffmpeg);
             cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
@@ -754,10 +740,7 @@ impl Streams {
                 }
             });
             let key = rand_key();
-            match &runner {
-                Some(r) => r.taps.lock().unwrap().push((key, port)),
-                None => rec.taps.lock().unwrap().push((key, port)),
-            }
+            runner.taps.lock().unwrap().push((key, port));
             // Its progress (bytes sent each second) and its last words.
             let last: Arc<Mutex<VecDeque<String>>> = Default::default();
             if let Some(err) = child.stderr.take() {
@@ -782,10 +765,7 @@ impl Streams {
             let started = std::time::Instant::now();
             let ended = self.follow(&s, &mut child, progress, &mut stop, &rec, slate).await;
             ever_live |= s.stats.lock().unwrap().live_since.is_some();
-            match &runner {
-                Some(r) => r.taps.lock().unwrap().retain(|t| t.0 != key),
-                None => rec.taps.lock().unwrap().retain(|t| t.0 != key),
-            }
+            runner.taps.lock().unwrap().retain(|t| t.0 != key);
             if ended {
                 crate::recorder::run::stop_within(&mut child, Duration::from_secs(1)).await;
                 break;
@@ -834,9 +814,7 @@ impl Streams {
                 _ = stop.changed() => {}
             }
         }
-        if let Some(r) = &runner {
-            self.programs.release(&s.source, r);
-        }
+        self.programs.release(&s.source, &runner);
     }
 
     /// Reads FFmpeg's progress until it ends (false) or the live is stopped (true).
@@ -1006,7 +984,6 @@ struct StopSource {
 
 pub fn routes() -> Router<Shared> {
     Router::new()
-        .route("/api/destinations/{id}/feed", put(set_feed))
         .route("/api/destinations", get(list).post(create))
         .route("/api/destinations/{id}", put(update).delete(remove))
         .route("/api/destinations/{id}/test", post(test))
@@ -1084,27 +1061,6 @@ async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
 async fn test(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(o): Json<Overrides>) -> ApiResult<Json<Value>> {
     require(me.can("stream.run"))?;
     s.streams.test(&id, &o).await.map(Json).map_err(bad)
-}
-
-#[derive(Deserialize)]
-struct Feed {
-    clean: bool,
-}
-
-/// What a destination sends: the source's programme, or the clean source (Streamer).
-async fn set_feed(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(f): Json<Feed>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.run"))?;
-    if s.streams.sessions.lock().unwrap().contains_key(&id) {
-        return Err(bad("stop this live first"));
-    }
-    let _g = WRITE.lock().unwrap();
-    let mut all = s.streams.list();
-    let d = all.iter_mut().find(|d| d.id == id).ok_or_else(|| not_found("destination"))?;
-    d.clean = f.clean;
-    let v = d.for_operator();
-    s.streams.save(&all).map_err(bad)?;
-    s.streams.changed();
-    Ok(Json(v))
 }
 
 async fn streams(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
