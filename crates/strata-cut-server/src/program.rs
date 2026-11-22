@@ -10,14 +10,14 @@
 //! and AAC of it, in MPEG-TS, to a relay the lives read. The decoders come and go with the source;
 //! the mixer, the encoder and the lives do not stop.
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, VecDeque},
     io::Write,
     net::{Ipv4Addr, TcpListener, UdpSocket},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
-        mpsc::{sync_channel, Receiver, RecvTimeoutError},
+        atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering},
+        mpsc::{channel, Receiver, RecvTimeoutError},
         Arc, Mutex,
     },
     time::{Duration, Instant},
@@ -225,6 +225,10 @@ pub struct Runner {
     stop: watch::Sender<bool>,
     /// Why its encoder stopped last (said to the lives waiting for it).
     failed: Mutex<String>,
+    /// A picture of the source went in (before: the live waits for it).
+    pictured: Arc<AtomicBool>,
+    /// Its encoder's runs: one started again begins its timestamps again, the lives connect again.
+    epoch: AtomicU64,
 }
 
 impl Runner {
@@ -235,6 +239,14 @@ impl Runner {
     /// It comes now (packets in the last 2 s).
     pub fn flowing(&self) -> bool {
         now_ms() - self.last_packet.load(Ordering::Relaxed) < 2000
+    }
+    /// The source's picture is in it.
+    pub fn pictured(&self) -> bool {
+        self.pictured.load(Ordering::Relaxed)
+    }
+    /// The run of its encoder.
+    pub fn epoch(&self) -> u64 {
+        self.epoch.load(Ordering::Relaxed)
     }
 }
 
@@ -287,7 +299,7 @@ impl Programs {
             return r.clone();
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        let r = Arc::new(Runner { taps: Mutex::new(Vec::new()), last_packet: AtomicI64::new(0), users: AtomicUsize::new(1), failed: Mutex::new(String::new()), tx, stop: watch::channel(false).0 });
+        let r = Arc::new(Runner { taps: Mutex::new(Vec::new()), last_packet: AtomicI64::new(0), users: AtomicUsize::new(1), failed: Mutex::new(String::new()), pictured: Default::default(), epoch: AtomicU64::new(0), tx, stop: watch::channel(false).0 });
         running.insert(source.to_string(), r.clone());
         let (me, source, runner) = (self.clone(), source.to_string(), r.clone());
         tokio::spawn(async move { me.run(source, runner, rx).await });
@@ -338,7 +350,7 @@ impl Programs {
         let done = Arc::new(AtomicBool::new(false));
         let _end = Ended(done.clone());
         let (changes, crx) = std::sync::mpsc::channel();
-        if let Err(e) = (Mixer { shape: sh, program: p.clone(), inputs: inputs.clone(), pics: pics.clone(), changes: crx, sink: sink.clone(), done: done.clone() }).spawn() {
+        if let Err(e) = (Mixer { shape: sh, program: p.clone(), inputs: inputs.clone(), pics: pics.clone(), changes: crx, sink: sink.clone(), done: done.clone(), pictured: r.pictured.clone() }).spawn() {
             *r.failed.lock().unwrap() = e.to_string();
             return;
         }
@@ -405,13 +417,13 @@ impl Programs {
             }
             let ready = |rec: &Arc<Rec>| rec.flowing() && track.is_none_or(|k| watch.alive(k));
             if let Some(rec) = self.recorders.get(&source).filter(ready) {
-                let (args, chunk) = match track {
-                    None => (picture_args(&sh), sh.frame_bytes() * 3 / 5),
-                    Some(k) => (sound_args(k), 3840),
+                let (args, bytes) = match track {
+                    None => (picture_args(&sh), FrameBytes::Fixed(sh.frame_bytes() * 3 / 5)),
+                    Some(k) => (sound_args(k), FrameBytes::PerSample(8)),
                 };
-                let why = decoding(&ffmpeg, &rec, args, chunk, &mut stop, |b| match track {
-                    None => inputs.picture(b),
-                    Some(k) => inputs.sound(k, &b.as_chunks::<4>().0.iter().map(|x| f32::from_le_bytes(*x)).collect::<Vec<_>>()),
+                let why = decoding(&ffmpeg, &rec, args, bytes, &mut stop, |pts, b| match track {
+                    None => inputs.picture(pts, b),
+                    Some(k) => inputs.sound(k, pts, &b.as_chunks::<4>().0.iter().map(|x| f32::from_le_bytes(*x)).collect::<Vec<_>>()),
                 })
                 .await;
                 // Said once (a source that comes and goes would fill the journal).
@@ -427,7 +439,7 @@ impl Programs {
         }
     }
 
-    /// The encoder, made again if it stops (or does not keep up), until the programme ends.
+    /// The encoder, made again if it stops, until the programme ends.
     async fn encode(self: Arc<Self>, r: Arc<Runner>, sh: Shape, sink: Arc<Mutex<Option<Sink>>>, mut stop: watch::Receiver<bool>) {
         loop {
             if *stop.borrow() {
@@ -454,35 +466,27 @@ impl Programs {
         let op = out.local_addr().map_err(|e| e.to_string())?.port();
         let done = Arc::new(AtomicBool::new(false));
         let _end = Ended(done.clone());
-        let broken = Arc::new(AtomicBool::new(false));
-        // A second of pictures and of sound waiting at most (the encoder connecting).
-        let (vtx, vrx) = sync_channel(sh.fps.max(1) as usize);
-        let (atx, arx) = sync_channel(sh.fps.max(1) as usize * 2);
-        write_to(lv, vrx, done.clone(), broken.clone());
-        write_to(la, arx, done.clone(), broken.clone());
+        let (vtx, vrx) = channel();
+        let (atx, arx) = channel();
+        let queued = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+        write_to(lv, vrx, queued[0].clone(), done.clone());
+        write_to(la, arx, queued[1].clone(), done.clone());
         relay(out, r.clone(), done.clone());
-        *sink.lock().unwrap() = Some(Sink { video: vtx, audio: atx, broken: broken.clone() });
+        // A second waiting at most (the encoder starting, the server busy).
+        *sink.lock().unwrap() = Some(Sink { video: vtx, audio: atx, queued, most: sh.fps.max(1) as usize });
+        r.epoch.fetch_add(1, Ordering::Relaxed);
         let mut cmd = Command::new(&self.recorders.ffmpeg);
         cmd.args(encoder_args(sh, vp, ap, op)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", self.recorders.ffmpeg))?;
         let last = last_words(&mut child);
-        let mut look = tokio::time::interval(Duration::from_millis(500));
-        loop {
-            tokio::select! {
-                status = child.wait() => {
-                    let why = last.lock().unwrap().last().cloned().unwrap_or_else(|| format!("{status:?}"));
-                    return Err(format!("the encoder stopped: {why}"));
-                }
-                _ = stop.changed() => {
-                    let _ = child.kill().await;
-                    return Ok(());
-                }
-                _ = look.tick() => {
-                    if broken.load(Ordering::Relaxed) {
-                        let _ = child.kill().await;
-                        return Err("the encoder does not keep up: made again".into());
-                    }
-                }
+        tokio::select! {
+            status = child.wait() => {
+                let why = last.lock().unwrap().last().cloned().unwrap_or_else(|| format!("{status:?}"));
+                Err(format!("the encoder stopped: {why}"))
+            }
+            _ = stop.changed() => {
+                let _ = child.kill().await;
+                Ok(())
             }
         }
     }
@@ -528,18 +532,19 @@ impl Programs {
 /// The source's relay as a decoder reads it (`{input}` in the arguments).
 const INPUT: &str = "{input}";
 
+/// The source's timestamps kept (the picture's and the sound's, of the same clock), and each
+/// frame said with its own (`showinfo`).
 fn decoder_head() -> Vec<String> {
-    ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i", INPUT].map(String::from).to_vec()
+    ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", "-copyts", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i", INPUT].map(String::from).to_vec()
 }
 
 /// The source's picture: deinterlaced, at the programme's size (its shape kept, bands added) and
-/// rate, raw. Decoded without delay (slices, not frames, in parallel).
+/// rate, raw.
 fn picture_args(sh: &Shape) -> Vec<String> {
     let (w, h, fps) = (sh.w, sh.h, sh.fps);
-    let mut a: Vec<String> = ["-flags", "low_delay", "-thread_type", "slice"].map(String::from).to_vec();
-    a.extend(decoder_head());
+    let mut a = decoder_head();
     a.extend(["-map", "0:v:0", "-an", "-sn", "-dn", "-vf"].map(String::from));
-    a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p"));
+    a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p,showinfo=checksum=0"));
     a.extend(["-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"].map(String::from));
     a
 }
@@ -548,7 +553,7 @@ fn picture_args(sh: &Shape) -> Vec<String> {
 fn sound_args(k: usize) -> Vec<String> {
     let mut a = decoder_head();
     a.extend(["-map".to_string(), format!("0:a:{k}")]);
-    a.extend(["-vn", "-sn", "-dn", "-af", "aresample=48000,aformat=sample_fmts=flt:channel_layouts=stereo", "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1"].map(String::from));
+    a.extend(["-vn", "-sn", "-dn", "-af", "aresample=48000,aformat=sample_fmts=flt:channel_layouts=stereo,ashowinfo", "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1"].map(String::from));
     a
 }
 
@@ -569,9 +574,25 @@ fn encoder_args(sh: &Shape, video: u16, audio: u16, out: u16) -> Vec<String> {
     a
 }
 
-/// One run of a decoder: it reads the source's relay (a tap of its own), and gives what it makes
-/// to `take`, `chunk` bytes at a time, until it ends (its last words) or the programme stops.
-async fn decoding(ffmpeg: &str, rec: &Arc<Rec>, args: Vec<String>, chunk: usize, stop: &mut watch::Receiver<bool>, mut take: impl FnMut(Vec<u8>)) -> String {
+/// The size of a decoder's frames: a picture's, or so many bytes a sample.
+#[derive(Clone, Copy)]
+enum FrameBytes {
+    Fixed(usize),
+    PerSample(usize),
+}
+
+/// A frame said by `showinfo` or `ashowinfo`: its timestamp (s) and its samples (sound).
+fn frame_said(line: &str) -> Option<(Option<f64>, Option<usize>)> {
+    if !line.contains("showinfo") || !line.contains(" n:") {
+        return None;
+    }
+    let field = |k: &str| line.split_once(k).map(|x| x.1.split_whitespace().next().unwrap_or(""));
+    Some((field("pts_time:").and_then(|v| v.parse().ok()), field("nb_samples:").and_then(|v| v.parse().ok())))
+}
+
+/// One run of a decoder: it reads the source's relay (a tap of its own), and gives each frame it
+/// makes to `take` with its timestamp, until it ends (its last words) or the programme stops.
+async fn decoding(ffmpeg: &str, rec: &Arc<Rec>, args: Vec<String>, bytes: FrameBytes, stop: &mut watch::Receiver<bool>, mut take: impl FnMut(f64, Vec<u8>)) -> String {
     let port = match free_udp() {
         Ok(p) => p,
         Err(e) => return e,
@@ -587,24 +608,44 @@ async fn decoding(ffmpeg: &str, rec: &Arc<Rec>, args: Vec<String>, chunk: usize,
         Ok(c) => c,
         Err(e) => return format!("cannot start {ffmpeg}: {e}"),
     };
-    let last = last_words(&mut child);
-    let Some(mut out) = child.stdout.take() else { return "no output".into() };
+    let (Some(mut out), Some(err)) = (child.stdout.take(), child.stderr.take()) else { return "no output".into() };
+    let mut lines = tokio::io::BufReader::new(err).lines();
+    let mut last: VecDeque<String> = VecDeque::new();
+    // Each frame is said (its timestamp) before it is written: said, then read.
+    let mut pts = 0.0;
     loop {
-        let mut buf = vec![0u8; chunk];
-        tokio::select! {
-            r = out.read_exact(&mut buf) => match r {
-                Ok(_) => take(buf),
-                Err(_) => break,
+        let line = tokio::select! {
+            l = lines.next_line() => match l {
+                Ok(Some(l)) => l,
+                _ => break,
             },
             _ = stop.changed() => {
                 let _ = child.kill().await;
                 return String::new();
             }
+        };
+        let Some((t, samples)) = frame_said(&line) else {
+            last.push_back(line);
+            if last.len() > 20 {
+                last.pop_front();
+            }
+            continue;
+        };
+        let n = match bytes {
+            FrameBytes::Fixed(n) => n,
+            FrameBytes::PerSample(k) => samples.unwrap_or(0) * k,
+        };
+        let mut buf = vec![0u8; n];
+        if out.read_exact(&mut buf).await.is_err() {
+            break;
         }
+        // Without one (rare): just after the one before.
+        pts = t.unwrap_or(pts + 0.04);
+        take(pts, buf);
     }
-    let _ = child.wait().await;
-    let words = last.lock().unwrap().last().cloned().unwrap_or_default();
-    words
+    let _ = child.kill().await;
+    // Its error, not its descriptions (the input, the mapping).
+    last.into_iter().rev().find(|l| !l.starts_with(' ') && !l.starts_with("Input #") && !l.starts_with("Output #") && !l.starts_with("Stream mapping") && !l.starts_with("Press")).unwrap_or_default()
 }
 
 /// A child's last lines on its error output (20 at most).
@@ -627,23 +668,19 @@ fn last_words(child: &mut tokio::process::Child) -> Arc<Mutex<Vec<String>>> {
     last
 }
 
-/// Writes what the mixer makes to the encoder that connects (the first that does). Broken: it is
-/// gone, or did not come.
-fn write_to<T: AsRef<[u8]> + Send + 'static>(listener: TcpListener, rx: Receiver<T>, done: Arc<AtomicBool>, broken: Arc<AtomicBool>) {
+/// Writes what the mixer makes to the encoder that connects (the first that does), counting
+/// down what waits. Ends when the encoder is gone (it is made again) or the run ends.
+fn write_to(listener: TcpListener, rx: Receiver<Vec<u8>>, queued: Arc<AtomicUsize>, done: Arc<AtomicBool>) {
     let _ = std::thread::Builder::new().name("program-write".into()).spawn(move || {
         let _ = listener.set_nonblocking(true);
-        let since = Instant::now();
         let mut stream = loop {
             if done.load(Ordering::Relaxed) {
                 return;
             }
             match listener.accept() {
                 Ok((s, _)) => break s,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && since.elapsed() < Duration::from_secs(10) => std::thread::sleep(Duration::from_millis(20)),
-                Err(_) => {
-                    broken.store(true, Ordering::Relaxed);
-                    return;
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(10)),
+                Err(_) => return,
             }
         };
         let _ = stream.set_nonblocking(false);
@@ -651,8 +688,9 @@ fn write_to<T: AsRef<[u8]> + Send + 'static>(listener: TcpListener, rx: Receiver
         loop {
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(b) => {
-                    if stream.write_all(b.as_ref()).is_err() {
-                        broken.store(true, Ordering::Relaxed);
+                    let ok = stream.write_all(&b).is_ok();
+                    queued.fetch_sub(1, Ordering::Relaxed);
+                    if !ok {
                         return;
                     }
                 }
@@ -1033,6 +1071,12 @@ mod tests {
     #[test]
     fn decoders_and_encoder() {
         let sh = shape(2);
+        assert_eq!(
+            frame_said("[Parsed_showinfo_2 @ 0x5] n:   0 pts:     37 pts_time:1.48    duration:      1 fmt:yuv420p"),
+            Some((Some(1.48), None))
+        );
+        assert_eq!(frame_said("[Parsed_ashowinfo_2 @ 0x5] n:0 pts:70559 pts_time:1.46998 fmt:flt channels:2 rate:48000 nb_samples:1152 checksum:86"), Some((Some(1.46998), Some(1152))));
+        assert_eq!(frame_said("[Parsed_showinfo_2 @ 0x5] config in time_base: 1/25"), None);
         let v = picture_args(&sh);
         assert!(v.contains(&INPUT.to_string()) && v.windows(2).any(|w| w == ["-map", "0:v:0"]));
         assert!(v.iter().any(|x| x.starts_with("bwdif") && x.contains("scale=1920:1080") && x.contains("fps=25")));

@@ -550,7 +550,8 @@ impl Streams {
             if *stop.borrow() {
                 return false;
             }
-            if r.flowing() {
+            // Its first picture of the source too (a few seconds more): the live begins with it.
+            if r.flowing() && (r.pictured() || since.elapsed() > Duration::from_secs(15)) {
                 self.set(s, |st| {
                     if st.message == "waiting for the source" || st.message == "the programme is being made" {
                         st.message.clear();
@@ -684,7 +685,7 @@ impl Streams {
             }
             let progress = child.stdout.take().map(|o| tokio::io::BufReader::new(o).lines());
             let started = std::time::Instant::now();
-            let ended = self.follow(&s, &mut child, progress, &mut stop).await;
+            let ended = self.follow(&s, &mut child, progress, &mut stop, &runner).await;
             ever_live |= s.stats.lock().unwrap().live_since.is_some();
             runner.taps.lock().unwrap().retain(|t| t.0 != key);
             if ended {
@@ -735,13 +736,24 @@ impl Streams {
         child: &mut tokio::process::Child,
         mut progress: Option<tokio::io::Lines<tokio::io::BufReader<tokio::process::ChildStdout>>>,
         stop: &mut watch::Receiver<bool>,
+        runner: &crate::program::Runner,
     ) -> bool {
         let mut size = 0u64;
         let mut last = (0u64, std::time::Instant::now());
+        // The programme's encoder started again (it stopped): its timestamps begin again, the
+        // link is made again with them (a platform takes a new stream, not times going back).
+        let epoch = runner.epoch();
+        let mut look = tokio::time::interval(Duration::from_millis(500));
         loop {
             tokio::select! {
                 _ = stop.changed() => return true,
                 _ = child.wait() => return false,
+                _ = look.tick() => {
+                    if runner.epoch() != epoch {
+                        let _ = child.kill().await;
+                        return false;
+                    }
+                }
                 line = async { match progress.as_mut() { Some(p) => p.next_line().await, None => std::future::pending().await } } => {
                     let Ok(Some(line)) = line else { progress = None; continue };
                     if let Some(v) = line.strip_prefix("total_size=") {
