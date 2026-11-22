@@ -1373,7 +1373,8 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .gal-del { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; background: rgba(5, 6, 10, 0.7); opacity: 0; transition: opacity 0.12s; }
 .gal-tile:hover .gal-del, .gal-del:focus-visible { opacity: 1; }
 .gal-add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 120px; border-radius: 9px; border: 1.5px dashed var(--line-2); background: none; color: var(--text-3); font: 500 12px Inter, sans-serif; cursor: pointer; }
-.gal-add:hover { border-color: var(--text-3); color: var(--text-2); }
+.gal-add:hover:not(:disabled) { border-color: var(--text-3); color: var(--text-2); }
+.gal-add:disabled { cursor: default; opacity: 0.6; }
 .checker { background: repeating-conic-gradient(#2a2e40 0 25%, #1c1f2c 0 50%) 0 0 / 10px 10px !important; }
 .st-dests-panel { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
 .st-dests-head { display: flex; align-items: center; justify-content: space-between; min-height: 30px; padding: 0 2px; }

@@ -554,15 +554,15 @@ export function SettingsModal({ rec, prog, onClose }: { rec: Recorder; prog: Pro
           ))}
         </nav>
         <div className="pg-settings-body">
-          {tab === "image" && <Gallery chosen={p.image} onChoose={(image) => prog.set({ image })} fallback={fallback} disabled={!run} />}
-          {tab === "overlay" && <Gallery overlay chosen={p.overlay} onChoose={(overlay) => prog.set({ overlay, ...(overlay ? {} : { overlayOn: false }) })} fallback={{ name: tc("overlay", "None"), pic: null }} disabled={!run} />}
+          {tab === "image" && <Gallery use="image" source={rec.id} chosen={p.image} onChoose={(image) => prog.set({ image })} fallback={fallback} disabled={!run} />}
+          {tab === "overlay" && <Gallery use="overlay" source={rec.id} chosen={p.overlay} onChoose={(overlay) => prog.set({ overlay, ...(overlay ? {} : { overlayOn: false }) })} fallback={{ name: tc("overlay", "None"), pic: null }} disabled={!run} />}
           {tab === "slate" && (
             <>
               <label className="pg-row">
                 <span>{t("Send a picture while the source is lost")}</span>
                 <Switch checked={p.slate} disabled={!run} onChange={(slate) => prog.set({ slate })} />
               </label>
-              <Gallery chosen={pics?.sources[rec.id] ?? null} onChoose={chooseSlate} fallback={fallback} disabled={!run || !p.slate} />
+              <Gallery use="slate" source={rec.id} chosen={pics?.sources[rec.id] ?? null} onChoose={chooseSlate} fallback={fallback} disabled={!run || !p.slate} />
             </>
           )}
         </div>

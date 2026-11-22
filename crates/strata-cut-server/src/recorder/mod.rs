@@ -583,6 +583,9 @@ pub struct Rec {
     /// Sound tracks the preview makes besides the first (0 to 3: the player's choice of track),
     /// and a run started again when the source turns out to have more.
     pub audio_extra: std::sync::atomic::AtomicU32,
+    /// The input's streams that came without anything to describe them (an audio track that
+    /// sends nothing): the next run leaves them out, they would stop the recording.
+    pub empty_streams: Mutex<Vec<u32>>,
     pub restart_run: tokio::sync::Notify,
     /// The picture black, frozen, the sound silent: since (server time, ms), and whether the
     /// journal already said so.
@@ -1180,6 +1183,7 @@ impl Manager {
             levels: Mutex::new(Levels::default()),
             last_packet: 0.into(),
             audio_extra: extra_audio.into(),
+            empty_streams: Mutex::new(Vec::new()),
             restart_run: tokio::sync::Notify::new(),
             no_signal: false.into(),
             last_end: Mutex::new(None),

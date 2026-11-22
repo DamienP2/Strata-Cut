@@ -26,6 +26,12 @@ import { explainGuard } from '../ui/guard';
 import { SourceGroups } from '../ui/SourceGroups';
 import { Antenne, Mixer, ProgramLayer, SettingsModal, useProgram } from './StreamerProgram';
 
+/** A message of the server, translated: whole, or its known beginning and what follows (FFmpeg's words). */
+function said(m: string): string {
+  const k = m.indexOf(': ');
+  return k > 0 && t(m) === m ? `${t(m.slice(0, k))} : ${m.slice(k + 2)}` : t(m);
+}
+
 export function Streamer({ source }: { source?: string }) {
   const { recorders, status } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status })));
   // With the lives that could not start (said on their destination, with why).
@@ -257,14 +263,14 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
                     </div>
                     {(s.message || s.note) && (
                       <div className={`st-note ${s.message ? 'bad' : ''}`}>
-                        {s.message ? <AlertTriangle size={11} /> : null} {t(s.message || s.note)}
+                        {s.message ? <AlertTriangle size={11} /> : null} {said(s.message || s.note)}
                       </div>
                     )}
                   </>
                 )}
                 {refused && (
                   <div className="st-note bad">
-                    <AlertTriangle size={11} /> {t('Could not start: {why}', { why: t(refused.message) })}
+                    <AlertTriangle size={11} /> {t('Could not start: {why}', { why: said(refused.message) })}
                   </div>
                 )}
                 {run && !on && !busy && (

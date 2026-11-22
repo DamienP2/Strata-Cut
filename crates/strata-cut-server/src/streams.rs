@@ -588,16 +588,29 @@ impl Streams {
     /// `limit` (then said, with the failed).
     async fn program_ready(&self, s: &Session, d: &Destination, r: &crate::program::Runner, stop: &mut watch::Receiver<bool>, limit: Option<Duration>) -> bool {
         let since = std::time::Instant::now();
+        let mut said = false;
         loop {
             if *stop.borrow() {
                 return false;
             }
             if r.flowing() {
+                self.set(s, |st| {
+                    if st.message == "waiting for the source" || st.message == "the programme is being made" {
+                        st.message.clear();
+                    }
+                });
                 return true;
             }
             if limit.is_some_and(|l| since.elapsed() > l) {
-                self.give_up(s, d, "the programme does not start".into());
+                let why = r.why();
+                self.give_up(s, d, if why.is_empty() { "the programme does not start".into() } else { format!("the programme does not start: {why}") });
                 return false;
+            }
+            // The source is here: what is waited for now is the programme (said, with why it failed).
+            if !said || since.elapsed() > Duration::from_secs(5) {
+                said = true;
+                let why = r.why();
+                self.set(s, |st| st.message = if why.is_empty() { "the programme is being made".into() } else { format!("the programme does not start: {why}") });
             }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(300)) => {}

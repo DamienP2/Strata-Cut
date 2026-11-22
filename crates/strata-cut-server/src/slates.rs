@@ -33,10 +33,17 @@ pub struct Image {
     pub ext: String,
     pub added: i64,
     pub by: String,
-    /// "" (a picture), or "overlay".
+    /// Its use: "image" (put on air by the Image button), "overlay", "slate"; "" (before they
+    /// had one): a picture for the image or the slate.
     #[serde(default)]
     pub kind: String,
+    /// The source it is for ("": any, from before).
+    #[serde(default)]
+    pub source: String,
 }
+
+/// Pictures of their own a source may have, for each use (no pile of forgotten ones).
+pub const EACH: usize = 3;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -107,9 +114,12 @@ async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResul
 struct Named {
     #[serde(default)]
     name: String,
-    /// "overlay" for an overlay.
+    /// Its use: "image", "overlay" or "slate".
     #[serde(default)]
     kind: String,
+    /// The source it is for.
+    #[serde(default)]
+    source: String,
 }
 
 async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Named>, body: Bytes) -> ApiResult<Json<Image>> {
@@ -118,10 +128,13 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
         return Err(bad("an image is 10 MB at most"));
     }
     let (ext, _) = kind(&body).ok_or_else(|| bad("the image is a PNG, a JPEG or a WebP"))?;
-    let overlay = q.kind == "overlay";
-    if overlay && ext != "png" {
+    if !matches!(q.kind.as_str(), "image" | "overlay" | "slate") {
+        return Err(bad("the use is image, overlay or slate"));
+    }
+    if q.kind == "overlay" && ext != "png" {
         return Err(bad("an overlay is a PNG"));
     }
+    s.recorders.get(&q.source).ok_or_else(|| not_found("recorder"))?;
     let name: String = q.name.trim().chars().filter(|c| !c.is_control()).take(80).collect();
     let img = Image {
         id: crate::api::new_id(),
@@ -129,7 +142,8 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
         ext: ext.into(),
         added: crate::recorder::now_ms(),
         by: me.username.clone(),
-        kind: if overlay { "overlay".into() } else { String::new() },
+        kind: q.kind.clone(),
+        source: q.source.clone(),
     };
     let data_dir = s.data_dir.clone();
     let saved = img.clone();
@@ -139,6 +153,9 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
         let mut i = load(&data_dir);
         if i.images.len() >= MAX_IMAGES {
             return Err("too many images: delete some first".into());
+        }
+        if i.images.iter().filter(|x| x.source == saved.source && x.kind == saved.kind).count() >= EACH {
+            return Err("3 images at most for each use of a source: delete one first".into());
         }
         std::fs::write(dir(&data_dir).join(format!("{}.{}", saved.id, saved.ext)), &body).map_err(|e| e.to_string())?;
         i.images.push(saved);

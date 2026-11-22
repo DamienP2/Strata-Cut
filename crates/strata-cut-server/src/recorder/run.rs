@@ -328,7 +328,8 @@ fn urlencode(s: &str) -> String {
 /// `describe`: FFmpeg also describes the input (programmes, streams: how the guide is found);
 /// `epg`: the guide's stream, written raw on FFmpeg's output.
 /// `program`: the only program read (HLS: the variant of the quality chosen, see `super::hls`).
-pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Option<&str>, preview_port: u16, program: Option<usize>) -> Vec<String> {
+/// `empty`: the input's streams left out (sending nothing, FFmpeg cannot copy them).
+pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Option<&str>, preview_port: u16, program: Option<usize>, empty: &[u32]) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
     let level = if describe { "info" } else { "warning" };
     // Damaged packets are kept (no +discardcorrupt): a frame with a few lost packets decodes
@@ -341,13 +342,18 @@ pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Op
     let (video, sounds) = (format!("{from}v:0"), format!("{from}a?"));
     // Its subtitles too (DVB subtitles, teletext), as they come.
     let subs = format!("{from}s?");
+    let left_out: Vec<String> = empty.iter().flat_map(|n| ["-map".to_string(), format!("-0:{n}")]).collect();
     // 1. The stream as received, in segments.
-    a.extend(s(&["-map", &video, "-map", &sounds, "-map", &subs, "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
+    a.extend(s(&["-map", &video, "-map", &sounds, "-map", &subs]));
+    a.extend(left_out.clone());
+    a.extend(s(&["-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "segment", "-segment_time", &SEGMENT.to_string(), "-segment_format", "mpegts", "-reset_timestamps", "0", "-segment_list_type", "csv", "-segment_list_flags", "+live", "-segment_list"]));
     a.push(d("master/list.csv"));
     a.push(d("master/s%08d.ts"));
     // 2. The same picture, its sounds and subtitles, same timestamps, for the preview and the
     // streams (UDP never waits for them).
-    a.extend(s(&["-map", &video, "-map", &sounds, "-map", &subs, "-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts"]));
+    a.extend(s(&["-map", &video, "-map", &sounds, "-map", &subs]));
+    a.extend(left_out);
+    a.extend(s(&["-c", "copy", "-muxdelay", "0", "-muxpreload", "0", "-f", "mpegts"]));
     a.push(format!("udp://127.0.0.1:{preview_port}?pkt_size=1316"));
     // 3. The programme guide (DVB EIT sections), decoded by the recorder.
     if let Some(map) = epg {
@@ -671,7 +677,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     } else {
         None
     };
-    let args = receiver_args(input, &run_dir, ts, epg_map.as_deref(), relay_port, program);
+    let empty = std::mem::take(&mut *rec.empty_streams.lock().unwrap());
+    if !empty.is_empty() {
+        tracing::warn!("{}: streams {empty:?} of the source send nothing: left out", cfg.name);
+    }
+    let args = receiver_args(input, &run_dir, ts, epg_map.as_deref(), relay_port, program, &empty);
     let extra_audio = if audio { rec.audio_extra.load(Ordering::Relaxed) } else { 0 };
     for k in 1..=extra_audio {
         let _ = std::fs::create_dir_all(run_dir.join(format!("audio{k}")));
@@ -831,6 +841,12 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             // Which of the input's streams are pictures ("Stream #0:1[0x101]: Video: …").
             let mut pictures: Vec<u32> = Vec::new();
             while let Ok(Some(l)) = lines.next_line().await {
+                if let Some(n) = empty_stream(&l) {
+                    let mut e = rec2.empty_streams.lock().unwrap();
+                    if !e.contains(&n) {
+                        e.push(n);
+                    }
+                }
                 if let Some((n, video)) = stream_kind(&l) {
                     if video && !pictures.contains(&n) {
                         pictures.push(n);
@@ -1081,6 +1097,14 @@ fn stream_kind(line: &str) -> Option<(u32, bool)> {
     let n: u32 = rest.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok()?;
     let video = rest.contains(": Video:");
     (video || rest.contains(": Audio:")).then_some((n, video))
+}
+
+/// "[mpegts @ 0x9] Could not find codec parameters for stream 2 (Audio: mp3 …): unspecified frame
+/// size" → 2: an audio track that sent nothing while FFmpeg looked (it cannot be copied).
+fn empty_stream(line: &str) -> Option<u32> {
+    let rest = line.split_once("Could not find codec parameters for stream ")?.1;
+    let (n, kind) = rest.split_once(' ')?;
+    kind.starts_with("(Audio").then(|| n.parse().ok()).flatten()
 }
 
 /// "[mpegts @ 0x9] Packet corrupt (stream = 1, dts = 1234)." → 1.
@@ -1578,9 +1602,14 @@ mod tests {
         assert!(a.contains(&"udp://127.0.0.1:5000?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216".to_string()));
         // The receiver only copies (no encoding), and keeps the damaged frames: thrown away, they
         // make the mosaic last to the next key frame.
-        let r = receiver_args(vec!["-i".into(), "x".into()], Path::new("/r"), false, None, 5000, None);
+        let r = receiver_args(vec!["-i".into(), "x".into()], Path::new("/r"), false, None, 5000, None, &[]);
         assert!(!r.iter().any(|x| x.contains("discardcorrupt") || x.contains("libx264") || x == "-vf" || x == "-af"));
         assert!(r.contains(&"udp://127.0.0.1:5000?pkt_size=1316".to_string()));
+        // A track that sends nothing: left out of both outputs.
+        let r = receiver_args(vec!["-i".into(), "x".into()], Path::new("/r"), false, None, 5000, None, &[2]);
+        assert_eq!(r.iter().filter(|x| *x == "-0:2").count(), 2);
+        assert_eq!(empty_stream("[mpegts @ 0x5] Could not find codec parameters for stream 2 (Audio: mp3 (mp3float), 0 channels, fltp): unspecified frame size"), Some(2));
+        assert_eq!(empty_stream("[mpegts @ 0x5] Could not find codec parameters for stream 3 (Subtitle: dvb_teletext)"), None);
     }
 
     #[test]
