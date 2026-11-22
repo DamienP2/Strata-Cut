@@ -6,7 +6,7 @@
  * the same fades).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Headphones, RotateCcw, Settings, Volume2, VolumeX, X } from "lucide-react";
 import { t, tc } from "../i18n";
 import { api, can, useApp, useChanged } from "../store";
 import { Switch } from "../settings/ui";
@@ -163,7 +163,7 @@ export function ProgramLayer({ rec, prog, editable }: { rec: Recorder; prog: Pro
 }
 
 /** The two inputs, the fade, the overlay; the lives of the source. */
-export function Antenne({ rec, prog, live, kbps, onStopAll }: { rec: Recorder; prog: ProgramApi; live: number; kbps: string; onStopAll: () => void }) {
+export function Antenne({ rec, prog, live, kbps, onStopAll, onSettings }: { rec: Recorder; prog: ProgramApi; live: number; kbps: string; onStopAll: () => void; onSettings: () => void }) {
   const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -195,6 +195,9 @@ export function Antenne({ rec, prog, live, kbps, onStopAll }: { rec: Recorder; p
     <section className="pg-box pg-antenne">
       <header>
         <span className="label">{t("On air")}</span>
+        <button type="button" className="btn small" onClick={onSettings}>
+          <Settings size={13} /> {t("Settings")}
+        </button>
       </header>
       <div className="pg-antenne-body">
         <div className="pg-inputs">
@@ -265,18 +268,52 @@ function useLevels(recId: string, n: number): number[][] {
   return lv;
 }
 
-/** The sound: each track's switch, level and meter; the channels; what goes out. */
-export function Mixer({ rec, prog }: { rec: Recorder; prog: ProgramApi }) {
+/** The browser's listening (headphones): which track, how loud; nothing of it goes out. */
+export interface Monitor {
+  volume: number;
+  setVolume: (v: number) => void;
+  muted: boolean;
+  setMuted: (m: boolean) => void;
+  /** The track heard (0: the first), among those the preview carries (4 at most). */
+  track: number;
+  setTrack: (k: number) => void;
+}
+
+/** A vertical fader. */
+function Fader({ value, min, max, step, disabled, label, onChange, onReset }: { value: number; min: number; max: number; step: number; disabled?: boolean; label: string; onChange: (v: number) => void; onReset?: () => void }) {
+  return (
+    <input
+      type="range"
+      className="pg-fader"
+      min={min}
+      max={max}
+      step={step}
+      value={value}
+      disabled={disabled}
+      aria-label={label}
+      onChange={(e) => onChange(Number(e.target.value))}
+      onDoubleClick={onReset}
+      onKeyDown={(e) => e.stopPropagation()}
+    />
+  );
+}
+
+/** The sound: each track's level, meter and switch (left); what goes out, and the headphones (right). */
+export function Mixer({ rec, prog, monitor }: { rec: Recorder; prog: ProgramApi; monitor: Monitor }) {
   const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
   const n = prog.state?.tracks.length ?? 0;
   const levels = useLevels(rec.id, n);
   if (!prog.state) return <section className="pg-box pg-mixer" />;
   const { program: p, tracks } = prog.state;
+  const all = () => Array.from({ length: Math.max(tracks.length, p.tracks.length) }, (_, i) => trackOf(p, i));
   const setTrack = (k: number, x: Partial<Track>) => {
-    const all = Array.from({ length: Math.max(tracks.length, p.tracks.length) }, (_, i) => trackOf(p, i));
-    all[k] = { ...all[k], ...x };
-    prog.set({ tracks: all });
+    const next = all();
+    next[k] = { ...next[k], ...x };
+    prog.set({ tracks: next });
   };
+  // The source's own levels again (each track at 0 dB; on and off kept).
+  const reset = () => prog.set({ tracks: all().map((tr) => ({ ...tr, gain: 0 })) });
+  const changed = all().some((tr) => tr.gain !== 0);
   // What goes out, as heard: the loudest track on, at its level, on the channels chosen; none
   // under the image.
   const out = [0, 1].map((c) => {
@@ -291,10 +328,12 @@ export function Mixer({ rec, prog }: { rec: Recorder; prog: ProgramApi }) {
     });
     return best;
   });
+  const heard = Math.min(n, 4);
   return (
     <section className="pg-box pg-mixer">
       <header>
         <span>{t("Sound")}</span>
+        <span className="spacer" />
         <span className="segmented">
           {CHANNELS.map((c) => (
             <button key={c} type="button" className={p.channels === c ? "on" : ""} disabled={!run || n === 0} onClick={() => prog.set({ channels: c })}>
@@ -302,52 +341,77 @@ export function Mixer({ rec, prog }: { rec: Recorder; prog: ProgramApi }) {
             </button>
           ))}
         </span>
+        <button type="button" className="btn small" disabled={!run || !changed} onClick={reset}>
+          <RotateCcw size={12} /> {t("Reset")}
+        </button>
       </header>
       <div className="pg-strips">
-        {n === 0 && <span className="muted pg-nosound">{t("No sound")}</span>}
-        {tracks.map((lang, k) => {
-          const tr = trackOf(p, k);
-          const lv = levels[k] ?? [-90, -90];
-          return (
-            <div key={k} className={`pg-strip ${tr.on ? "" : "off"}`}>
+        <div className="pg-strip-group">
+          {n === 0 && <span className="muted pg-nosound">{t("No sound")}</span>}
+          {tracks.map((lang, k) => {
+            const tr = trackOf(p, k);
+            const lv = levels[k] ?? [-90, -90];
+            return (
+              <div key={k} className={`pg-strip ${tr.on ? "" : "off"}`}>
+                <span className="pg-strip-name" title={lang || undefined}>
+                  {k + 1}
+                  <small>{lang || "—"}</small>
+                </span>
+                <span className="pg-strip-body">
+                  <Fader value={tr.gain} min={-40} max={12} step={1} disabled={!run || !tr.on} label={t("Track {n}", { n: k + 1 })} onChange={(gain) => setTrack(k, { gain })} onReset={() => setTrack(k, { gain: 0 })} />
+                  <Vu l={lv[0]} r={lv[1]} />
+                </span>
+                <b className="pg-db">
+                  {tr.gain > 0 ? "+" : ""}
+                  {tr.gain}
+                </b>
+                <button type="button" className={`pg-on ${tr.on ? "on" : ""}`} disabled={!run} aria-pressed={tr.on} onClick={() => setTrack(k, { on: !tr.on })}>
+                  {tr.on ? "ON" : "OFF"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <div className="pg-strip-group end">
+          {n > 0 && (
+            <div className="pg-strip master">
               <span className="pg-strip-name">
-                {t("Track {n}", { n: k + 1 })}
-                <small>{lang || "—"}</small>
+                {t("Output")}
+                <small>{tc("channels", CHANNEL_LABEL[p.channels])}</small>
               </span>
               <span className="pg-strip-body">
-                <input
-                  type="range"
-                  className="pg-fader"
-                  min={-40}
-                  max={12}
-                  step={1}
-                  value={tr.gain}
-                  disabled={!run || !tr.on}
-                  aria-label={t("Level")}
-                  onChange={(e) => setTrack(k, { gain: Number(e.target.value) })}
-                  onDoubleClick={() => setTrack(k, { gain: 0 })}
-                />
-                <Vu l={lv[0]} r={lv[1]} />
+                <Vu l={out[0]} r={out[1]} />
               </span>
-              <b className="pg-db">
-                {tr.gain > 0 ? "+" : ""}
-                {tr.gain} dB
-              </b>
-              <Switch checked={tr.on} disabled={!run} onChange={(on) => setTrack(k, { on })} />
+              <b className="pg-db">{p.imageOn ? t("Image") : " "}</b>
+              <span className="pg-on-space" />
             </div>
-          );
-        })}
-        {n > 0 && (
-          <div className="pg-strip master">
+          )}
+          <div className="pg-strip phones">
             <span className="pg-strip-name">
-              {t("Output")}
-              <small>{tc("channels", CHANNEL_LABEL[p.channels])}</small>
+              <Headphones size={14} />
+              <small>{t("Headphones")}</small>
             </span>
             <span className="pg-strip-body">
-              <Vu l={out[0]} r={out[1]} />
+              <Fader value={monitor.muted ? 0 : monitor.volume} min={0} max={1} step={0.01} label={t("Headphones")} onChange={(v) => {
+                monitor.setVolume(v);
+                if (monitor.muted) monitor.setMuted(false);
+              }} />
+              {heard > 1 && (
+                <span className="pg-phones-tracks" role="radiogroup" aria-label={t("Track heard")}>
+                  {Array.from({ length: heard }, (_, k) => (
+                    <button key={k} type="button" role="radio" aria-checked={monitor.track === k} className={monitor.track === k ? "on" : ""} onClick={() => monitor.setTrack(k)}>
+                      {k + 1}
+                    </button>
+                  ))}
+                </span>
+              )}
             </span>
+            <b className="pg-db">{Math.round((monitor.muted ? 0 : monitor.volume) * 100)} %</b>
+            <button type="button" className={`pg-on ${monitor.muted ? "mute" : ""}`} aria-pressed={monitor.muted} onClick={() => monitor.setMuted(!monitor.muted)}>
+              {monitor.muted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+            </button>
           </div>
-        )}
+        </div>
       </div>
     </section>
   );

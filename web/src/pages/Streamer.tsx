@@ -9,16 +9,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
-import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Settings, Square } from 'lucide-react';
+import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Square } from 'lucide-react';
 import { useDisplayPref } from '../displayPrefs';
 import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tc, tn } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer } from '../player';
-import { fpsOf, scanFormat, timecode, formatName } from '../tc';
+import { fpsOf, timecode } from '../tc';
 import { Empty } from '../ui/Empty';
 import { NumberField } from '../ui/fields';
-import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
+import { Meters, useAudioOut } from '../ui/AudioUi';
 import { clockOf, mbps, useDestinations, useStreams, volume, type Destination, type StreamInfo } from '../streams';
 import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
@@ -73,6 +73,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   const audio = useAudioOut(video);
   const [wall, setWall] = useState<number | null>(null);
   const [settings, setSettings] = useState(false);
+  const player = useRef<LoopPlayer | null>(null);
   const received = st?.state === 'recording';
   // Only what is received now is shown: a stopped source shows nothing (not what is left of
   // its last recording).
@@ -83,9 +84,19 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
     }
     const p = new LoopPlayer(video.current!, rec.id, serverNow);
     p.onFrame = (w) => setWall(w);
+    player.current = p;
     void p.goLive(serverNow());
-    return () => p.destroy();
+    return () => {
+      player.current = null;
+      p.destroy();
+    };
   }, [rec.id, received]);
+  // The track heard in the headphones (the browser's own: nothing changes in what goes out).
+  const [heard, setHeard] = useState(0);
+  const hear = (k: number) => {
+    setHeard(k);
+    void player.current?.setAudioTrack(k, serverNow());
+  };
   const m = st?.media;
   const fps = fpsOf(m?.fpsNum, m?.fpsDen);
   const stopAll = async () => {
@@ -106,22 +117,12 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
             {received && <Meters out={audio.out} />}
           </div>
           <div className="pg-meta">
-            <b>{rec.name}</b>
             <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
-            <span className="pg-info">
-              {received && m ? `${m.width}×${m.height} · ${formatName(scanFormat(m), lang() === 'fr')}` : ''}
-              {received && st?.bitrate ? ` · ${t('{b} received', { b: mbps(st.bitrate / 1000, locale()) })}` : ''}
-            </span>
-            <span className="spacer" />
-            <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
-            <button type="button" className="btn small" onClick={() => setSettings(true)}>
-              <Settings size={13} /> {t('Settings')}
-            </button>
           </div>
         </div>
-        <Antenne rec={rec} prog={prog} live={streams.length} kbps={mbps(streams.reduce((a, s) => a + s.kbps, 0), locale())} onStopAll={() => void stopAll()} />
+        <Antenne rec={rec} prog={prog} live={streams.length} kbps={mbps(streams.reduce((a, s) => a + s.kbps, 0), locale())} onStopAll={() => void stopAll()} onSettings={() => setSettings(true)} />
       </div>
-      <Mixer rec={rec} prog={prog} />
+      <Mixer rec={rec} prog={prog} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, track: heard, setTrack: hear }} />
       {settings && createPortal(<SettingsModal rec={rec} prog={prog} onClose={() => setSettings(false)} />, document.body)}
     </div>
   );
