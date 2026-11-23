@@ -30,27 +30,30 @@ use crate::{
 // ---------------------------------------------------------------- the decoder
 
 /// The source's decoder: deinterlaced pictures at the programme's size (its shape kept, bands
-/// added) and rate, on its output; the sound of each track given, 48 kHz stereo, to its port. Read
-/// at the source's pace (`-re`: a burst waits before it, compressed). Pictures made at an even
-/// rate from the moment 0 (`fps`: a hole filled), the sound alike (`aresample`): the `k`-th
-/// picture and the `k`-th frame of sound are of the same moment, whatever the source does.
+/// added) and rate, on its output; the sound of each track given, 48 kHz stereo, to its port (a
+/// track it cannot find is left out, not an end). Pictures made at an even rate from the moment 0
+/// (`fps`: a hole filled), the sound alike (`aresample`): the `k`-th picture and the `k`-th frame
+/// of sound are of the same moment, whatever the source does. Its timestamps jumping (a splice,
+/// an encoder started again) by more than a second: taken as going on (else the jump would be
+/// filled: a picture held for as long). It reads the source as it comes; the mixer full, it waits
+/// (its output not read).
 fn decoder_args(sh: &Shape, input: &str, tracks: &[(usize, u16)]) -> Vec<String> {
     let (w, h, fps) = (sh.w, sh.h, sh.fps);
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
-    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-re", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i", input]);
+    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-dts_delta_threshold", "1", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i", input]);
     a.extend(s(&["-map", "0:v:0", "-vf"]));
     a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps}:start_time=0,format=yuv420p"));
     a.extend(s(&["-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"]));
     for &(k, port) in tracks {
-        a.extend(s(&["-map", &format!("0:a:{k}"), "-af", "aresample=48000:async=1:first_pts=0,aformat=sample_fmts=flt:channel_layouts=stereo", "-f", "f32le", "-ar", "48000", "-ac", "2"]));
+        a.extend(s(&["-map", &format!("0:a:{k}?"), "-af", "aresample=48000:async=1:first_pts=0,aformat=sample_fmts=flt:channel_layouts=stereo", "-f", "f32le", "-ar", "48000", "-ac", "2"]));
         a.push(format!("tcp://127.0.0.1:{port}"));
     }
     a
 }
 
 /// The source's decoder, while the programme is wanted: started when the source comes, again when
-/// it stops (the source lost) or when the tracks that send something change (one that sends
-/// nothing would hold it at its start).
+/// it stops (the source lost). All the source's tracks in it: one that sends nothing, or no
+/// longer, is silence (it holds nothing back).
 pub async fn decode(recorders: Arc<Manager>, source: String, sh: Shape, inputs: Arc<Inputs>, watch: Arc<Watch>, r: Arc<Runner>, mut stop: watch::Receiver<bool>) {
     let mut said = String::new();
     loop {
@@ -58,25 +61,22 @@ pub async fn decode(recorders: Arc<Manager>, source: String, sh: Shape, inputs: 
             return;
         }
         if let Some(rec) = recorders.get(&source).filter(|r| r.flowing()) {
-            // A moment to read its tracks, and which send something.
+            // How many tracks it has (its PMT, a moment to read it; else as it was described).
+            let mut tracks = None;
             for _ in 0..30 {
-                if watch.ready() {
+                tracks = watch.tracks();
+                if tracks.is_some() {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            match decode_once(&recorders.ffmpeg, &rec, &sh, &inputs, &watch, &mut stop).await {
-                // Other tracks: made again at once.
-                Ended::Tracks => continue,
-                Ended::Stopped => return,
-                // Said once (a source that comes and goes would fill the journal); to the lives too.
-                Ended::Failed(why) => {
-                    if why != said {
-                        tracing::warn!("programme of {}: the decoder stopped: {why}", rec.config().name);
-                        *r.failed.lock().unwrap() = format!("the decoder stopped: {why}");
-                        said = why;
-                    }
-                }
+            let tracks = tracks.unwrap_or(sh.tracks).min(TRACKS);
+            let Some(why) = decode_once(&recorders.ffmpeg, &rec, &sh, tracks, &inputs, &mut stop).await else { return };
+            // Said once (a source that comes and goes would fill the journal); to the lives too.
+            if why != said {
+                tracing::warn!("programme of {}: the decoder stopped: {why}", rec.config().name);
+                *r.failed.lock().unwrap() = format!("the decoder stopped: {why}");
+                said = why;
             }
         }
         tokio::select! {
@@ -86,30 +86,20 @@ pub async fn decode(recorders: Arc<Manager>, source: String, sh: Shape, inputs: 
     }
 }
 
-/// How a run of the decoder ended.
-enum Ended {
-    /// It stopped (why).
-    Failed(String),
-    /// The tracks sending sound changed.
-    Tracks,
-    /// The programme stopped.
-    Stopped,
-}
-
-/// One run of the decoder.
-async fn decode_once(ffmpeg: &str, rec: &Arc<Rec>, sh: &Shape, inputs: &Arc<Inputs>, watch: &Watch, stop: &mut watch::Receiver<bool>) -> Ended {
-    let tracks: Vec<usize> = watch.alive().into_iter().filter(|&k| k < TRACKS).collect();
+/// One run of the decoder, with the source's first `tracks` tracks: until it ends (why), or the
+/// programme stops (none).
+async fn decode_once(ffmpeg: &str, rec: &Arc<Rec>, sh: &Shape, tracks: usize, inputs: &Arc<Inputs>, stop: &mut watch::Receiver<bool>) -> Option<String> {
     let mut listeners = Vec::new();
-    for &k in &tracks {
+    for k in 0..tracks {
         match tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await {
             Ok(l) => listeners.push((k, l)),
-            Err(e) => return Ended::Failed(e.to_string()),
+            Err(e) => return Some(e.to_string()),
         }
     }
     let ports: Vec<(usize, u16)> = listeners.iter().map(|(k, l)| (*k, l.local_addr().map(|a| a.port()).unwrap_or(0))).collect();
     let port = match free_udp() {
         Ok(p) => p,
-        Err(e) => return Ended::Failed(e),
+        Err(e) => return Some(e),
     };
     // 5 s without anything: it ends (the source lost), started again when it comes back.
     let input = format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000");
@@ -120,7 +110,7 @@ async fn decode_once(ffmpeg: &str, rec: &Arc<Rec>, sh: &Shape, inputs: &Arc<Inpu
     cmd.args(decoder_args(sh, &input, &ports)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return Ended::Failed(format!("cannot start {ffmpeg}: {e}")),
+        Err(e) => return Some(format!("cannot start {ffmpeg}: {e}")),
     };
     inputs.restart();
     let last = last_words(&mut child);
@@ -130,6 +120,10 @@ async fn decode_once(ffmpeg: &str, rec: &Arc<Rec>, sh: &Shape, inputs: &Arc<Inpu
         let (inputs, size) = (inputs.clone(), sh.frame_bytes() * 3 / 5);
         readers.push(tokio::spawn(async move {
             loop {
+                // The mixer full: the decoder waits (all of it: the sound stays in step).
+                while inputs.full() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
                 let mut f = vec![0u8; size];
                 if out.read_exact(&mut f).await.is_err() {
                     return;
@@ -148,32 +142,18 @@ async fn decode_once(ffmpeg: &str, rec: &Arc<Rec>, sh: &Shape, inputs: &Arc<Inpu
             }
         }));
     }
-    let mut look = tokio::time::interval(Duration::from_secs(2));
-    let mut changed = 0;
-    let end = loop {
-        tokio::select! {
-            status = child.wait() => break Ended::Failed(last.lock().unwrap().last().cloned().unwrap_or_else(|| format!("{status:?}"))),
-            _ = stop.changed() => break Ended::Stopped,
-            // Other tracks send something (twice in a row: not a moment's gap): made again with them.
-            _ = look.tick() => {
-                let now: Vec<usize> = watch.alive().into_iter().filter(|&k| k < TRACKS).collect();
-                changed = if now != tracks { changed + 1 } else { 0 };
-                if changed >= 2 {
-                    tracing::info!("programme of {}: its tracks sending sound are now {now:?}", rec.config().name);
-                    break Ended::Tracks;
-                }
-            }
-        }
+    let end = tokio::select! {
+        status = child.wait() => Some(last.lock().unwrap().last().cloned().unwrap_or_else(|| format!("{status:?}"))),
+        _ = stop.changed() => None,
     };
     let _ = child.kill().await;
     readers.iter().for_each(|t| t.abort());
     end
 }
 
-/// The source's relay, read to know its sound tracks and which send something.
+/// The source's relay, read to know how many sound tracks it has.
 pub struct Watch {
     pub port: u16,
-    opened: Instant,
     seen: Arc<Mutex<Seen>>,
     done: Arc<AtomicBool>,
 }
@@ -199,17 +179,13 @@ impl Watch {
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Watch { port, opened: Instant::now(), seen, done })
+        Ok(Watch { port, seen, done })
     }
 
-    /// Its tracks are known, and long enough looked at to know which send something.
-    fn ready(&self) -> bool {
-        self.seen.lock().unwrap().known() && self.opened.elapsed() > Duration::from_millis(1500)
-    }
-
-    /// The tracks that sent something in the last 2 s.
-    fn alive(&self) -> Vec<usize> {
-        self.seen.lock().unwrap().alive(now_ms(), 2000)
+    /// Its sound tracks, once its PMT was read.
+    fn tracks(&self) -> Option<usize> {
+        let s = self.seen.lock().unwrap();
+        s.known().then(|| s.count())
     }
 }
 
@@ -422,9 +398,10 @@ mod tests {
     fn decoder_and_encoder() {
         let sh = Shape { w: 1920, h: 1080, fps: 25, tracks: 2, kbps: 8000 };
         let d = decoder_args(&sh, "udp://in", &[(0, 7001), (2, 7002)]);
-        assert!(d.windows(2).any(|w| w == ["-re", "-thread_queue_size"]) && d.contains(&"udp://in".to_string()));
+        assert!(!d.contains(&"-re".to_string()) && d.contains(&"udp://in".to_string()));
+        assert!(d.windows(2).any(|w| w == ["-dts_delta_threshold", "1"]));
         assert!(d.iter().any(|x| x.starts_with("bwdif") && x.contains("scale=1920:1080") && x.contains("fps=25:start_time=0")));
-        assert!(d.windows(2).any(|w| w == ["-map", "0:a:2"]) && d.contains(&"tcp://127.0.0.1:7002".to_string()));
+        assert!(d.windows(2).any(|w| w == ["-map", "0:a:2?"]) && d.contains(&"tcp://127.0.0.1:7002".to_string()));
         assert!(d.iter().any(|x| x.starts_with("aresample=48000:async=1:first_pts=0")));
         let e = encoder_args(&sh, 1, 2, 3);
         assert!(e.contains(&"tcp://127.0.0.1:1".to_string()) && e.contains(&"tcp://127.0.0.1:2".to_string()));

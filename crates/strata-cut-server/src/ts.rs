@@ -13,9 +13,9 @@ pub struct Seen {
 }
 
 impl Seen {
-    /// The tracks that sent something in the last `ms` (their order among the audio tracks).
-    pub fn alive(&self, now: i64, ms: i64) -> Vec<usize> {
-        self.tracks.iter().enumerate().filter(|(_, t)| now - t.1 < ms).map(|(k, _)| k).collect()
+    /// Its audio tracks.
+    pub fn count(&self) -> usize {
+        self.tracks.len()
     }
 
     /// Its PMT was read: its tracks are known.
@@ -203,8 +203,6 @@ mod tests {
         s.packet(&es(0x105), 5000);
         s.packet(&es(0x105), 6000);
         assert_eq!(s.newest(), 6000);
-        // Track 2 silent since 2 s: not alive.
-        assert_eq!(s.alive(6000, 2000), vec![0, 2]);
-        assert!(s.known());
+        assert!(s.known() && s.count() == 3);
     }
 }
