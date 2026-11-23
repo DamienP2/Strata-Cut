@@ -104,10 +104,20 @@ struct Sound {
 /// own start, so one started after a turn is a turn away from one started before it.
 const TURN: f64 = 8_589_934_592.0 / 90_000.0;
 
-/// Our time, s.
+/// Our time, s: a steady clock (the system's time may be set, by NTP).
 fn now_s() -> f64 {
-    now_ms() as f64 / 1000.0
+    static EPOCH: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_secs_f64()
 }
+
+/// The moment played follows the source's clock by going a little faster or slower (at most
+/// this much: unheard), never by a jump (a cut in the sound, a picture held or skipped): a
+/// source's clock is never quite ours.
+const PULL_MOST: f64 = 0.003;
+/// How slowly it follows (s): a gap of this many seconds' worth of `PULL_MOST`… made up over it.
+const PULL_TIME: f64 = 30.0;
+/// A gap of more than this (s): the source started again, the moment played jumps to it.
+const JUMP: f64 = 1.0;
 
 impl Default for Inputs {
     fn default() -> Self {
@@ -189,37 +199,57 @@ impl Inputs {
         self.clock.lock().unwrap().play(now_s())
     }
 
-    /// `n` stereo samples of a track from the moment `at`: silence where it has none.
-    fn take(&self, track: usize, at: f64, n: usize, out: &mut [f32]) -> bool {
+    /// `n` stereo samples of a track from the moment `at`, read `ratio` times as fast (a little
+    /// more or less than 1: the source's clock followed), silence where it has none.
+    fn take(&self, track: usize, at: f64, n: usize, ratio: f64, out: &mut [f32]) -> bool {
         out.iter_mut().for_each(|x| *x = 0.0);
         let mut t = self.tracks[track].lock().unwrap();
-        if t.buf.is_empty() {
+        let frames = t.buf.len() / 2;
+        if frames == 0 {
             return false;
         }
-        // Before `at`: too late, dropped.
-        let late = ((at - t.head) * RATE as f64).round();
-        if late > 0.0 {
-            let drop = (late as usize * 2).min(t.buf.len());
-            t.buf.drain(..drop);
-            t.head += (drop / 2) as f64 / RATE as f64;
+        // Where `at` is in what it has (samples; before its start: silence first).
+        let x0 = (at - t.head) * RATE as f64;
+        let mut any = false;
+        for i in 0..n {
+            let x = x0 + i as f64 * ratio;
+            if x < 0.0 {
+                continue;
+            }
+            let k = x.floor() as usize;
+            if k + 1 >= frames {
+                break;
+            }
+            let f = (x - k as f64) as f32;
+            for c in 0..2 {
+                out[2 * i + c] = t.buf[2 * k + c] * (1.0 - f) + t.buf[2 * (k + 1) + c] * f;
+            }
+            any = true;
         }
-        // After it: silence first.
-        let lead = (((t.head - at) * RATE as f64).round().max(0.0) as usize).min(n);
-        let count = (n - lead).min(t.buf.len() / 2);
-        for (o, s) in out[lead * 2..(lead + count) * 2].iter_mut().zip(t.buf.drain(..count * 2)) {
-            *o = s;
+        // What was read (and what was too late) dropped: the next starts where this one ended.
+        let end = x0 + n as f64 * ratio;
+        let drop = if end > 0.0 { (end.floor() as usize).min(frames) } else { 0 };
+        t.buf.drain(..drop * 2);
+        t.head += drop as f64 / RATE as f64;
+        any
+    }
+
+    /// A moment on the pictures' beat (the nearest), for pictures and frames to fall together.
+    fn on_beat(&self, at: f64, period: f64) -> f64 {
+        match *self.reference.lock().unwrap() {
+            Some(r) => r + ((at - r) / period).round() * period,
+            None => at,
         }
-        t.head += count as f64 / RATE as f64;
-        count > 0
     }
 
     /// Pictures waiting, none of them yet due at `at`, and all the room taken or none shown
     /// for a while (`stalled`): by how much the first is ahead (the delay was taken too great:
     /// a picture that came very late, from before a loss).
-    fn too_late(&self, at: f64, stalled: bool) -> Option<f64> {
+    fn too_late(&self, at: f64, period: f64, stalled: bool) -> Option<f64> {
         let q = self.pictures.lock().unwrap();
         let first = q.front()?.0;
-        ((q.len() >= PICTURES_MOST || stalled) && first > at).then_some(first - at)
+        // Due this frame or the next: on time (a source in bursts keeps them all waiting).
+        ((q.len() >= PICTURES_MOST || stalled) && first > at + 1.5 * period).then_some(first - at)
     }
 
     /// Played sooner by `by` s.
@@ -333,7 +363,11 @@ impl Mixer {
         let mut late = 0u32;
         let mut longest = Duration::ZERO;
         let mut said = Instant::now();
+        // The moment played moved at once (pictures skipped or held, a cut in the sound).
+        let mut jumps = 0u32;
+        let mut jumped = 0.0f64;
         let mut pos: Option<f64> = None;
+        let began = Instant::now();
         // When a picture of the source was last shown.
         let mut shown = Instant::now();
         let step = n as f64 / RATE as f64;
@@ -353,16 +387,31 @@ impl Mixer {
             // The picture: the source's next one, else its last; lost, the slate (or its last).
             // The source's moment to play: ours, on from frame to frame (the clock's estimate
             // followed when it moves away, not its every jitter).
+            let p_secs = period.as_secs_f64();
+            let mut ratio = 1.0;
             if let Some(p) = self.inputs.play() {
                 pos = Some(match pos {
-                    Some(x) if (x - p).abs() < 0.08 => x,
-                    _ => p,
+                    // Followed: a little faster when behind, slower when ahead.
+                    Some(x) if (x - p).abs() < JUMP => {
+                        ratio = 1.0 + ((p - x) / PULL_TIME).clamp(-PULL_MOST, PULL_MOST);
+                        x
+                    }
+                    Some(x) => {
+                        jumps += 1;
+                        jumped += (p - x).abs();
+                        tracing::info!("programme: the moment played jumps {} ms (the source's time moved), {} s after the start", ((p - x) * 1000.0) as i64, began.elapsed().as_secs());
+                        self.inputs.on_beat(p, p_secs)
+                    }
+                    None => self.inputs.on_beat(p, p_secs),
                 });
             }
-            let stalled = shown.elapsed() > Duration::from_millis(LOST_MS as u64);
-            if let Some(by) = pos.and_then(|at| self.inputs.too_late(at, stalled)) {
+            let stalled = ever && shown.elapsed() > Duration::from_millis(LOST_MS as u64);
+            if let Some(by) = pos.and_then(|at| self.inputs.too_late(at, p_secs, stalled)) {
                 self.inputs.sooner(by);
-                pos = pos.map(|x| x + by);
+                pos = pos.map(|x| self.inputs.on_beat(x + by, p_secs));
+                jumps += 1;
+                jumped += by;
+                tracing::info!("programme: the moment played jumps {} ms (pictures waiting, none due), {} s after the start", (by * 1000.0) as i64, began.elapsed().as_secs());
             }
             match pos.and_then(|at| self.inputs.picture_at(at + period.as_secs_f64() / 2.0)) {
                 Some(f) if f.len() == yuv => {
@@ -393,19 +442,19 @@ impl Mixer {
             let next_gains: Vec<f32> = (0..TRACKS).map(|k| track_gain(&self.program, k)).collect();
             let next_master = master_gain(&self.program);
             let k_end = image.value(now + period);
-            let samples = sound.mix(&self.inputs, pos, n, &gains, &next_gains, &self.program.channels, (1.0 - k) as f32, (1.0 - k_end) as f32, master, next_master);
+            let samples = sound.mix(&self.inputs, pos, n, ratio, &gains, &next_gains, &self.program.channels, (1.0 - k) as f32, (1.0 - k_end) as f32, master, next_master);
             gains = next_gains;
             master = next_master;
-            pos = pos.map(|x| x + step);
+            pos = pos.map(|x| x + step * ratio);
             if !self.send(out, samples) {
                 unsent += 1;
             }
             longest = longest.max(now.elapsed());
             if said.elapsed() >= Duration::from_secs(60) {
-                if held > 0 || unsent > 0 || late > 0 {
-                    tracing::info!("programme: the last minute, {held} pictures held (the source late), {unsent} frames not sent (the encoder late), {late} times late, {} ms at most for a frame", longest.as_millis());
+                if held > 0 || unsent > 0 || late > 0 || jumps > 0 {
+                    tracing::info!("programme: the last minute, {held} pictures held (the source late), {unsent} frames not sent (the encoder late), {late} times late, {jumps} jumps ({} ms in all), {} ms at most for a frame", (jumped * 1000.0) as i64, longest.as_millis());
                 }
-                (held, unsent, late, longest, said) = (0, 0, 0, Duration::ZERO, Instant::now());
+                (held, unsent, late, longest, said, jumps, jumped) = (0, 0, 0, Duration::ZERO, Instant::now(), 0, 0.0);
             }
             // The next frame, on the clock (late by more than a second: the clock starts again).
             tick += 1;
@@ -466,11 +515,11 @@ impl Sound2 {
     /// their gain (from `g0` to `g1` over the frame), the channels, the programme's level (from
     /// `v0` to `v1`: none under the image), the master, the limiter.
     #[allow(clippy::too_many_arguments)]
-    fn mix(&mut self, inputs: &Inputs, at: Option<f64>, n: usize, g0: &[f32], g1: &[f32], channels: &str, v0: f32, v1: f32, m0: f32, m1: f32) -> Vec<f32> {
+    fn mix(&mut self, inputs: &Inputs, at: Option<f64>, n: usize, ratio: f64, g0: &[f32], g1: &[f32], channels: &str, v0: f32, v1: f32, m0: f32, m1: f32) -> Vec<f32> {
         let mut out = vec![0f32; n * 2];
         self.take.resize(n * 2, 0.0);
         for k in 0..TRACKS {
-            let got = at.is_some_and(|at| inputs.take(k, at, n, &mut self.take));
+            let got = at.is_some_and(|at| inputs.take(k, at, n, ratio, &mut self.take));
             if !got || (g0[k] == 0.0 && g1[k] == 0.0) {
                 continue;
             }
@@ -595,17 +644,17 @@ mod tests {
         inputs.sound(1, 10.0, &vec![0.8; RATE / 5 * 2]);
         let mut st = Sound2::default();
         let g = [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        let out = st.mix(&inputs, Some(10.0), n, &g, &g, "lr", 1.0, 1.0, 1.0, 1.0);
+        let out = st.mix(&inputs, Some(10.0), n, 1.0, &g, &g, "lr", 1.0, 1.0, 1.0, 1.0);
         assert!(out.iter().all(|x| (x - 0.5).abs() < 1e-6));
         // Both on, +6 dB: limited to -1 dBFS.
         let g = [2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-        let out = st.mix(&inputs, Some(10.04), n, &g, &g, "lr", 1.0, 1.0, 1.0, 1.0);
+        let out = st.mix(&inputs, Some(10.04), n, 1.0, &g, &g, "lr", 1.0, 1.0, 1.0, 1.0);
         assert!(out.iter().all(|x| *x <= LIMIT + 1e-6));
         // Under the image: none.
-        let out = st.mix(&inputs, Some(10.08), n, &g, &g, "lr", 0.0, 0.0, 1.0, 1.0);
+        let out = st.mix(&inputs, Some(10.08), n, 1.0, &g, &g, "lr", 0.0, 0.0, 1.0, 1.0);
         assert!(out.iter().all(|x| *x == 0.0));
         // Nothing to play yet: silence.
-        let out = st.mix(&inputs, None, n, &g, &g, "lr", 1.0, 1.0, 1.0, 1.0);
+        let out = st.mix(&inputs, None, n, 1.0, &g, &g, "lr", 1.0, 1.0, 1.0, 1.0);
         assert!(out.iter().all(|x| *x == 0.0));
     }
 
@@ -613,21 +662,21 @@ mod tests {
     fn sound_at_its_moment() {
         let inputs = Inputs::default();
         let mut out = vec![1f32; 200];
-        assert!(!inputs.take(0, 5.0, 100, &mut out));
+        assert!(!inputs.take(0, 5.0, 100, 1.0, &mut out));
         assert!(out.iter().all(|x| *x == 0.0));
         // 0.1 s from the moment 5 (a ramp: each sample says its index).
         let s: Vec<f32> = (0..4800).flat_map(|i| [i as f32, i as f32]).collect();
         inputs.sound(0, 5.0, &s);
         // From 5.01: the first 480 dropped (late).
-        assert!(inputs.take(0, 5.01, 100, &mut out));
+        assert!(inputs.take(0, 5.01, 100, 1.0, &mut out));
         assert_eq!((out[0], out[198]), (480.0, 579.0));
         // Then on, without a hole.
-        assert!(inputs.take(0, 5.01 + 100.0 / RATE as f64, 100, &mut out));
+        assert!(inputs.take(0, 5.01 + 100.0 / RATE as f64, 100, 1.0, &mut out));
         assert_eq!(out[0], 580.0);
         // Ahead of what it has (from 4.999): silence first.
         let inputs = Inputs::default();
         inputs.sound(0, 5.0, &s);
-        assert!(inputs.take(0, 5.0 - 48.0 / RATE as f64, 100, &mut out));
+        assert!(inputs.take(0, 5.0 - 48.0 / RATE as f64, 100, 1.0, &mut out));
         // 48 samples of silence (96 values), then the first ones: 0, 1, 2…
         assert_eq!((out[95], out[98], out[100]), (0.0, 1.0, 2.0));
         // A hole in what came: silence in it, the rest at its moment.
@@ -635,8 +684,31 @@ mod tests {
         inputs.sound(0, 1.0, &vec![0.5; 960]);
         inputs.sound(0, 1.02, &vec![0.7; 960]);
         let mut out = vec![0f32; 2880];
-        inputs.take(0, 1.0, 1440, &mut out);
+        inputs.take(0, 1.0, 1440, 1.0, &mut out);
         assert_eq!((out[0], out[958], out[960], out[1918], out[1920]), (0.5, 0.5, 0.0, 0.0, 0.7));
+    }
+
+    #[test]
+    fn sound_read_a_little_faster_without_a_break() {
+        let inputs = Inputs::default();
+        // A ramp: each sample says its index.
+        let s: Vec<f32> = (0..9600).flat_map(|i| [i as f32, i as f32]).collect();
+        inputs.sound(0, 2.0, &s);
+        let mut out = vec![0f32; 200];
+        let ratio = 1.01;
+        let mut at = 2.0;
+        let mut last = -1.0f32;
+        for _ in 0..20 {
+            assert!(inputs.take(0, at, 100, ratio, &mut out));
+            // Each sample a little further than the one before (1.01), from one call to the next too.
+            for v in out.iter().step_by(2) {
+                if last >= 0.0 {
+                    assert!((v - last - 1.01).abs() < 0.02, "{last} → {v}");
+                }
+                last = *v;
+            }
+            at += 100.0 * ratio / RATE as f64;
+        }
     }
 
     #[test]
@@ -673,13 +745,15 @@ mod tests {
         for k in 0..PICTURES_MOST {
             inputs.picture(50.0 + k as f64 * 0.04, vec![0]);
         }
-        assert_eq!(inputs.too_late(49.0, false), Some(1.0));
-        assert_eq!(inputs.too_late(50.0, false), None);
+        assert_eq!(inputs.too_late(49.0, 0.04, false), Some(1.0));
+        assert_eq!(inputs.too_late(50.0, 0.04, false), None);
+        // Due at the next frame: on time.
+        assert_eq!(inputs.too_late(49.97, 0.04, false), None);
         // A few waiting, none shown for a while: the same.
         let inputs = Inputs::default();
         inputs.picture(80.0, vec![0]);
-        assert_eq!(inputs.too_late(78.0, false), None);
-        assert_eq!(inputs.too_late(78.0, true), Some(2.0));
+        assert_eq!(inputs.too_late(78.0, 0.04, false), None);
+        assert_eq!(inputs.too_late(78.0, 0.04, true), Some(2.0));
     }
 
     #[test]
