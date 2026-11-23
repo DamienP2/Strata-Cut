@@ -1315,6 +1315,7 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .pg-strips { flex: 1; min-height: 0; display: flex; gap: 16px; padding: 12px; }
 .pg-strip-group { display: flex; gap: 6px; min-height: 0; }
 .pg-strip-group.end { margin-left: auto; gap: 8px; }
+.pg-strip-group.tracks { min-width: 0; overflow-x: auto; }
 .pg-nosound { margin: auto 12px; align-self: center; }
 .pg-strip { flex: none; width: 76px; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0 8px; border-radius: 8px; background: var(--panel-2); border: 1px solid var(--line); min-height: 0; overflow: hidden; }
 .pg-strip.master { width: 76px; background: var(--panel-3); }

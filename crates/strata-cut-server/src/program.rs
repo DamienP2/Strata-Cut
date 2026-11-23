@@ -1,7 +1,8 @@
 //! Streamer: the programme of a source — what its lives send. The source, or an image passed at
 //! once or by a fade (1 s); a PNG overlay placed anywhere over both; the sound of the tracks
-//! chosen, at their level, on the channels chosen (none under the image); while the source is
-//! lost, the slate. Its settings are the source's, shared by all its lives (`program.json`).
+//! chosen, at their level, on the channels chosen (none under the image); the source gone, its
+//! last picture (what goes out never stops). Its settings are the source's, shared by all its
+//! lives (`program.json`).
 //!
 //! Made from the first live that takes it to the last: the source's decoder, the mixer (a frame
 //! synchronizer: `crate::mixer`) and the encoder (`crate::engine`), to a relay the lives read.
@@ -32,7 +33,8 @@ use crate::{
     api::{bad, not_found, require, ApiResult},
     auth::CurrentUser,
     engine::{rand_key, Ends, Untap, Watch},
-    mixer::{Inputs, Mixer, Pics},
+    meter::Meters,
+    mixer::{Inputs, Mixer, Pics, Rate, TRACKS},
     recorder::{now_ms, Manager, Rec},
     state::{Audience, Events, Shared},
 };
@@ -77,8 +79,6 @@ pub struct Program {
     pub channels: String,
     /// The level of what goes out, dB (after the tracks' own).
     pub master: f64,
-    /// While the source is lost, the slate goes out (else its last picture).
-    pub slate: bool,
 }
 
 impl Default for Program {
@@ -96,7 +96,6 @@ impl Default for Program {
             tracks: Vec::new(),
             channels: "lr".into(),
             master: 0.0,
-            slate: true,
         }
     }
 }
@@ -141,7 +140,8 @@ impl Program {
 pub(crate) struct Shape {
     pub w: u32,
     pub h: u32,
-    pub fps: u32,
+    /// Its rate, exactly the source's (29.97: 30000/1001).
+    pub rate: Rate,
     pub tracks: usize,
     pub kbps: u32,
 }
@@ -154,8 +154,8 @@ impl Shape {
         Shape {
             w: m.map(|m| even(m.width)).filter(|w| (64..=4096).contains(w)).unwrap_or(1920),
             h: m.map(|m| even(m.height)).filter(|h| (64..=2160).contains(h)).unwrap_or(1080),
-            fps: m.map(|m| m.fps().round() as u32).filter(|f| (10..=60).contains(f)).unwrap_or(25),
-            tracks: m.map(|m| m.audio_tracks as usize).unwrap_or(1).min(8),
+            rate: m.filter(|m| m.fps_den > 0 && (10.0..=61.0).contains(&m.fps())).map_or(Rate { num: 25, den: 1 }, |m| Rate { num: m.fps_num, den: m.fps_den }),
+            tracks: m.map(|m| m.audio_tracks as usize).unwrap_or(1).min(TRACKS),
             kbps: if st.bitrate > 0 { ((st.bitrate / 1000) as u32).clamp(4000, 12000) } else { 8000 },
         }
     }
@@ -222,6 +222,8 @@ pub struct Runner {
     pictured: Arc<AtomicBool>,
     /// Its encoder's runs: one started again begins its timestamps again, the lives connect again.
     pub(crate) epoch: AtomicU64,
+    /// It is no longer made (it could not be): the lives take another.
+    ended: AtomicBool,
 }
 
 impl Runner {
@@ -241,6 +243,22 @@ impl Runner {
     pub fn epoch(&self) -> u64 {
         self.epoch.load(Ordering::Relaxed)
     }
+    /// It is no longer made: a live takes another (`Programs::acquire`).
+    pub fn ended(&self) -> bool {
+        self.ended.load(Ordering::Relaxed)
+    }
+}
+
+/// The end of a programme's making, however it ends: it is no longer the source's.
+struct Ended(Arc<Programs>, String, Arc<Runner>);
+impl Drop for Ended {
+    fn drop(&mut self) {
+        self.2.ended.store(true, Ordering::Relaxed);
+        let mut running = self.0.running.lock().unwrap();
+        if running.get(&self.1).is_some_and(|x| Arc::ptr_eq(x, &self.2)) {
+            running.remove(&self.1);
+        }
+    }
 }
 
 pub struct Programs {
@@ -249,6 +267,8 @@ pub struct Programs {
     events: Events,
     all: Mutex<BTreeMap<String, Program>>,
     running: Mutex<HashMap<String, Arc<Runner>>>,
+    /// The levels of the sources' sound, for the Streamer's meters.
+    pub meters: Arc<Meters>,
 }
 
 fn path(data_dir: &Path) -> PathBuf {
@@ -258,7 +278,8 @@ fn path(data_dir: &Path) -> PathBuf {
 impl Programs {
     pub fn start(data_dir: &Path, recorders: Arc<Manager>, events: Events) -> Arc<Programs> {
         let all = crate::paths::read_json(&path(data_dir)).unwrap_or_default();
-        Arc::new(Programs { data_dir: data_dir.to_path_buf(), recorders, events, all: Mutex::new(all), running: Mutex::new(HashMap::new()) })
+        let meters = Meters::new(recorders.clone());
+        Arc::new(Programs { data_dir: data_dir.to_path_buf(), recorders, events, all: Mutex::new(all), running: Mutex::new(HashMap::new()), meters })
     }
 
     pub fn get(&self, source: &str) -> Program {
@@ -292,7 +313,7 @@ impl Programs {
             return r.clone();
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        let r = Arc::new(Runner { taps: Mutex::new(Vec::new()), last_packet: AtomicI64::new(0), users: AtomicUsize::new(1), failed: Mutex::new(String::new()), pictured: Default::default(), epoch: AtomicU64::new(0), tx, stop: watch::channel(false).0 });
+        let r = Arc::new(Runner { taps: Mutex::new(Vec::new()), last_packet: AtomicI64::new(0), users: AtomicUsize::new(1), failed: Mutex::new(String::new()), pictured: Default::default(), epoch: AtomicU64::new(0), ended: AtomicBool::new(false), tx, stop: watch::channel(false).0 });
         running.insert(source.to_string(), r.clone());
         let (me, source, runner) = (self.clone(), source.to_string(), r.clone());
         tokio::spawn(async move { me.run(source, runner, rx).await });
@@ -312,6 +333,7 @@ impl Programs {
     /// Made while it is wanted: the mixer and the encoder from the first live to the last, the
     /// decoder as long as the source comes.
     async fn run(self: Arc<Self>, source: String, r: Arc<Runner>, mut rx: mpsc::UnboundedReceiver<Change>) {
+        let _ended = Ended(self.clone(), source.clone(), r.clone());
         let mut stop = r.stop.subscribe();
         let ffmpeg = self.recorders.ffmpeg.clone();
         // Its size and rate are the source's: a moment to know them when it was not received yet.
@@ -332,16 +354,11 @@ impl Programs {
         let Some(rec) = self.recorders.get(&source) else { return };
         let (sh, name) = (Shape::of(&rec), rec.config().name);
         let mut p = self.get(&source);
-        let mut slate_file = crate::slates::image_for(&self.data_dir, &source);
-        let pics = Arc::new(Mutex::new(Pics {
-            image: Arc::new(self.image(&ffmpeg, &p, &sh, &name).await),
-            overlay: Arc::new(self.overlay(&ffmpeg, &p, &sh).await),
-            slate: Arc::new(self.picture(&ffmpeg, slate_file.as_deref(), &sh, &name).await),
-        }));
+        let pics = Arc::new(Mutex::new(Pics { image: Arc::new(self.image(&ffmpeg, &p, &sh, &name).await), overlay: Arc::new(self.overlay(&ffmpeg, &p, &sh).await) }));
         // The delay a picture is played after its coming: a source in segments (HLS, the web) comes
         // a segment at a time.
         let delay = if crate::engine::in_segments(&rec) { 10 } else { 1 };
-        let inputs = Arc::new(Inputs::new(sh.fps, delay));
+        let inputs = Arc::new(Inputs::new(sh.rate, delay));
         let sink = Arc::new(Mutex::new(None));
         let done = Arc::new(AtomicBool::new(false));
         let _end = Ends(done.clone());
@@ -363,8 +380,7 @@ impl Programs {
         let _untap = Untap(rec.clone(), key);
         tokio::spawn(crate::engine::encode(ffmpeg.clone(), r.clone(), sh, sink, r.stop.subscribe()));
         tokio::spawn(crate::engine::decode(self.recorders.clone(), source.clone(), sh, inputs, watch, r.clone(), r.stop.subscribe()));
-        tracing::info!("programme of {name}: made ({}x{}, {} fps, {} kb/s)", sh.w, sh.h, sh.fps, sh.kbps);
-        let mut look = tokio::time::interval(Duration::from_secs(3));
+        tracing::info!("programme of {name}: made ({}x{}, {}/{} fps, {} kb/s)", sh.w, sh.h, sh.rate.num, sh.rate.den, sh.kbps);
         loop {
             tokio::select! {
                 _ = stop.changed() => break,
@@ -380,15 +396,6 @@ impl Programs {
                     }
                     p = c.program.clone();
                     let _ = changes.send(c);
-                }
-                // The source's slate (chosen in the settings): made again when it changes.
-                _ = look.tick() => {
-                    let now = crate::slates::image_for(&self.data_dir, &source);
-                    if now != slate_file {
-                        slate_file = now;
-                        let s = self.picture(&ffmpeg, slate_file.as_deref(), &sh, &name).await;
-                        pics.lock().unwrap().slate = Arc::new(s);
-                    }
                 }
             }
             if *stop.borrow() {
@@ -496,16 +503,13 @@ struct At {
     at: Option<i64>,
 }
 
-/// Each sound track's peaks, left and right (dB, -90: silence), of a moment: the one the page's
-/// picture shows (it plays some seconds behind the source).
+/// Each sound track's peaks, each of its channels (dB, -90: silence; none yet: none), of a moment:
+/// the one the page's picture shows (it plays some seconds behind the source).
 async fn levels(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, axum::extract::Query(q): axum::extract::Query<At>) -> ApiResult<Json<Value>> {
     require(me.can("stream.view") || me.is_admin())?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
-    let n = rec.status.lock().unwrap().media.as_ref().map(|m| m.audio_tracks as usize).unwrap_or(0).min(4);
-    let lv = rec.levels.lock().unwrap();
-    // Not said: the newest measured.
-    let at = q.at.or_else(|| lv.newest_at()).unwrap_or_else(now_ms);
-    Ok(Json(json!({ "tracks": (0..n).map(|k| lv.read(k, at)).collect::<Vec<_>>() })))
+    let n = rec.status.lock().unwrap().media.as_ref().map_or(0, |m| m.audio_tracks as usize);
+    Ok(Json(json!({ "tracks": s.streams.programs.meters.read(&source, n, q.at) })))
 }
 
 #[derive(Deserialize)]
@@ -528,7 +532,7 @@ mod tests {
     use super::*;
 
     fn shape(tracks: usize) -> Shape {
-        Shape { w: 1920, h: 1080, fps: 25, tracks, kbps: 8000 }
+        Shape { w: 1920, h: 1080, rate: Rate { num: 25, den: 1 }, tracks, kbps: 8000 }
     }
 
     #[test]
@@ -552,7 +556,7 @@ mod tests {
 
     #[test]
     fn plain_pictures() {
-        let sh = Shape { w: 4, h: 2, fps: 25, tracks: 0, kbps: 1 };
+        let sh = Shape { w: 4, h: 2, rate: Rate { num: 25, den: 1 }, tracks: 0, kbps: 1 };
         assert_eq!(plain(&sh, false), vec![16, 16, 16, 16, 16, 16, 16, 16, 128, 128, 128, 128, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(plain(&sh, true).len(), sh.frame_bytes());
     }

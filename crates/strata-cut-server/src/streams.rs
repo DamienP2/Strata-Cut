@@ -550,6 +550,10 @@ impl Streams {
             if *stop.borrow() {
                 return false;
             }
+            // No longer made (it could not be): another is taken.
+            if r.ended() {
+                return true;
+            }
             // Its first picture of the source too (a few seconds more): the live begins with it.
             if r.flowing() && (r.pictured() || since.elapsed() > Duration::from_secs(15)) {
                 self.set(s, |st| {
@@ -612,10 +616,14 @@ impl Streams {
         }
         let ffmpeg = self.recorders.ffmpeg.clone();
         // The programme, made while this live reads it.
-        let runner = self.programs.acquire(&s.source);
+        let mut runner = self.programs.acquire(&s.source);
         loop {
             if *stop.borrow() {
                 break;
+            }
+            if runner.ended() {
+                self.programs.release(&s.source, &runner);
+                runner = self.programs.acquire(&s.source);
             }
             let Some(rec) = self.recorders.get(&s.source) else {
                 self.give_up(&s, &d, "the source was deleted".into());
@@ -629,6 +637,9 @@ impl Streams {
             }
             if !self.program_ready(&s, &runner, &mut stop).await {
                 break;
+            }
+            if runner.ended() {
+                continue;
             }
             // The programme is H.264, a key frame every 2 s: read 3 s to be sure to find one (its
             // size, without which nothing can be sent).
@@ -695,6 +706,11 @@ impl Streams {
             // The link fell: why, and again a little later.
             let lines: Vec<String> = last.lock().unwrap().iter().cloned().collect();
             let text = lines.join("\n");
+            // Its local port taken meanwhile by another: again at once, nothing to say.
+            if text.contains("bind failed") && started.elapsed() < Duration::from_secs(10) {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                continue;
+            }
             let why = if lines.iter().all(|l| l.trim().is_empty()) {
                 "the link fell: connecting again".to_string()
             } else if ever_live && stopped_taking(&text) {

@@ -20,6 +20,7 @@ mod guard;
 mod health;
 mod logs;
 mod engine;
+mod meter;
 mod mixer;
 mod ntp;
 mod paths;

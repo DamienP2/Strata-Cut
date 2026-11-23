@@ -479,16 +479,22 @@ impl Levels {
         }
     }
 
+    // No longer read: the Streamer measures with its own meter (`crate::meter`).
+    #[allow(dead_code)]
     /// Server ms minus timestamp ms: the least delay seen lately.
     fn offset(&self) -> Option<i64> {
         self.delays.iter().map(|x| x.1).min()
     }
 
+    // No longer read: the Streamer measures with its own meter (`crate::meter`).
+    #[allow(dead_code)]
     /// The server time of the newest measure.
     pub fn newest_at(&self) -> Option<i64> {
         Some(self.newest? + self.offset()?)
     }
 
+    // No longer read: the Streamer measures with its own meter (`crate::meter`).
+    #[allow(dead_code)]
     /// A track's peaks of the moment `at` (server ms): the highest of the quarter second before.
     pub fn read(&self, track: usize, at: i64) -> [f32; 2] {
         let mut p = [-90.0f32; 2];

@@ -1,7 +1,6 @@
-//! The Streamer's pictures, kept as `<data>/slates/<id>.<ext>` (10 MB at most each): the slates
-//! and the programme's images (PNG, JPEG or WebP: what a live sends while its source is lost, or
-//! what CUT and AUTO put on air), and the overlays (`kind` "overlay": transparent PNG). Each
-//! source may have its own slate; without one, a dark picture with the source's name.
+//! The Streamer's pictures, kept as `<data>/slates/<id>.<ext>` (10 MB at most each): the
+//! programme's images (PNG, JPEG or WebP: what CUT and AUTO put on air) and the overlays (`kind`
+//! "overlay": transparent PNG).
 use std::path::{Path, PathBuf};
 
 use axum::{
@@ -9,7 +8,7 @@ use axum::{
     extract::{Path as UrlPath, Query, State},
     http::{header, HeaderValue, StatusCode},
     response::Response,
-    routing::{delete, get, put},
+    routing::{delete, get},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -33,8 +32,8 @@ pub struct Image {
     pub ext: String,
     pub added: i64,
     pub by: String,
-    /// Its use: "image" (put on air by the Image button), "overlay", "slate"; "" (before they
-    /// had one): a picture for the image or the slate.
+    /// Its use: "image" (put on air by the Image button), "overlay"; "" (before they had one): an
+    /// image.
     #[serde(default)]
     pub kind: String,
     /// The source it is for ("": any, from before).
@@ -49,8 +48,6 @@ pub const EACH: usize = 3;
 #[serde(rename_all = "camelCase", default)]
 struct Index {
     images: Vec<Image>,
-    /// The image of each source (recorder id → image id).
-    sources: std::collections::BTreeMap<String, String>,
 }
 
 fn dir(data_dir: &Path) -> PathBuf {
@@ -72,15 +69,6 @@ fn save(data_dir: &Path, i: &Index) -> Result<(), String> {
 /// One change at a time (the index read, changed, written).
 static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// The image a source's lives send while it is lost, if it has one.
-pub fn image_for(data_dir: &Path, source: &str) -> Option<PathBuf> {
-    let i = load(data_dir);
-    let id = i.sources.get(source)?;
-    let img = i.images.iter().find(|x| &x.id == id)?;
-    let p = dir(data_dir).join(format!("{}.{}", img.id, img.ext));
-    p.is_file().then_some(p)
-}
-
 /// The file of a picture (any kind), if it is there.
 pub fn file_of(data_dir: &Path, id: &str) -> Option<PathBuf> {
     let img = load(data_dir).images.into_iter().find(|x| x.id == id)?;
@@ -101,20 +89,19 @@ pub fn routes() -> Router<Shared> {
         .route("/api/slates", get(list).post(add).layer(axum::extract::DefaultBodyLimit::max(MAX + 4096)))
         .route("/api/slates/{id}", delete(remove))
         .route("/api/slates/{id}/image", get(image))
-        .route("/api/slates/source/{recorder}", put(choose))
 }
 
 async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
     require(me.can("stream.view") || me.is_admin())?;
     let i = load(&s.data_dir);
-    Ok(Json(json!({ "images": i.images, "sources": i.sources })))
+    Ok(Json(json!({ "images": i.images })))
 }
 
 #[derive(Deserialize)]
 struct Named {
     #[serde(default)]
     name: String,
-    /// Its use: "image", "overlay" or "slate".
+    /// Its use: "image" or "overlay".
     #[serde(default)]
     kind: String,
     /// The source it is for.
@@ -128,8 +115,8 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
         return Err(bad("an image is 10 MB at most"));
     }
     let (ext, _) = kind(&body).ok_or_else(|| bad("the image is a PNG, a JPEG or a WebP"))?;
-    if !matches!(q.kind.as_str(), "image" | "overlay" | "slate") {
-        return Err(bad("the use is image, overlay or slate"));
+    if !matches!(q.kind.as_str(), "image" | "overlay") {
+        return Err(bad("the use is image or overlay"));
     }
     if q.kind == "overlay" && ext != "png" {
         return Err(bad("an overlay is a PNG"));
@@ -163,7 +150,7 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
     })
     .await?
     .map_err(bad)?;
-    tracing::info!("{} added the slate image {}", me.username, img.name);
+    tracing::info!("{} added the Streamer's picture {}", me.username, img.name);
     s.changed("slates");
     Ok(Json(img))
 }
@@ -176,8 +163,6 @@ async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
         let mut i = load(&data_dir);
         let Some(pos) = i.images.iter().position(|x| x.id == id) else { return Ok(None) };
         let img = i.images.remove(pos);
-        // The sources that had it go back to the default slate.
-        i.sources.retain(|_, v| *v != img.id);
         save(&data_dir, &i)?;
         let _ = std::fs::remove_file(dir(&data_dir).join(format!("{}.{}", img.id, img.ext)));
         Ok(Some(img))
@@ -185,7 +170,7 @@ async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
     .await?
     .map_err(bad)?
     .ok_or_else(|| not_found("image"))?;
-    tracing::info!("{} deleted the slate image {}", me.username, gone.name);
+    tracing::info!("{} deleted the Streamer's picture {}", me.username, gone.name);
     s.changed("slates");
     Ok(StatusCode::NO_CONTENT)
 }
@@ -199,38 +184,6 @@ async fn image(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, max-age=86400"));
     Ok(r)
-}
-
-#[derive(Deserialize)]
-struct Choice {
-    /// The image, or none: the default slate.
-    image: Option<String>,
-}
-
-async fn choose(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(recorder): UrlPath<String>, Json(c): Json<Choice>) -> ApiResult<StatusCode> {
-    require(me.can("stream.run"))?;
-    s.recorders.get(&recorder).ok_or_else(|| not_found("recorder"))?;
-    let data_dir = s.data_dir.clone();
-    crate::api::blocking(move || -> Result<(), String> {
-        let _g = LOCK.lock().unwrap();
-        let mut i = load(&data_dir);
-        match c.image {
-            Some(id) => {
-                if !i.images.iter().any(|x| x.id == id) {
-                    return Err("this image no longer exists".into());
-                }
-                i.sources.insert(recorder, id);
-            }
-            None => {
-                i.sources.remove(&recorder);
-            }
-        }
-        save(&data_dir, &i)
-    })
-    .await?
-    .map_err(bad)?;
-    s.changed("slates");
-    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]

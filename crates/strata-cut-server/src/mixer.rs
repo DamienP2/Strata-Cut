@@ -1,18 +1,18 @@
-//! Streamer: the mixer of a source's programme, a frame synchronizer. On its own clock it makes a
-//! picture and its sound every frame, whatever comes in: the source's picture and sound as the
-//! decoder gives them, the image over it by a fade, the overlay, the tracks on at their level, the
-//! channels, the master, a limiter at -1 dBFS.
+//! Streamer: the mixer of a source's programme, a frame synchronizer. On its own clock (the
+//! source's rate, exactly: 29.97 too) it makes a picture and its sound every frame, whatever comes
+//! in: the source's picture and sound as the decoder gives them, the image over it by a fade, the
+//! overlay, the tracks on at their level, the channels, the master, a limiter at -1 dBFS.
 //!
 //! The decoder gives the source as it comes, already in step and numbered: pictures at the
-//! programme's rate from the moment 0, and the sound of each (`n` samples a picture: picture `k`
-//! goes with samples `k·n` to `(k+1)·n` of each track). A frame synchronizer plays picture `k`
-//! and its sound at frame `start + k` of the mixer's clock: `start` is the first picture's coming
-//! plus a steady delay (1 s; a source in segments, HLS or the web: 10 s), so what comes unevenly,
-//! in bursts or a little late is played evenly. A picture not there at its frame: the one before
-//! is held, with its sound, and the rest is played a frame later (the source's clock a little
-//! slower than ours; a lack); a source that faltered longer is played again at the delay. None
-//! for a while: lost, the slate. What waits is kept small: beyond, the decoder waits (what comes
-//! waits before it, compressed).
+//! programme's rate from the moment 0, and the sound of each (picture `k` goes with the samples
+//! from `at(k)` to `at(k + 1)` of each track). A frame synchronizer plays picture `k` and its sound
+//! at frame `start + k` of the mixer's clock: `start` is the first picture's coming plus a steady
+//! delay (1 s; a source in segments, HLS or the web: 10 s), so what comes unevenly, in bursts or a
+//! little late is played evenly. A picture not there at its frame: the one before is held, with
+//! its sound, and the rest is played a frame later (the source's clock a little slower than ours;
+//! a lack); a source that faltered longer is played again at the delay. The source gone: its last
+//! picture stays, silent (what goes out never stops). What waits is kept small: beyond, the
+//! decoder waits (what comes waits before it, compressed).
 use std::{
     collections::VecDeque,
     sync::{
@@ -28,20 +28,43 @@ use crate::program::{Change, Program, Shape};
 /// Sound: 48 kHz, stereo, 32-bit float.
 pub const RATE: usize = 48_000;
 /// Tracks of a source mixed at most.
-pub const TRACKS: usize = 8;
+pub const TRACKS: usize = 32;
 /// What goes out never passes -1 dBFS.
 const LIMIT: f32 = 0.891;
 /// The overlay's fade when it is put on or taken off (s).
 const OVERLAY_FADE: f64 = 0.3;
-/// Nothing from the source this long: lost (the slate).
-const LOST: Duration = Duration::from_secs(3);
 /// Frames over which the fewest waiting is looked at (a source a little quicker than our clock).
 const LOOK: u32 = 250;
 
+/// A rate of pictures: `num / den` a second.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rate {
+    pub num: u32,
+    pub den: u32,
+}
+
+impl Rate {
+    /// The first sample of frame `k` (from the moment 0).
+    pub fn at(&self, k: i64) -> i64 {
+        k * RATE as i64 * self.den as i64 / self.num.max(1) as i64
+    }
+    /// Frame `k`'s samples (one more now and then when a second's do not divide evenly).
+    pub fn samples(&self, k: i64) -> usize {
+        (self.at(k + 1) - self.at(k)) as usize
+    }
+    /// When frame `k` begins, from the moment 0.
+    pub fn time(&self, k: u64) -> Duration {
+        Duration::from_nanos((k as u128 * 1_000_000_000 * self.den as u128 / self.num.max(1) as u128) as u64)
+    }
+    /// Pictures a second, rounded.
+    pub fn fps(&self) -> u32 {
+        ((self.num as f64 / self.den.max(1) as f64).round() as u32).max(1)
+    }
+}
+
 /// What the decoder gives, and when each is played.
 pub struct Inputs {
-    /// Samples a picture.
-    n: usize,
+    rate: Rate,
     /// Frames between a picture's coming and its playing.
     delay: usize,
     /// Pictures waiting at most: beyond, the decoder waits for room.
@@ -66,8 +89,6 @@ struct Queues {
     look: u32,
     /// The last frame's sound, held with its picture.
     last_sound: Vec<Vec<f32>>,
-    /// When the last picture came.
-    last: Option<Instant>,
 }
 
 /// What the synchronizer gives for a frame.
@@ -83,25 +104,22 @@ enum Frame {
 
 impl Inputs {
     /// `delay`: seconds between a picture's coming and its playing.
-    pub fn new(fps: u32, delay: u32) -> Inputs {
-        let fps = fps.max(1) as usize;
-        let n = RATE / fps;
+    pub fn new(rate: Rate, delay: u32) -> Inputs {
+        let fps = rate.fps() as usize;
         let q = Queues {
             sound: vec![VecDeque::new(); TRACKS],
             sound_first: vec![0; TRACKS],
-            last_sound: vec![vec![0.0; n * 2]; TRACKS],
+            last_sound: vec![Vec::new(); TRACKS],
             fewest: usize::MAX,
             look: LOOK,
             ..Default::default()
         };
-        Inputs { n, delay: fps * delay as usize, most: 2 * fps, q: Mutex::new(q) }
+        Inputs { rate, delay: fps * delay as usize, most: 2 * fps, q: Mutex::new(q) }
     }
 
     /// The next picture (YUV 4:2:0 at the programme's size).
     pub fn picture(&self, f: Vec<u8>) {
-        let mut q = self.q.lock().unwrap();
-        q.pictures.push_back(f);
-        q.last = Some(Instant::now());
+        self.q.lock().unwrap().pictures.push_back(f);
     }
 
     /// Enough pictures wait: the decoder waits for room (what comes waits before it, compressed).
@@ -111,7 +129,7 @@ impl Inputs {
 
     /// The next sound of a track (interleaved stereo).
     pub fn sound(&self, track: usize, samples: &[f32]) {
-        let most = (self.most + self.delay) * self.n * 2;
+        let most = (self.most + self.delay) * (self.rate.samples(0) + 1) * 2;
         let mut q = self.q.lock().unwrap();
         let Some(s) = q.sound.get_mut(track) else { return };
         s.extend(samples);
@@ -131,14 +149,19 @@ impl Inputs {
         q.start = None;
     }
 
-    /// Frame `tick` of the mixer's clock: its picture, and each track's sound into `sound`.
+    /// Frame `tick` of the mixer's clock: its picture, and each track's sound into `sound` (as
+    /// many samples as the frame has).
     fn frame(&self, tick: u64, sound: &mut [Vec<f32>]) -> Frame {
-        let (n, n2, tick) = (self.n as i64, self.n * 2, tick as i64);
+        let tick = tick as i64;
+        let len = self.rate.samples(tick) * 2;
+        for s in sound.iter_mut() {
+            s.clear();
+            s.resize(len, 0.0);
+        }
         let mut q = self.q.lock().unwrap();
         // The first picture of a run, or the first after a long lack: played after the delay.
         if q.start.is_none() {
             if q.pictures.is_empty() {
-                sound.iter_mut().for_each(|s| s.fill(0.0));
                 return Frame::Waiting;
             }
             q.start = Some(tick + self.delay as i64 - q.first);
@@ -149,7 +172,6 @@ impl Inputs {
         let start = q.start.unwrap_or(0);
         let k = tick - start;
         if k < q.first {
-            sound.iter_mut().for_each(|s| s.fill(0.0));
             return Frame::Waiting;
         }
         // Older ones (played late, or one dropped): dropped.
@@ -160,18 +182,27 @@ impl Inputs {
             if let Some(f) = q.pictures.pop_front() {
                 q.first += 1;
                 q.held = 0;
+                let (from, want) = (self.rate.at(k), self.rate.samples(k) * 2);
                 for (t, out) in sound.iter_mut().enumerate() {
                     // Its samples: those before them dropped, those not come yet silence.
-                    let before = (k * n - q.sound_first[t]).clamp(0, q.sound[t].len() as i64 / 2);
+                    let before = (from - q.sound_first[t]).clamp(0, q.sound[t].len() as i64 / 2);
                     q.sound[t].drain(..before as usize * 2);
                     q.sound_first[t] += before;
-                    let have = if q.sound_first[t] == k * n { q.sound[t].len().min(n2) } else { 0 };
-                    for (o, x) in out.iter_mut().zip(q.sound[t].drain(..have)) {
-                        *o = x;
-                    }
-                    out[have..].fill(0.0);
+                    let have = if q.sound_first[t] == from { q.sound[t].len().min(want) } else { 0 };
+                    let mine: Vec<f32> = q.sound[t].drain(..have).collect();
                     q.sound_first[t] += (have / 2) as i64;
-                    q.last_sound[t].copy_from_slice(out);
+                    // The frame may have a sample more than the picture (or less): its last one
+                    // again (or left).
+                    if have == want {
+                        for (i, o) in out.iter_mut().enumerate() {
+                            *o = mine.get(i).or_else(|| mine.get(i - 2)).copied().unwrap_or(0.0);
+                        }
+                    } else {
+                        for (o, x) in out.iter_mut().zip(&mine) {
+                            *o = *x;
+                        }
+                    }
+                    q.last_sound[t].clone_from(out);
                 }
                 // A source a little quicker than our clock: more and more wait. When even the
                 // fewest of a while is half a second over the delay, one is dropped.
@@ -191,11 +222,11 @@ impl Inputs {
         // rest played a frame later. Held longer than the delay: played again at the delay.
         q.held += 1;
         q.start = Some(start + 1);
-        for (t, out) in sound.iter_mut().enumerate() {
-            if q.held == 1 {
-                out.copy_from_slice(&q.last_sound[t]);
-            } else {
-                out.fill(0.0);
+        if q.held == 1 {
+            for (t, out) in sound.iter_mut().enumerate() {
+                for (o, x) in out.iter_mut().zip(&q.last_sound[t]) {
+                    *o = *x;
+                }
             }
         }
         if q.held > self.delay.max(1) {
@@ -203,20 +234,12 @@ impl Inputs {
         }
         Frame::Held
     }
-
-    /// The source is lost: no picture waits, and none came for a while.
-    pub fn lost(&self) -> bool {
-        let q = self.q.lock().unwrap();
-        q.pictures.is_empty() && q.last.is_none_or(|t| t.elapsed() > LOST)
-    }
 }
 
-/// The pictures put over the source or instead of it, at the programme's size (YUVA 4:2:0: the
-/// image and the slate opaque).
+/// The pictures put over the source, at the programme's size (YUVA 4:2:0: the image opaque).
 pub struct Pics {
     pub image: Arc<Vec<u8>>,
     pub overlay: Arc<Vec<u8>>,
-    pub slate: Arc<Vec<u8>>,
 }
 
 /// Where the mixer sends what it makes: the encoder's two inputs, each written by its own thread
@@ -286,9 +309,7 @@ impl Mixer {
 
     fn run(mut self) {
         let sh = self.shape;
-        let fps = sh.fps.max(1);
-        let period = Duration::from_secs(1) / fps;
-        let n = RATE / fps as usize;
+        let period = sh.rate.time(1);
         let yuv = (sh.w * sh.h) as usize * 3 / 2;
         let mut last: Vec<u8> = crate::program::plain(&sh, true)[..yuv].to_vec();
         let mut ever = false;
@@ -296,7 +317,7 @@ impl Mixer {
         let mut overlay = Ramp::at(self.program.overlay_alpha());
         let mut levels = Levels::of(&self.program);
         let mut limiter = Limiter::default();
-        let mut sound = vec![vec![0f32; n * 2]; TRACKS];
+        let mut sound = vec![Vec::new(); TRACKS];
         let mut stats = Stats::default();
         let mut said = Instant::now();
         let start = Instant::now();
@@ -314,7 +335,8 @@ impl Mixer {
                 }
                 self.program = next;
             }
-            // The source's picture and sound of this frame; none: the last picture.
+            // The source's picture and sound of this frame; none: the last picture (the source
+            // gone, it stays: what goes out never stops).
             match self.inputs.frame(tick, &mut sound) {
                 Frame::Picture(f) if f.len() == yuv => {
                     last = f;
@@ -323,17 +345,16 @@ impl Mixer {
                         self.pictured.store(true, Ordering::Relaxed);
                     }
                 }
-                Frame::Held if ever && !self.inputs.lost() => stats.held += 1,
+                Frame::Held if ever => stats.held += 1,
                 _ => {}
             }
-            // The picture: the source's (lost: the slate), the image over it, the overlay.
+            // The picture: the source's, the image over it, the overlay.
             let pics = self.pics.lock().unwrap();
-            let slate = ever && self.program.slate && self.inputs.lost();
-            let mut out = if slate { pics.slate[..yuv].to_vec() } else { last.clone() };
+            let mut out = last.clone();
             let k = image.value(now);
             blend(&mut out, &pics.image[..yuv], k);
             let a = overlay.value(now);
-            if !slate && a > 0.0 {
+            if a > 0.0 {
                 overlay_on(&mut out, &pics.overlay, &sh, a);
             }
             drop(pics);
@@ -354,7 +375,7 @@ impl Mixer {
             }
             // The next frame, on the clock.
             tick += 1;
-            let due = start + period * tick as u32;
+            let due = start + sh.rate.time(tick);
             let now = Instant::now();
             if due > now {
                 std::thread::sleep(due - now);
@@ -503,17 +524,19 @@ pub fn overlay_on(out: &mut [u8], ovl: &[u8], sh: &Shape, a: f64) {
 mod tests {
     use super::*;
 
+    const R25: Rate = Rate { num: 25, den: 1 };
+
     /// Pictures saying their number, and their sound (each sample its picture's number).
     fn feed(inputs: &Inputs, from: u32, count: u32) {
         for k in from..from + count {
             inputs.picture(vec![k as u8]);
-            inputs.sound(0, &vec![(k % 256) as f32; inputs.n * 2]);
+            inputs.sound(0, &vec![(k % 256) as f32; 3840]);
         }
     }
 
     /// Frame `tick`: its picture's number (or how it is not), and its sound.
     fn at(inputs: &Inputs, tick: u64) -> (Result<u8, Frame>, f32) {
-        let mut sound = vec![vec![9f32; inputs.n * 2]; TRACKS];
+        let mut sound = vec![vec![9f32; 3840]; TRACKS];
         let f = match inputs.frame(tick, &mut sound) {
             Frame::Picture(p) => Ok(p[0]),
             other => Err(other),
@@ -524,7 +547,7 @@ mod tests {
     #[test]
     fn played_after_the_delay_each_at_its_frame() {
         // 1 s at 25 fps: 25 frames.
-        let inputs = Inputs::new(25, 1);
+        let inputs = Inputs::new(R25, 1);
         assert_eq!(at(&inputs, 0), (Err(Frame::Waiting), 0.0));
         // The first comes at frame 10: played at 35.
         feed(&inputs, 0, 3);
@@ -540,7 +563,7 @@ mod tests {
 
     #[test]
     fn one_late_held_then_on() {
-        let inputs = Inputs::new(25, 1);
+        let inputs = Inputs::new(R25, 1);
         feed(&inputs, 0, 2);
         assert_eq!(at(&inputs, 0), (Err(Frame::Waiting), 0.0));
         assert_eq!(at(&inputs, 25), (Ok(0), 0.0));
@@ -556,7 +579,7 @@ mod tests {
 
     #[test]
     fn the_sound_at_its_picture_whenever_it_comes() {
-        let inputs = Inputs::new(25, 1);
+        let inputs = Inputs::new(R25, 1);
         // Pictures first, the sound later (or sooner): each with its own.
         for k in 0..4u8 {
             inputs.picture(vec![k]);
@@ -564,7 +587,7 @@ mod tests {
         assert_eq!(at(&inputs, 0), (Err(Frame::Waiting), 0.0));
         assert_eq!(at(&inputs, 25).0, Ok(0));
         for k in 0..4u8 {
-            inputs.sound(0, &vec![k as f32; inputs.n * 2]);
+            inputs.sound(0, &vec![k as f32; 3840]);
         }
         // Picture 1 with sound 1 (sound 0, come late, dropped).
         assert_eq!(at(&inputs, 26), (Ok(1), 1.0));
@@ -572,7 +595,7 @@ mod tests {
 
     #[test]
     fn a_long_lack_played_again_at_the_delay() {
-        let inputs = Inputs::new(25, 1);
+        let inputs = Inputs::new(R25, 1);
         feed(&inputs, 0, 1);
         assert_eq!(at(&inputs, 0), (Err(Frame::Waiting), 0.0));
         assert_eq!(at(&inputs, 25).0, Ok(0));
@@ -588,7 +611,7 @@ mod tests {
 
     #[test]
     fn a_new_run_starts_again() {
-        let inputs = Inputs::new(25, 1);
+        let inputs = Inputs::new(R25, 1);
         feed(&inputs, 0, 3);
         assert_eq!(at(&inputs, 0).0, Err(Frame::Waiting));
         assert_eq!(at(&inputs, 25).0, Ok(0));
@@ -600,7 +623,7 @@ mod tests {
 
     #[test]
     fn a_quicker_source_one_dropped_now_and_then() {
-        let inputs = Inputs::new(25, 1);
+        let inputs = Inputs::new(R25, 1);
         // Always 45 waiting (the delay is 25): after a while, one dropped.
         feed(&inputs, 0, 45);
         assert_eq!(at(&inputs, 0).0, Err(Frame::Waiting));
@@ -615,7 +638,7 @@ mod tests {
 
     #[test]
     fn as_many_as_the_delay_none_dropped() {
-        let inputs = Inputs::new(25, 1);
+        let inputs = Inputs::new(R25, 1);
         feed(&inputs, 0, 1);
         assert_eq!(at(&inputs, 0).0, Err(Frame::Waiting));
         // Each comes a frame after the one before: 25 wait, as they should.
@@ -631,7 +654,7 @@ mod tests {
 
     #[test]
     fn full_at_most() {
-        let inputs = Inputs::new(25, 1);
+        let inputs = Inputs::new(R25, 1);
         feed(&inputs, 0, 49);
         assert!(!inputs.full());
         feed(&inputs, 100, 1);
@@ -639,11 +662,17 @@ mod tests {
     }
 
     #[test]
-    fn lost_after_a_while_without() {
-        let inputs = Inputs::new(25, 1);
-        assert!(inputs.lost());
-        inputs.picture(vec![0]);
-        assert!(!inputs.lost());
+    fn exact_rates_their_samples() {
+        // 29.97: 1601 or 1602 samples a frame, 48048 every 30 (1001 ms).
+        let r = Rate { num: 30000, den: 1001 };
+        let all: usize = (0..30).map(|k| r.samples(k)).sum();
+        assert_eq!(all, 48048);
+        assert!((0..30).all(|k| (1601..=1602).contains(&r.samples(k))));
+        assert_eq!(r.time(30000), Duration::from_secs(1001));
+        assert_eq!(r.fps(), 30);
+        // 12.5: never a sample lost.
+        let r = Rate { num: 25, den: 2 };
+        assert_eq!((0..25).map(|k| r.samples(k)).sum::<usize>(), 96000);
     }
 
     #[test]
@@ -661,7 +690,7 @@ mod tests {
 
     #[test]
     fn overlays() {
-        let sh = Shape { w: 4, h: 2, fps: 25, tracks: 0, kbps: 1 };
+        let sh = Shape { w: 4, h: 2, rate: R25, tracks: 0, kbps: 1 };
         let mut out = vec![16u8; 8];
         out.extend([128u8; 4]);
         // White where opaque (the first column), nothing elsewhere.
@@ -688,7 +717,9 @@ mod tests {
         let out = mix(&sound, &lv, &lv, "lr", &mut lim);
         assert!(out.iter().all(|x| (x - 0.5).abs() < 1e-6));
         // Both on, +6 dB: limited to -1 dBFS.
-        lv.tracks = [2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        lv.tracks = [0.0; TRACKS];
+        lv.tracks[0] = 2.0;
+        lv.tracks[1] = 1.0;
         let out = mix(&sound, &lv, &lv, "lr", &mut lim);
         assert!(out.iter().all(|x| *x <= LIMIT + 1e-6));
         // Under the image: none.

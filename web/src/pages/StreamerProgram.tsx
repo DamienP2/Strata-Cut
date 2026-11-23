@@ -1,17 +1,17 @@
 /*
  * Streamer: the programme of a source — what its lives send. The source or its image (a fade of
  * 1 s between them, or at once), its PNG overlay (placed and sized on the picture itself), the
- * sound of its tracks; its pictures (image, overlay, slate) in the settings' window. The picture
+ * sound of its tracks; its pictures (image, overlay) in the settings' window. The picture
  * shows the programme as it goes out (the image and the overlay drawn here over the source, with
  * the same fades).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Headphones, RotateCcw, Settings, Volume2, VolumeX, Wand2, X } from "lucide-react";
-import { t, tc } from "../i18n";
+import { t, tc, tn } from "../i18n";
 import { api, can, useApp, useChanged } from "../store";
 import { Switch } from "../settings/ui";
 import type { Recorder } from "../types";
-import { DefaultSlate, Gallery, pictureUrl, usePictures } from "./StreamerSlate";
+import { DefaultSlate, Gallery, pictureUrl } from "./StreamerSlate";
 
 export interface Track {
   on: boolean;
@@ -32,7 +32,6 @@ export interface Program {
   channels: "lr" | "l" | "r" | "mono";
   /** The level of what goes out, dB. */
   master: number;
-  slate: boolean;
 }
 interface ProgramState {
   program: Program;
@@ -259,11 +258,14 @@ function Verdict({ peak }: { peak: number }) {
 const VU_MARKS = [0, -6, -12, -18, -24, -36, -48];
 
 /** A level meter (two channels), dB from -60 to 0, with its marks. */
-function Vu({ l, r }: { l: number; r: number }) {
+function Vu({ levels }: { levels: number[] }) {
+  // A bar for each channel (4 px, 2 px between).
+  const width = Math.max(10, levels.length * 6 - 2);
   return (
-    <span className="pg-vu" aria-hidden="true">
-      <i style={{ height: `${vuShare(l) * 100}%` }} />
-      <i style={{ height: `${vuShare(r) * 100}%` }} />
+    <span className="pg-vu" aria-hidden="true" style={{ width }}>
+      {levels.map((db, c) => (
+        <i key={c} style={{ height: `${vuShare(db) * 100}%` }} />
+      ))}
       <em className="pg-vu-zone" style={{ bottom: `${vuShare(GOOD_LOW) * 100}%`, height: `${(vuShare(GOOD_HIGH) - vuShare(GOOD_LOW)) * 100}%` }} />
       {VU_MARKS.map((m) => (
         <b key={m} className="pg-vu-mark" style={{ bottom: `${vuShare(m) * 100}%` }} />
@@ -309,7 +311,7 @@ function useLevels(recId: string, n: number, shown: () => number | null): { lv: 
           if (!on) return;
           r.tracks.forEach((tr, k) => {
             const h = (history.current[k] ??= []);
-            h.push(Math.max(tr[0], tr[1]));
+            h.push(Math.max(-90, ...tr));
             if (h.length > 50) h.shift();
           });
           // A peak falls back slowly (as a meter's needle): 2.5 dB a reading, 12 dB a second.
@@ -394,8 +396,10 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
     tracks.forEach((_, k) => {
       const tr = trackOf(p, k);
       const lv = levels[k];
-      if (!tr.on || !lv) return;
-      const src = p.channels === "l" ? lv[0] : p.channels === "r" ? lv[1] : p.channels === "mono" ? Math.max(lv[0], lv[1]) - 3 : lv[c];
+      if (!tr.on || !lv?.length) return;
+      // Its left and right (a mono track: the same; more channels: the first two, near enough).
+      const [l, r] = [lv[0], lv[1] ?? lv[0]];
+      const src = p.channels === "l" ? l : p.channels === "r" ? r : p.channels === "mono" ? Math.max(l, r) - 3 : c === 0 ? l : r;
       best = Math.max(best, src + tr.gain);
     });
     return best <= -90 ? -90 : Math.min(-1, best + p.master);
@@ -424,17 +428,18 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
         </button>
       </header>
       <div className="pg-strips">
-        <div className="pg-strip-group">
+        <div className="pg-strip-group tracks">
           {n === 0 && <span className="muted pg-nosound">{t("No sound")}</span>}
           {tracks.map((lang, k) => {
             const tr = trackOf(p, k);
             // As it goes into the mix: the source's level with this track's.
-            const lv = (levels[k] ?? [-90, -90]).map((db) => (db <= -90 ? -90 : db + tr.gain));
+            // Each of its channels (none measured yet: two).
+            const lv = (levels[k]?.length ? levels[k] : [-90, -90]).map((db) => (db <= -90 ? -90 : db + tr.gain));
             const peak = recent(k, 15) + tr.gain;
             const solo = monitor.solo === k;
             return (
-              <div key={k} className={`pg-strip ${tr.on ? "" : "off"}`}>
-                <span className="pg-strip-name" title={lang || undefined}>
+              <div key={k} className={`pg-strip ${tr.on ? "" : "off"}`} style={lv.length > 2 ? { width: 76 + (lv.length - 2) * 6 } : undefined}>
+                <span className="pg-strip-name" title={[lang, lv.length > 2 ? tn(lv.length, "{n} channel", "{n} channels") : ""].filter(Boolean).join(" · ") || undefined}>
                   {k + 1}
                   <small>{lang || "—"}</small>
                 </span>
@@ -442,7 +447,7 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
                 <span className="pg-strip-body">
                   <Fader value={tr.gain} min={-40} max={12} step={1} disabled={!run || !tr.on} label={t("Track {n}", { n: k + 1 })} onChange={(gain) => setTrack(k, { gain })} onReset={() => setTrack(k, { gain: 0 })} />
                   <Scale marks={GAIN_MARKS} share={gainShare} fader />
-                  <Vu l={lv[0]} r={lv[1]} />
+                  <Vu levels={lv} />
                 </span>
                 <b className="pg-db">
                   {tr.gain > 0 ? "+" : ""}
@@ -474,7 +479,7 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
               <span className="pg-strip-body">
                 <Fader value={p.master} min={-40} max={12} step={1} disabled={!run} label={t("Output")} onChange={(master) => prog.set({ master })} onReset={() => prog.set({ master: 0 })} />
                 <Scale marks={GAIN_MARKS} share={gainShare} fader />
-                <Vu l={out[0]} r={out[1]} />
+                <Vu levels={out} />
               </span>
               <b className="pg-db">
                 {p.master > 0 ? "+" : ""}
@@ -508,13 +513,11 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
   );
 }
 
-type Tab = "image" | "overlay" | "slate";
+type Tab = "image" | "overlay";
 
-/** The source's pictures: its image, its overlay, its slate (and whether one is sent). */
+/** The source's pictures: its image, its overlay. */
 export function SettingsModal({ rec, prog, onClose }: { rec: Recorder; prog: ProgramApi; onClose: () => void }) {
   const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
-  const toast = useApp((s) => s.toast);
-  const [pics, reload] = usePictures();
   const [tab, setTab] = useState<Tab>("image");
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -523,18 +526,9 @@ export function SettingsModal({ rec, prog, onClose }: { rec: Recorder; prog: Pro
   }, [onClose]);
   if (!prog.state) return null;
   const p = prog.state.program;
-  const chooseSlate = async (image: string | null) => {
-    try {
-      await api("PUT", `/api/slates/source/${rec.id}`, { image });
-      await reload();
-    } catch (e) {
-      toast(t((e as Error).message), "error");
-    }
-  };
   const tabs: [Tab, string][] = [
     ["image", t("Image")],
     ["overlay", t("Overlay")],
-    ["slate", t("Source lost")],
   ];
   const fallback = { name: t("Default"), pic: <DefaultSlate name={rec.name} /> };
   return (
@@ -556,15 +550,6 @@ export function SettingsModal({ rec, prog, onClose }: { rec: Recorder; prog: Pro
         <div className="pg-settings-body">
           {tab === "image" && <Gallery use="image" source={rec.id} chosen={p.image} onChoose={(image) => prog.set({ image })} fallback={fallback} disabled={!run} />}
           {tab === "overlay" && <Gallery use="overlay" source={rec.id} chosen={p.overlay} onChoose={(overlay) => prog.set({ overlay, ...(overlay ? {} : { overlayOn: false }) })} fallback={{ name: tc("overlay", "None"), pic: null }} disabled={!run} />}
-          {tab === "slate" && (
-            <>
-              <label className="pg-row">
-                <span>{t("Send a picture while the source is lost")}</span>
-                <Switch checked={p.slate} disabled={!run} onChange={(slate) => prog.set({ slate })} />
-              </label>
-              <Gallery use="slate" source={rec.id} chosen={pics?.sources[rec.id] ?? null} onChoose={chooseSlate} fallback={fallback} disabled={!run || !p.slate} />
-            </>
-          )}
         </div>
         <footer>
           <button type="button" className="btn" onClick={onClose}>

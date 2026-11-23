@@ -34,7 +34,7 @@ export interface StreamInfo {
   destination: string;
   source: string;
   started: number;
-  state: 'connecting' | 'live' | 'retrying' | 'slate' | 'failed';
+  state: 'connecting' | 'live' | 'retrying' | 'failed';
   message: string;
   note: string;
   liveSince: number | null;

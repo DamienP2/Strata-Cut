@@ -8,6 +8,8 @@ pub struct Seen {
     /// Its PMT was read (the tracks below are the source's).
     read: bool,
     tracks: Vec<(u16, i64)>,
+    /// It has a picture (a video stream in its PMT).
+    video: bool,
     /// The PMT being put together (it may take more than one packet: many tracks).
     section: Vec<u8>,
 }
@@ -18,9 +20,14 @@ impl Seen {
         self.tracks.len()
     }
 
-    /// Its audio tracks that sent something since `since`.
-    pub fn heard(&self, since: i64) -> usize {
-        self.tracks.iter().filter(|t| t.1 >= since).count()
+    /// Its audio tracks that sent something since `since`: their number (in order) and PID.
+    pub fn heard(&self, since: i64) -> Vec<(usize, u16)> {
+        self.tracks.iter().enumerate().filter(|(_, t)| t.1 >= since).map(|(k, t)| (k, t.0)).collect()
+    }
+
+    /// It has a picture.
+    pub fn video(&self) -> bool {
+        self.video
     }
 
     /// Its PMT was read: its tracks are known.
@@ -78,8 +85,9 @@ impl Seen {
             return;
         }
         let section = std::mem::take(&mut self.section);
-        if let Some(pids) = pmt_audio(&section) {
+        if let Some((pids, video)) = pmt_audio(&section) {
             self.read = true;
+            self.video = video;
             let old = std::mem::take(&mut self.tracks);
             self.tracks = pids.into_iter().map(|pid| old.iter().find(|t| t.0 == pid).copied().unwrap_or((pid, 0))).collect();
         }
@@ -103,8 +111,8 @@ fn pat_pmt(s: &[u8]) -> Option<u16> {
     None
 }
 
-/// The audio PIDs of a PMT, in order (as FFmpeg numbers the tracks).
-fn pmt_audio(s: &[u8]) -> Option<Vec<u16>> {
+/// The audio PIDs of a PMT, in order (as FFmpeg numbers the tracks), and whether it has a picture.
+fn pmt_audio(s: &[u8]) -> Option<(Vec<u16>, bool)> {
     if s.len() < 12 || s[0] != 2 {
         return None;
     }
@@ -113,6 +121,7 @@ fn pmt_audio(s: &[u8]) -> Option<Vec<u16>> {
     let info = ((usize::from(s[10]) & 0x0f) << 8) | usize::from(s[11]);
     let mut i = 12 + info;
     let mut out = Vec::new();
+    let mut video = false;
     while i + 5 <= end {
         let kind = s[i];
         let pid = ((u16::from(s[i + 1]) & 0x1f) << 8) | u16::from(s[i + 2]);
@@ -121,9 +130,11 @@ fn pmt_audio(s: &[u8]) -> Option<Vec<u16>> {
         if is_audio(kind, desc) {
             out.push(pid);
         }
+        // MPEG-1/2, MPEG-4, H.264, H.265, H.266, AVS2/3, VC-1, Dirac, JPEG XS.
+        video |= matches!(kind, 0x01 | 0x02 | 0x10 | 0x1b | 0x20 | 0x24 | 0x32 | 0x33 | 0x42 | 0xd2 | 0xd4 | 0xea | 0xd1);
         i += 5 + n;
     }
-    Some(out)
+    Some((out, video))
 }
 
 /// An audio stream type (MPEG, AAC, AC-3, E-AC-3, DTS…), or private data said to be audio by its
@@ -208,6 +219,8 @@ mod tests {
         s.packet(&es(0x105), 5000);
         s.packet(&es(0x105), 6000);
         assert_eq!(s.newest(), 6000);
-        assert!(s.known() && s.count() == 3);
+        assert!(s.known() && s.count() == 3 && s.video());
+        // Those heard since 3 s: the first and the third (their number kept).
+        assert_eq!(s.heard(3000), vec![(0, 0x102), (2, 0x105)]);
     }
 }

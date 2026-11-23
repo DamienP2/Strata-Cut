@@ -240,7 +240,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
             const x = draft(d);
             // Started from here and refused by the destination: why (no new try by itself).
             const refused = !s ? failed.find((f) => f.destination === d.id && f.source === rec.id) : undefined;
-            const state = on && s ? (s.state === 'live' ? clockOf(s.liveSince ? serverNow() - s.liveSince : 0) : s.state === 'connecting' ? t('Connecting…') : s.state === 'slate' ? t('Slate') : t('Reconnecting')) : busy && s ? t('Busy · {source}', { source: nameOf(s.source) }) : tc('dest', 'Ready');
+            const state = on && s ? (s.state === 'live' ? clockOf(s.liveSince ? serverNow() - s.liveSince : 0) : s.state === 'connecting' ? t('Connecting…') : t('Reconnecting')) : busy && s ? t('Busy · {source}', { source: nameOf(s.source) }) : tc('dest', 'Ready');
             return (
               <div key={d.id} className={`st-card ${on ? 'on' : ''} ${busy ? 'busy' : ''}`}>
                 <div className="st-card-head">

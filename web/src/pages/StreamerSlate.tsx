@@ -1,14 +1,13 @@
 /*
- * Streamer: the pictures of a source's lives — its image (put on air by the Image button), its
- * overlays (transparent PNG) and its slates (sent while it is lost). A gallery of one use, the
- * source's own pictures (3 at most for each use: no pile of forgotten ones): the one chosen ticked,
- * a tile to add (a click to pick files, or files dropped on the gallery), the bin on a tile to
- * delete one (after a confirmation). Without an image or a slate of its own, a source has its name
- * on a dark picture.
+ * Streamer: the pictures of a source's lives — its image (put on air by the Image button) and its
+ * overlays (transparent PNG). A gallery of one use, the source's own pictures (3 at most for each
+ * use: no pile of forgotten ones): the one chosen ticked, a tile to add (a click to pick files, or
+ * files dropped on the gallery), the bin on a tile to delete one (after a confirmation). Without
+ * an image of its own, a source has its name on a dark picture.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Plus, Trash2 } from "lucide-react";
-import { t, tn } from "../i18n";
+import { t } from "../i18n";
 import { api, useApp, useChanged } from "../store";
 import { confirmDialog } from "../ui/dialogs";
 
@@ -18,20 +17,18 @@ export interface Picture {
   ext: string;
   added: number;
   by: string;
-  /** Its use: "image", "overlay", "slate"; "" (from before): an image or a slate. */
+  /** Its use: "image", "overlay"; "" (from before): an image. */
   kind?: string;
   /** The source it is for ("": any, from before). */
   source?: string;
 }
 
-export type Use = "image" | "overlay" | "slate";
+export type Use = "image" | "overlay";
 
 /** The pictures of a source a source may have of its own, for each use. */
 export const EACH = 3;
 interface Pictures {
   images: Picture[];
-  /** Each source's slate. */
-  sources: Record<string, string>;
 }
 
 export const pictureUrl = (id: string) => `/api/slates/${id}/image`;
@@ -114,10 +111,9 @@ export function Gallery({
   };
 
   const remove = async (img: Picture) => {
-    const users = overlay ? 0 : Object.values(pics?.sources ?? {}).filter((x) => x === img.id).length;
     const sure = await confirmDialog({
       title: t("Delete the image “{name}”?", { name: img.name }),
-      message: users ? tn(users, "A source uses it: it goes back to the default slate.", "{n} sources use it: they go back to the default slate.") : t("Deleted for every source."),
+      message: t("Deleted for every source."),
       confirm: t("Delete"),
       danger: true,
     });
