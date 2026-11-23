@@ -171,7 +171,7 @@ function Editor({ rec }: { rec: Recorder }) {
       clearInterval(i);
     };
   }, [rec.id, rec.loopHours]);
-  const audio = useAudioOut(videoRef);
+  const audio = useAudioOut(videoRef, 'extract');
 
   // The player lives as long as this recorder is open.
   useEffect(() => {

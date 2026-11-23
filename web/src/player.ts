@@ -87,6 +87,76 @@ class Buffer {
   }
 }
 
+/**
+ * Another sound track played with the picture (the Streamer's headphones hear the tracks on
+ * together): an element of its own, its fragments as the first track's, kept on the video's time.
+ */
+class Follower {
+  readonly el = new Audio();
+  private buf: Buffer | null = null;
+  private alive = { dead: false };
+  constructor(readonly k: number) {
+    this.el.preload = 'auto';
+  }
+
+  async open(r: RunInfo, recorder: string, base: number) {
+    this.alive.dead = true;
+    this.alive = { dead: false };
+    const alive = this.alive;
+    this.buf = null;
+    const tr = r.audio;
+    const type = `audio/mp4; codecs="${tr?.codec}"`;
+    if (!tr?.codec || !MediaSource.isTypeSupported(type)) return;
+    const ms = new MediaSource();
+    this.el.src = URL.createObjectURL(ms);
+    await new Promise((res) => ms.addEventListener('sourceopen', res, { once: true }));
+    if (alive.dead) return;
+    const sb = ms.addSourceBuffer(type);
+    sb.timestampOffset = tr.offset - base;
+    const dir = this.k ? `audio${this.k}` : 'audio';
+    const b = new Buffer(sb, (f) => `/api/recorders/${recorder}/runs/${r.id}/${dir}/${f}`);
+    for (const s of tr.segs) b.segs.set(s[0], s);
+    this.buf = b;
+    await b.append('init', alive);
+  }
+
+  merge(tr: TrackInfo | null) {
+    if (this.buf && tr) for (const s of tr.segs) this.buf.segs.set(s[0], s);
+  }
+
+  async fill(t: number, ahead: number, base: number) {
+    const b = this.buf;
+    if (!b) return;
+    const alive = this.alive;
+    const need = [...b.segs.values()].filter((s) => s[2] > t - 1 && s[1] < t + ahead).sort((a, c) => a[0] - c[0]);
+    for (const s of need) {
+      if (alive.dead) return;
+      await b.append(s[0], alive);
+    }
+    b.evict(t - base, 60, 90, base);
+  }
+
+  /** On the video's time: playing as it plays (put back where it is when it drifted). */
+  follow(video: HTMLVideoElement) {
+    const el = this.el;
+    if (!this.buf) return;
+    if (video.paused || video.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+      if (!el.paused) el.pause();
+      return;
+    }
+    if (el.playbackRate !== video.playbackRate) el.playbackRate = video.playbackRate;
+    if (Math.abs(el.currentTime - video.currentTime) > 0.06) el.currentTime = video.currentTime;
+    if (el.paused) void el.play().catch(() => {});
+  }
+
+  destroy() {
+    this.alive.dead = true;
+    this.el.pause();
+    this.el.removeAttribute('src');
+    this.el.load();
+  }
+}
+
 /** A run the browser can play: its preview has a picture already, and a few seconds of it. */
 /** Live: how far behind the newest fragment it plays (s): a time delay. Smooth before near: a
  * few seconds behind, within what is recorded (the playhead stays on the stills), never
@@ -145,6 +215,10 @@ export class LoopPlayer {
   onRun: (run: RunInfo | null) => void = () => {};
   /** Called when a frame is shown by hand (paused): to hear it. */
   onScrub: (t: number) => void = () => {};
+  /** Called when the other tracks played with the picture change: their elements, by track. */
+  onFollowers: (els: Map<number, HTMLMediaElement>) => void = () => {};
+  /** Other sound tracks played with the picture (`setOtherTracks`). */
+  private followers = new Map<number, Follower>();
 
   private bufs: Buffer[] = [];
   private audioBuf: Buffer | null = null;
@@ -184,6 +258,7 @@ export class LoopPlayer {
       if (v.requestVideoFrameCallback) {
         this.frameCb = v.requestVideoFrameCallback((_n, meta) => {
           if (!this.video.paused) this.shown(meta.mediaTime + this.base);
+          this.follow();
           tick();
         });
       }
@@ -191,9 +266,11 @@ export class LoopPlayer {
     tick();
     this.video.addEventListener('timeupdate', this.onTime);
     this.video.addEventListener('waiting', this.onWaiting);
+    for (const e of ['play', 'pause', 'seeked', 'ratechange']) this.video.addEventListener(e, this.follow);
     // Live: every half second (the new fragments, the distance to the edge); else every 2 s.
     this.stopTicker = steadyTicker(500, () => {
       this.ticks++;
+      this.follow();
       this.watchBack();
       if (this.live || this.ticks % 4 === 0) void this.refresh();
     });
@@ -216,9 +293,45 @@ export class LoopPlayer {
     v.cancelVideoFrameCallback?.(this.frameCb);
     this.video.removeEventListener('timeupdate', this.onTime);
     this.video.removeEventListener('waiting', this.onWaiting);
+    for (const e of ['play', 'pause', 'seeked', 'ratechange']) this.video.removeEventListener(e, this.follow);
+    this.followers.forEach((f) => f.destroy());
+    this.followers.clear();
     this.video.pause();
     this.video.removeAttribute('src');
     this.video.load();
+  }
+
+  /** The other tracks on the video's time. */
+  private follow = () => {
+    for (const f of this.followers.values()) f.follow(this.video);
+  };
+
+  /**
+   * Other sound tracks played with the picture (their number from 0; those the run has): each an
+   * element of its own, given to `onFollowers` to be heard with the video's own track.
+   */
+  setOtherTracks(ks: number[]) {
+    const r = this.run;
+    const want = ks.filter((k) => k !== this.audioTrack && (k === 0 || (r?.extraAudio ?? Infinity) >= k));
+    let changed = false;
+    for (const [k, f] of this.followers) {
+      if (want.includes(k)) continue;
+      f.destroy();
+      this.followers.delete(k);
+      changed = true;
+    }
+    for (const k of want) {
+      if (this.followers.has(k)) continue;
+      const f = new Follower(k);
+      this.followers.set(k, f);
+      changed = true;
+      if (r)
+        void f.open(r, this.recorder, this.base).then(() => {
+          void f.fill(this.playhead(), 12, this.base);
+          f.follow(this.video);
+        });
+    }
+    if (changed) this.onFollowers(new Map([...this.followers].map(([k, f]) => [k, f.el])));
   }
 
   private onTime = () => {
@@ -308,6 +421,7 @@ export class LoopPlayer {
       const b = this.bufs[i];
       if (b) for (const s of tr.segs) b.segs.set(s[0], s);
     });
+    for (const f of this.followers.values()) f.merge(r.audio);
   }
 
   private async open(r: RunInfo) {
@@ -342,6 +456,7 @@ export class LoopPlayer {
     }
     // Every buffer exists before the first append (MediaSource accepts no new one after).
     await Promise.all(this.bufs.map((b) => b.append('init', alive)));
+    await Promise.all([...this.followers.values()].map((f) => f.open(r, this.recorder, this.base)));
     this.onRun(r);
   }
 
@@ -363,6 +478,7 @@ export class LoopPlayer {
         b.evict(t - this.base, 60, 90, this.base);
       }),
     );
+    await Promise.all([...this.followers.values()].map((f) => f.fill(t, ahead, this.base)));
   }
 
   /** The end of what can be played (s): the newest fragment that every track has. */

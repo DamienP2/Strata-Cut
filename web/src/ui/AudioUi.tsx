@@ -6,14 +6,18 @@ import { useDisplayPref } from '../displayPrefs';
 import { t } from '../i18n';
 
 /** Wires a <video> to Web Audio with the user's volume; sound starts at the first click or key. */
-export function useAudioOut(video: RefObject<HTMLVideoElement | null>) {
+export function useAudioOut(video: RefObject<HTMLVideoElement | null>, page = 'player') {
   const [out, setOut] = useState<AudioOut | null>(null);
-  const [volume, setVolume] = useDisplayPref<number>('player.volume', 0.8);
-  const [muted, setMuted] = useDisplayPref<boolean>('player.muted', false);
+  // Each page its own volume and mute (the Extraction's and the Streamer's headphones apart).
+  const [volume, setVolume] = useDisplayPref<number>(`${page}.volume`, 0.8);
+  const [muted, setMuted] = useDisplayPref<boolean>(`${page}.muted`, false);
+  const now = useRef({ volume, muted });
+  now.current = { volume, muted };
   useEffect(() => {
     const v = video.current;
     if (!v) return;
-    const o = new AudioOut(v);
+    // At its volume from its first sound (muted: none at all).
+    const o = new AudioOut(v, now.current.muted ? 0 : now.current.volume ** 2);
     setOut(o);
     const wake = () => o.resume();
     addEventListener('pointerdown', wake, true);

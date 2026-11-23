@@ -76,7 +76,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const prog = useProgram(rec.id);
   const video = useRef<HTMLVideoElement>(null);
-  const audio = useAudioOut(video);
+  const audio = useAudioOut(video, 'streamer');
   const [wall, setWall] = useState<number | null>(null);
   const [settings, setSettings] = useState(false);
   const player = useRef<LoopPlayer | null>(null);
@@ -95,32 +95,49 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
       setWall(w);
       shown.current = w;
     };
+    p.onFollowers = setFollowers;
     player.current = p;
     void p.goLive(serverNow()).then(() => {
       if (heardRef.current) void p.setAudioTrack(heardRef.current);
+      p.setOtherTracks(othersRef.current);
     });
     return () => {
       player.current = null;
       p.destroy();
+      setFollowers(new Map());
     };
   }, [rec.id, received]);
   // The headphones (the browser's own: nothing of it goes out). A track alone (solo), at its
-  // fader's level; else the output as it goes out: the tracks on (the browser plays one, the
-  // first of them), their level and the output's, the channels, and silent under the image with
-  // the same fade.
+  // fader's level; else the output as it goes out: the tracks on together (the first played by
+  // the picture's element, the others each by its own, on the picture's time), each at its
+  // level, the output's level, the channels, and silent under the image with the same fade.
   const [solo, setSolo] = useState<number | null>(null);
   const pg = prog.state?.program;
   const nTracks = prog.state?.tracks.length ?? 0;
   const isOn = (k: number) => pg?.tracks[k]?.on ?? k === 0;
-  const firstOn = Array.from({ length: nTracks }, (_, k) => k).find(isOn);
+  const ons = Array.from({ length: nTracks }, (_, k) => k).filter(isOn);
+  const firstOn = ons[0];
   const heard = solo ?? firstOn ?? 0;
   const heardRef = useRef(heard);
   heardRef.current = heard;
+  const others = solo !== null ? [] : ons.slice(1);
+  const othersRef = useRef(others);
+  othersRef.current = others;
+  const [followers, setFollowers] = useState<Map<number, HTMLMediaElement>>(new Map());
   useEffect(() => {
     void player.current?.setAudioTrack(heard);
   }, [heard]);
+  useEffect(() => {
+    player.current?.setOtherTracks(others);
+  }, [others.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   const gainOf = (k: number) => pg?.tracks[k]?.gain ?? 0;
-  const level = !pg ? 1 : solo !== null ? 10 ** (gainOf(solo) / 20) : pg.imageOn || firstOn === undefined ? 0 : 10 ** ((gainOf(heard) + pg.master) / 20);
+  const factor = (db: number) => 10 ** (db / 20);
+  // Each track at its fader; the output's level after (none under the image).
+  const level = !pg || solo !== null ? 1 : pg.imageOn || firstOn === undefined ? 0 : factor(pg.master);
+  useEffect(() => audio.out?.setMain(pg ? factor(gainOf(heard)) : 1)); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    audio.out?.setOthers(new Map([...followers].filter(([k]) => others.includes(k)).map(([k, el]) => [el, factor(gainOf(k))])));
+  }); // eslint-disable-line react-hooks/exhaustive-deps
   // The image coming or going: the sound fades as the picture does; a fader: at once.
   const imageWas = useRef(pg?.imageOn);
   useEffect(() => {

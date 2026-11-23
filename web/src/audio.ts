@@ -6,6 +6,10 @@ export class AudioOut {
   readonly ctx: AudioContext;
   /** Everything heard goes here first (measured), then through the volume. */
   private readonly bus: GainNode;
+  /** The element's own sound, at its track's level (the Streamer's faders). */
+  private readonly main: GainNode;
+  /** Other sound tracks heard with it (the Streamer's tracks on), each at its level. */
+  private readonly others = new Map<HTMLMediaElement, { src: MediaElementAudioSourceNode; gain: GainNode }>();
   private readonly volume: GainNode;
   /** The Streamer's programme as heard: its level (with the image's fade) and its channels. */
   private readonly program: GainNode;
@@ -16,10 +20,13 @@ export class AudioOut {
   private vol = 1;
   private muted = false;
 
-  constructor(media: HTMLMediaElement) {
+  /** `gain`: the volume it starts at (muted: 0), set at once: not a moment of sound before. */
+  constructor(media: HTMLMediaElement, gain = 1) {
     this.ctx = new AudioContext();
     this.bus = this.ctx.createGain();
+    this.main = this.ctx.createGain();
     this.volume = this.ctx.createGain();
+    this.volume.gain.value = gain;
     const split = this.ctx.createChannelSplitter(2);
     this.meters = [0, 1].map(() => {
       const a = this.ctx.createAnalyser();
@@ -27,7 +34,7 @@ export class AudioOut {
       return a;
     });
     this.data = new Float32Array(2048);
-    this.ctx.createMediaElementSource(media).connect(this.bus);
+    this.ctx.createMediaElementSource(media).connect(this.main).connect(this.bus);
     this.bus.connect(split);
     split.connect(this.meters[0], 0);
     split.connect(this.meters[1], 1);
@@ -44,6 +51,33 @@ export class AudioOut {
     split2.connect(this.matrix[3], 1).connect(merge, 0, 1);
     this.setChannels('lr');
     merge.connect(this.volume).connect(this.ctx.destination);
+  }
+
+  /** The level of the element's own sound (a factor). */
+  setMain(gain: number) {
+    this.main.gain.setTargetAtTime(gain, this.ctx.currentTime, 0.015);
+  }
+
+  /** The other tracks heard with it, each at its level (a factor): those not given are left. */
+  setOthers(levels: Map<HTMLMediaElement, number>) {
+    for (const [el, o] of this.others) {
+      if (levels.has(el)) continue;
+      o.gain.disconnect();
+      o.src.disconnect();
+      this.others.delete(el);
+    }
+    for (const [el, gain] of levels) {
+      let o = this.others.get(el);
+      if (!o) {
+        const src = this.ctx.createMediaElementSource(el);
+        const g = this.ctx.createGain();
+        g.gain.value = gain;
+        src.connect(g).connect(this.bus);
+        o = { src, gain: g };
+        this.others.set(el, o);
+      }
+      o.gain.gain.setTargetAtTime(gain, this.ctx.currentTime, 0.015);
+    }
   }
 
   /** The programme's level (a factor), reached in `ramp` seconds (a fade) or at once. */
