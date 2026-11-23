@@ -437,7 +437,7 @@ impl Relay {
             let mut taps: Vec<u16> = Vec::new();
             let mut looked = 0i64;
             // Its audio tracks, read as they pass: does the source still send sound?
-            let mut seen = crate::program::Seen::default();
+            let mut seen = crate::ts::Seen::default();
             while !done.load(Ordering::Relaxed) {
                 let Ok(n) = sock.recv(&mut buf) else { continue };
                 let _ = sock.send_to(&buf[..n], (local, preview));
