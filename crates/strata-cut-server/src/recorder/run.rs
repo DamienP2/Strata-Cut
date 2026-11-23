@@ -1550,9 +1550,23 @@ fn start_time(ffmpeg: &str, file: &Path) -> Option<f64> {
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
+/// A sound track's kind from its disposition (the DVB audio type FFmpeg reads).
+fn audio_kind(d: &serde_json::Value) -> &'static str {
+    let on = |k: &str| d[k].as_i64() == Some(1);
+    if on("visual_impaired") {
+        "ad"
+    } else if on("hearing_impaired") {
+        "hi"
+    } else if on("clean_effects") {
+        "intl"
+    } else {
+        ""
+    }
+}
+
 /// Codec, size, frame rate, scan and audio tracks of a segment.
 pub fn probe(ffmpeg: &str, file: &Path) -> Option<MediaInfo> {
-    let out = std::process::Command::new(ffprobe_of(ffmpeg)).args(["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate,field_order:stream_tags=language", "-of", "json"]).arg(file).output().ok()?;
+    let out = std::process::Command::new(ffprobe_of(ffmpeg)).args(["-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate,field_order:stream_tags=language:stream_disposition=visual_impaired,hearing_impaired,clean_effects", "-of", "json"]).arg(file).output().ok()?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
     let streams = v["streams"].as_array()?;
     let video = streams.iter().find(|s| s["codec_type"] == "video")?;
@@ -1570,6 +1584,7 @@ pub fn probe(ffmpeg: &str, file: &Path) -> Option<MediaInfo> {
         interlaced,
         audio_tracks: streams.iter().filter(|s| s["codec_type"] == "audio").count() as u32,
         audio_langs: streams.iter().filter(|s| s["codec_type"] == "audio").map(|s| s["tags"]["language"].as_str().unwrap_or("").to_string()).collect(),
+        audio_kinds: streams.iter().filter(|s| s["codec_type"] == "audio").map(|s| audio_kind(&s["disposition"]).to_string()).collect(),
         subtitles: streams.iter().filter(|s| s["codec_type"] == "subtitle").map(|s| s["codec_name"].as_str().unwrap_or("").to_string()).collect(),
     })
 }

@@ -12,6 +12,7 @@ import { api, can, useApp, useChanged } from "../store";
 import { Switch } from "../settings/ui";
 import type { Recorder } from "../types";
 import { DefaultSlate, Gallery, pictureUrl } from "./StreamerSlate";
+import { trackLabel } from "../audioLabel";
 
 export interface Track {
   on: boolean;
@@ -35,8 +36,9 @@ export interface Program {
 }
 interface ProgramState {
   program: Program;
-  /** The source's tracks: their language ("" when not said). */
+  /** The source's tracks: their language ("" when not said), and their kind. */
   tracks: string[];
+  kinds?: string[];
 }
 
 /** The fade between the source and the image (as the server's). */
@@ -437,11 +439,12 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
             const lv = (levels[k]?.length ? levels[k] : [-90, -90]).map((db) => (db <= -90 ? -90 : db + tr.gain));
             const peak = recent(k, 15) + tr.gain;
             const solo = monitor.solo === k;
+            const label = trackLabel(lang, prog.state?.kinds?.[k]);
             return (
               <div key={k} className={`pg-strip ${tr.on ? "" : "off"}`} style={lv.length > 2 ? { width: 76 + (lv.length - 2) * 6 } : undefined}>
-                <span className="pg-strip-name" title={[lang, lv.length > 2 ? tn(lv.length, "{n} channel", "{n} channels") : ""].filter(Boolean).join(" · ") || undefined}>
+                <span className="pg-strip-name" title={[label.full, lv.length > 2 ? tn(lv.length, "{n} channel", "{n} channels") : ""].filter(Boolean).join(" · ")}>
                   {k + 1}
-                  <small>{lang || "—"}</small>
+                  <small>{label.short}</small>
                 </span>
                 {tr.on ? <Verdict peak={peak} /> : <span className="pg-verdict off">{tc("track", "Off")}</span>}
                 <span className="pg-strip-body">

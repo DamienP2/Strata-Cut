@@ -51,6 +51,10 @@ pub struct MediaInfo {
     /// Each sound track's language ("fra", "eng"…; "" when not said).
     #[serde(default)]
     pub audio_langs: Vec<String>,
+    /// Each sound track's kind, as its stream says: "ad" (audio description), "hi" (for the
+    /// hard of hearing), "intl" (international sound, without commentary); "" otherwise.
+    #[serde(default)]
+    pub audio_kinds: Vec<String>,
     /// The subtitle tracks' codecs ("dvb_subtitle", "dvb_teletext"…).
     #[serde(default)]
     pub subtitles: Vec<String>,

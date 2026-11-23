@@ -61,6 +61,8 @@ export interface MediaInfo {
   audioTracks: number;
   /** Each sound track's language ("fra", "eng"…; "" when not said). */
   audioLangs?: string[];
+  /** Each sound track's kind: "ad" (audio description), "hi" (hard of hearing), "intl" (international sound); "". */
+  audioKinds?: string[];
   /** The subtitle tracks' codecs ("dvb_subtitle", "dvb_teletext"…). */
   subtitles?: string[];
 }

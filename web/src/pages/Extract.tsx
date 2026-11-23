@@ -15,6 +15,7 @@ import { formatDuration } from '../ui/format';
 import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
 import { GrainCache } from '../audio';
 import type { Clip, Job, Recorder } from '../types';
+import { trackLabel } from '../audioLabel';
 
 /** A marked frame: its run, its source time and its server time. */
 interface Mark {
@@ -622,7 +623,7 @@ function Editor({ rec }: { rec: Recorder }) {
             >
               {Array.from({ length: (run?.extraAudio ?? 0) + 1 }, (_, k) => (
                 <option key={k} value={k}>
-                  {run?.media?.audioLangs?.[k] ? run.media.audioLangs[k].toUpperCase() : t('Track {n}', { n: k + 1 })}
+                  {`${k + 1} · ${trackLabel(run?.media?.audioLangs?.[k], run?.media?.audioKinds?.[k]).full}`}
                 </option>
               ))}
             </select>

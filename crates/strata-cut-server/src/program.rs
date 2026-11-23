@@ -457,8 +457,12 @@ async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
     require(me.can("stream.view") || me.is_admin())?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let programs = &s.streams.programs;
-    let langs = rec.status.lock().unwrap().media.as_ref().map(|m| (0..m.audio_tracks as usize).map(|k| m.audio_langs.get(k).cloned().unwrap_or_default()).collect::<Vec<_>>()).unwrap_or_default();
-    Ok(Json(json!({ "program": programs.get(&source), "tracks": langs, "running": programs.is_running(&source) })))
+    // Each track's language and kind (as the stream says them).
+    let (langs, kinds) = rec.status.lock().unwrap().media.as_ref().map(|m| {
+        let at = |v: &Vec<String>, k: usize| v.get(k).cloned().unwrap_or_default();
+        ((0..m.audio_tracks as usize).map(|k| at(&m.audio_langs, k)).collect::<Vec<_>>(), (0..m.audio_tracks as usize).map(|k| at(&m.audio_kinds, k)).collect::<Vec<_>>())
+    }).unwrap_or_default();
+    Ok(Json(json!({ "program": programs.get(&source), "tracks": langs, "kinds": kinds, "running": programs.is_running(&source) })))
 }
 
 /// The settings (not what is on air: CUT, AUTO and the overlay's button say that).
