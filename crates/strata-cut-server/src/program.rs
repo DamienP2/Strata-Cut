@@ -366,9 +366,13 @@ impl Programs {
         rec.taps.lock().unwrap().push((key, watch.port));
         let _untap = Untap(rec.clone(), key);
         tokio::spawn(self.clone().encode(r.clone(), sh, sink, r.stop.subscribe()));
-        tokio::spawn(self.clone().decode(source.clone(), sh, None, inputs.clone(), watch.clone(), r.stop.subscribe()));
+        let caps = {
+            let ffmpeg = ffmpeg.clone();
+            tokio::task::spawn_blocking(move || Caps::of(&ffmpeg)).await.unwrap_or(Caps { fps_mode: true, checksum: true })
+        };
+        tokio::spawn(self.clone().decode(source.clone(), sh, caps, None, inputs.clone(), watch.clone(), r.clone(), r.stop.subscribe()));
         for k in 0..TRACKS {
-            tokio::spawn(self.clone().decode(source.clone(), sh, Some(k), inputs.clone(), watch.clone(), r.stop.subscribe()));
+            tokio::spawn(self.clone().decode(source.clone(), sh, caps, Some(k), inputs.clone(), watch.clone(), r.clone(), r.stop.subscribe()));
         }
         tracing::info!("programme of {name}: made ({}x{}, {} fps, {} kb/s)", sh.w, sh.h, sh.fps, sh.kbps);
         let mut look = tokio::time::interval(Duration::from_secs(3));
@@ -408,7 +412,8 @@ impl Programs {
     /// A decoder of the source: its picture (`track` None), at the programme's size and rate, or
     /// one of its sound tracks, to the mixer. Started again while the programme is wanted, when
     /// the source comes (a track: when it sends something).
-    async fn decode(self: Arc<Self>, source: String, sh: Shape, track: Option<usize>, inputs: Arc<Inputs>, watch: Arc<Watch>, mut stop: watch::Receiver<bool>) {
+    #[allow(clippy::too_many_arguments)]
+    async fn decode(self: Arc<Self>, source: String, sh: Shape, caps: Caps, track: Option<usize>, inputs: Arc<Inputs>, watch: Arc<Watch>, r: Arc<Runner>, mut stop: watch::Receiver<bool>) {
         let ffmpeg = self.recorders.ffmpeg.clone();
         let mut said = String::new();
         loop {
@@ -418,7 +423,7 @@ impl Programs {
             let ready = |rec: &Arc<Rec>| rec.flowing() && track.is_none_or(|k| watch.alive(k));
             if let Some(rec) = self.recorders.get(&source).filter(ready) {
                 let (args, bytes) = match track {
-                    None => (picture_args(&sh), FrameBytes::Fixed(sh.frame_bytes() * 3 / 5)),
+                    None => (picture_args(&sh, caps), FrameBytes::Fixed(sh.frame_bytes() * 3 / 5)),
                     Some(k) => (sound_args(k), FrameBytes::PerSample(8)),
                 };
                 // The pictures waiting are few: the decoder waits for room (what comes waits
@@ -429,9 +434,14 @@ impl Programs {
                     Some(k) => inputs.sound(k, pts, &b.as_chunks::<4>().0.iter().map(|x| f32::from_le_bytes(*x)).collect::<Vec<_>>()),
                 })
                 .await;
-                // Said once (a source that comes and goes would fill the journal).
+                // Said once (a source that comes and goes would fill the journal); the picture's,
+                // to the lives waiting for the programme too.
                 if !why.is_empty() && why != said {
-                    tracing::debug!("programme of {}: decoder {track:?}: {why}", rec.config().name);
+                    let what = track.map_or("picture".to_string(), |k| format!("track {}", k + 1));
+                    tracing::warn!("programme of {}: the {what} decoder stopped: {why}", rec.config().name);
+                    if track.is_none() {
+                        *r.failed.lock().unwrap() = format!("the picture decoder stopped: {why}");
+                    }
                     said = why;
                 }
             }
@@ -541,16 +551,38 @@ fn decoder_head() -> Vec<String> {
     ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", "-copyts", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i", INPUT].map(String::from).to_vec()
 }
 
+/// What the server's FFmpeg knows that older ones do not (asked once): `-fps_mode` (5.1; before,
+/// `-vsync`), `showinfo`'s `checksum` option. An option it does not know stops it at once.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Caps {
+    fps_mode: bool,
+    checksum: bool,
+}
+
+impl Caps {
+    /// The server's FFmpeg's (blocking: asked once, then kept).
+    fn of(ffmpeg: &str) -> Caps {
+        static CAPS: std::sync::OnceLock<Caps> = std::sync::OnceLock::new();
+        *CAPS.get_or_init(|| {
+            let ask = |args: &[&str]| std::process::Command::new(ffmpeg).args(args).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+            let caps = Caps { fps_mode: ask(&["-hide_banner", "-h", "long"]).contains("-fps_mode"), checksum: ask(&["-hide_banner", "-h", "filter=showinfo"]).contains("checksum") };
+            tracing::info!("programme: FFmpeg {caps:?}");
+            caps
+        })
+    }
+}
+
 /// The source's picture: deinterlaced, at the programme's size (its shape kept, bands added),
 /// raw, at its own rate (the mixer takes the one of each moment: no frames made up to fill a
 /// hole, they would show a frozen picture where the slate goes).
-fn picture_args(sh: &Shape) -> Vec<String> {
+fn picture_args(sh: &Shape, caps: Caps) -> Vec<String> {
     let (w, h) = (sh.w, sh.h);
     let mut a = decoder_head();
     a.extend(["-map", "0:v:0", "-an", "-sn", "-dn", "-vf"].map(String::from));
-    a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,showinfo=checksum=0"));
+    let info = if caps.checksum { "showinfo=checksum=0" } else { "showinfo" };
+    a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,{info}"));
     // Each picture decoded goes out once (none repeated to keep a rate: each is said, then read).
-    a.extend(["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"].map(String::from));
+    a.extend([if caps.fps_mode { "-fps_mode" } else { "-vsync" }, "passthrough", "-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"].map(String::from));
     a
 }
 
@@ -1093,7 +1125,10 @@ mod tests {
         );
         assert_eq!(frame_said("[Parsed_ashowinfo_2 @ 0x5] n:0 pts:70559 pts_time:1.46998 fmt:flt channels:2 rate:48000 nb_samples:1152 checksum:86"), Some((Some(1.46998), Some(1152))));
         assert_eq!(frame_said("[Parsed_showinfo_2 @ 0x5] config in time_base: 1/25"), None);
-        let v = picture_args(&sh);
+        let v = picture_args(&sh, Caps { fps_mode: true, checksum: true });
+        // An older FFmpeg: the options it knows.
+        let old = picture_args(&sh, Caps { fps_mode: false, checksum: false });
+        assert!(old.windows(2).any(|w| w == ["-vsync", "passthrough"]) && old.iter().any(|x| x.ends_with(",showinfo")));
         assert!(v.contains(&INPUT.to_string()) && v.windows(2).any(|w| w == ["-map", "0:v:0"]));
         assert!(v.iter().any(|x| x.starts_with("bwdif") && x.contains("scale=1920:1080") && !x.contains("fps=")));
         assert!(v.ends_with(&["-fps_mode".into(), "passthrough".into(), "-f".into(), "rawvideo".into(), "-pix_fmt".into(), "yuv420p".into(), "pipe:1".into()]));

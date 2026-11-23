@@ -215,6 +215,7 @@ export const streaming: Record<string, string> = {
   'channels|R': 'D',
   'channels|Mono': 'Mono',
   'the programme does not start': 'Le programme ne démarre pas',
+  'no picture of the source in the programme': 'Pas d’image de la source dans le programme',
   'the programme is being made': 'Programme en préparation',
   'the channels are lr, l, r or mono': 'Canaux : G+D, G, D ou mono.',
   'a value is not a number': 'Une valeur n’est pas un nombre.',

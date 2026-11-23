@@ -773,7 +773,13 @@ impl Streams {
                                 }
                                 if size > 0 {
                                     st.state = "live";
-                                    st.message.clear();
+                                    // Live, but without the source's picture: why, on its card.
+                                    st.message = if runner.pictured() {
+                                        String::new()
+                                    } else {
+                                        let why = runner.why();
+                                        if why.is_empty() { "no picture of the source in the programme".into() } else { format!("no picture of the source in the programme: {why}") }
+                                    };
                                 }
                                 st.bytes = size;
                                 st.kbps = kbps;
