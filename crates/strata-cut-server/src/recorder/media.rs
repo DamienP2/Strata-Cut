@@ -419,7 +419,7 @@ async fn media(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
                 "from": first, "to": last,
                 "map": map, "video": track(true), "audio": track(false),
                 // The other sound tracks the preview made (fragments numbered as the first's).
-                "extraAudio": (1..=3).take_while(|k| run.dir.join(format!("audio{k}")).join("init.mp4").exists()).count(),
+                "extraAudio": (1..=super::PREVIEW_EXTRA).take_while(|k| run.dir.join(format!("audio{k}")).join("init.mp4").exists()).count(),
             }));
         }
     }
@@ -487,7 +487,7 @@ async fn fragment(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath
                 }
                 r.track_dir(video)
             }
-            other => match other.strip_prefix("audio").and_then(|k| k.parse::<u32>().ok()).filter(|k| (1..=3).contains(k)) {
+            other => match other.strip_prefix("audio").and_then(|k| k.parse::<u32>().ok()).filter(|k| (1..=super::PREVIEW_EXTRA).contains(k)) {
                 Some(k) => r.dir.join(format!("audio{k}")),
                 None => return Err(not_found("track")),
             },

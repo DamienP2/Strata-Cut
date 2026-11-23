@@ -1,11 +1,12 @@
 //! Streamer: the levels of a source's sound, every track and each of its channels (a mono track:
 //! one, a 5.1 track: six…), 10 times a second, for the Streamer's meters. Measured by an FFmpeg of
-//! its own on the source's relay (the recorder and its preview untouched), while a page asks for
-//! them; a moment after the last asking, it stops.
+//! its own on the source's relay, while a page asks for them; a few minutes after the last asking,
+//! it stops (a page opened again finds them at once).
 //!
 //! A measure is kept with its timestamp (the source's own, as the preview's): the page asks for
 //! those of the moment its picture shows. A timestamp becomes a server time by the least delay
-//! seen to the server's clock over the last half minute.
+//! seen to the server's clock over the last half minute. The first seconds, before the moment the
+//! picture shows was measured: the newest.
 use std::{
     collections::{HashMap, VecDeque},
     process::Stdio,
@@ -24,7 +25,7 @@ use crate::{
 };
 
 /// Asked for no more for this long: the measures stop.
-const IDLE_MS: i64 = 15_000;
+const IDLE_MS: i64 = 300_000;
 
 /// The meters of the sources whose levels are asked for.
 pub struct Meters {
@@ -135,7 +136,7 @@ impl Meters {
 fn meter_args(picks: &Picks, port: u16, segments: bool) -> Vec<String> {
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
     let wait = if segments { 30_000_000 } else { 5_000_000 };
-    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", "-copyts", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i"]);
+    let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", "-copyts", "-thread_queue_size", "4096", "-analyzeduration", "300000", "-probesize", "1000000", "-f", "mpegts", "-i"]);
     a.push(format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout={wait}"));
     for (k, spec) in picks.tracks() {
         a.extend(s(&["-map", &spec, "-vn", "-af"]));
@@ -242,6 +243,10 @@ impl Peaks {
         let mut p = vec![-90.0f32; q.back().map_or(0, |x| x.1.len())];
         let Some(off) = self.delays.iter().map(|x| x.1).min() else { return p };
         let at = at - off;
+        // Before the first measured (the measures just began): the newest.
+        if q.front().is_some_and(|x| at < x.0) {
+            return q.back().map(|x| x.1.clone()).unwrap_or(p);
+        }
         for (t, v) in q.iter().rev() {
             if *t > at {
                 continue;
@@ -287,6 +292,8 @@ mod tests {
         assert_eq!(p.read(1, 6300), vec![-30.0, -29.0, -28.0, -27.0, -26.0, -25.0]);
         assert_eq!(p.newest_at(), Some(6300));
         // Long after: silent, its channels kept.
-        assert_eq!(p.read(1, 60_000).len(), 6);
+        assert_eq!(p.read(1, 60_000), vec![-90.0; 6]);
+        // Before the first measured: the newest.
+        assert_eq!(p.read(1, 2000), vec![-30.0, -29.0, -28.0, -27.0, -26.0, -25.0]);
     }
 }

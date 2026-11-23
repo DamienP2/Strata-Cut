@@ -336,7 +336,7 @@ export interface Monitor {
   setVolume: (v: number) => void;
   muted: boolean;
   setMuted: (m: boolean) => void;
-  /** The track heard alone (solo), or none: the output. Among those the preview carries (4 at most). */
+  /** The track heard alone (solo), or none: the output. */
   solo: number | null;
   setSolo: (k: number | null) => void;
   /** The track played (the solo, else the first on). */
@@ -454,7 +454,7 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
                   {tr.gain}
                 </b>
                 <span className="pg-strip-tools">
-                  <button type="button" className={`pg-tool ${solo ? "on" : ""}`} disabled={k >= 4} aria-pressed={solo} data-tip={solo ? t("Back to the output in the headphones") : t("Hear alone in the headphones")} onClick={() => monitor.setSolo(solo ? null : k)}>
+                  <button type="button" className={`pg-tool ${solo ? "on" : ""}`} aria-pressed={solo} data-tip={solo ? t("Back to the output in the headphones") : t("Hear alone in the headphones")} onClick={() => monitor.setSolo(solo ? null : k)}>
                     <Headphones size={12} />
                   </button>
                   <button type="button" className="pg-tool" disabled={!run || !tr.on} data-tip={t("Set the level by itself")} onClick={() => auto(k)}>

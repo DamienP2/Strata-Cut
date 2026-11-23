@@ -34,6 +34,10 @@ pub use media::routes;
 
 pub const MASKED: &str = "••••••••";
 
+/// The preview's sound tracks besides the first (all the source's, as the Streamer mixes them:
+/// each can be heard alone).
+pub const PREVIEW_EXTRA: u32 = 31;
+
 /// Work that may wait (clips, stills, levels) runs with a lower CPU priority, so that it
 /// never slows the recorders' FFmpeg down (a slowed reception loses packets: glitches).
 pub fn background(cmd: &mut tokio::process::Command) {
@@ -420,129 +424,6 @@ impl Content {
     }
 }
 
-/// The sound tracks' peaks as the preview measures them (10 a second, dB, -90: silence), kept a
-/// while with their timestamps: the Streamer shows those of the moment its picture shows (some
-/// seconds behind the source). A timestamp becomes a server time by the least delay seen to the
-/// server's clock over the last half minute: a preview that falls behind for a while (a busy
-/// server) changes nothing; only a jump in the timestamps themselves (a cut, a new run) starts
-/// again.
-#[derive(Clone, Debug, Default)]
-pub struct Levels {
-    /// Each track's measures: (their timestamp, ms; left, right).
-    kept: [std::collections::VecDeque<(i64, [f32; 2])>; 4],
-    /// The measure being read, of each track: its timestamp (ms) and the channels read.
-    reading: [(Option<i64>, [Option<f32>; 2]); 4],
-    /// The delays (server ms minus timestamp) of the last measures, with their timestamp.
-    delays: std::collections::VecDeque<(i64, i64)>,
-    /// The newest timestamp (ms).
-    newest: Option<i64>,
-}
-
-impl Levels {
-    /// How long the measures are kept (ms): more than the picture's delay may be.
-    const KEEP: i64 = 70_000;
-    /// The delays looked at (ms of timestamps).
-    const DELAYS: i64 = 30_000;
-
-    /// A measure's timestamp (ms), its line before its levels; the one before it is complete
-    /// (a mono track: one channel, said on both).
-    pub fn moment(&mut self, track: usize, pts_ms: i64, now: i64) {
-        self.flush(track, now);
-        self.reading[track] = (Some(pts_ms), [None, None]);
-    }
-
-    pub fn measured(&mut self, track: usize, ch: usize, db: f32, now: i64) {
-        self.reading[track].1[ch] = Some(db);
-        if self.reading[track].1.iter().all(Option::is_some) {
-            self.flush(track, now);
-        }
-    }
-
-    fn flush(&mut self, track: usize, now: i64) {
-        let (pts, ch) = std::mem::take(&mut self.reading[track]);
-        let (Some(pts), Some(l)) = (pts, ch[0]) else { return };
-        let r = ch[1].unwrap_or(l);
-        // The timestamps jumped (back, or far ahead): what was kept is of another timeline.
-        if self.newest.is_some_and(|n| pts < n - 2_000 || pts > n + 20_000) {
-            self.kept.iter_mut().for_each(|q| q.clear());
-            self.delays.clear();
-        }
-        self.newest = Some(self.newest.map_or(pts, |n| n.max(pts)));
-        self.delays.push_back((pts, now - pts));
-        while self.delays.front().is_some_and(|x| x.0 < pts - Self::DELAYS) {
-            self.delays.pop_front();
-        }
-        let q = &mut self.kept[track];
-        q.push_back((pts, [l, r]));
-        while q.front().is_some_and(|x| x.0 < pts - Self::KEEP) {
-            q.pop_front();
-        }
-    }
-
-    // No longer read: the Streamer measures with its own meter (`crate::meter`).
-    #[allow(dead_code)]
-    /// Server ms minus timestamp ms: the least delay seen lately.
-    fn offset(&self) -> Option<i64> {
-        self.delays.iter().map(|x| x.1).min()
-    }
-
-    // No longer read: the Streamer measures with its own meter (`crate::meter`).
-    #[allow(dead_code)]
-    /// The server time of the newest measure.
-    pub fn newest_at(&self) -> Option<i64> {
-        Some(self.newest? + self.offset()?)
-    }
-
-    // No longer read: the Streamer measures with its own meter (`crate::meter`).
-    #[allow(dead_code)]
-    /// A track's peaks of the moment `at` (server ms): the highest of the quarter second before.
-    pub fn read(&self, track: usize, at: i64) -> [f32; 2] {
-        let mut p = [-90.0f32; 2];
-        let Some(off) = self.offset() else { return p };
-        let at = at - off;
-        for (t, v) in self.kept[track].iter().rev() {
-            if *t > at {
-                continue;
-            }
-            if *t <= at - 250 {
-                break;
-            }
-            p = [p[0].max(v[0]), p[1].max(v[1])];
-        }
-        p
-    }
-}
-
-/// A measure's timestamp line (`ametadata@lv<k>`: `frame:.. pts:.. pts_time:<s>`): (track, ms).
-pub fn level_moment(line: &str) -> Option<(usize, i64)> {
-    let k = line.split_once("[ametadata@lv")?.1.chars().next()?.to_digit(10)? as usize;
-    // Its timestamp in microseconds (`asettb=AVTB` before): `pts_time` has 6 digits only before
-    // FFmpeg 7 (a tenth of a second at a broadcast's timestamps).
-    let us = line.split_once(" pts:").and_then(|x| x.1.split_whitespace().next()?.parse::<i64>().ok());
-    let ms = match us {
-        Some(us) => us / 1000,
-        None => {
-            let t: f64 = line.split_once("pts_time:")?.1.split_whitespace().next()?.parse().ok()?;
-            if !t.is_finite() {
-                return None;
-            }
-            (t * 1000.0).round() as i64
-        }
-    };
-    (k < 4).then_some((k, ms))
-}
-
-/// A level measured by the preview (`ametadata@lv<k>`: `lavfi.astats.<channel>.Peak_level=<dB>`):
-/// (track, channel, dB; silence at -90).
-pub fn level_line(line: &str) -> Option<(usize, usize, f32)> {
-    let k = line.split_once("[ametadata@lv")?.1.chars().next()?.to_digit(10)? as usize;
-    let rest = line.split_once("lavfi.astats.")?.1;
-    let (ch, v) = rest.split_once(".Peak_level=")?;
-    let ch: usize = ch.parse().ok()?;
-    let db = v.trim().parse::<f32>().unwrap_or(-90.0);
-    (k < 4 && (1..=2).contains(&ch)).then_some((k, ch - 1, if db.is_finite() { db.max(-90.0) } else { -90.0 }))
-}
-
 /// `scheme://user:pass@host:port/path?query` → `scheme://host:port`; a name (NDI, DeckLink) as it is.
 pub fn only_host(url: &str) -> String {
     let Some((scheme, rest)) = url.split_once("://") else { return url.to_string() };
@@ -610,9 +491,6 @@ pub struct Rec {
     /// The picture black, frozen, the sound silent: since (server time, ms), and whether the
     /// journal already said so.
     pub content: Mutex<Content>,
-    /// Each sound track's peak, left and right: the preview measures them 10 times a second,
-    /// the highest of the last moment is kept (see `Levels`).
-    pub levels: Mutex<Levels>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// Local UDP ports the stream as received is copied to (the streams to destinations: see
     /// `crate::streams`), each with its key.
@@ -1123,7 +1001,7 @@ impl Manager {
                         doomed.push(run.wave_path(p.n));
                         run.audio.waves.remove(&p.n);
                         // The other sound tracks' fragment of the same number.
-                        doomed.extend((1..=3).map(|k| run.dir.join(format!("audio{k}")).join(format!("p{:08}.m4s", p.n))).filter(|f| f.exists()));
+                        doomed.extend((1..=PREVIEW_EXTRA).map(|k| run.dir.join(format!("audio{k}")).join(format!("p{:08}.m4s", p.n))).filter(|f| f.exists()));
                     }
                     run.track_mut(video).segs.pop_front();
                 }
@@ -1179,7 +1057,7 @@ impl Manager {
         let found: epg::Found = crate::paths::read_json(&epg::found_path(&self.data_dir, &c.id)).unwrap_or_default();
         let found_known = found.stream.is_some();
         // The source's sound tracks, as its newest recording had them (no start again for them).
-        let extra_audio = runs.iter().rev().find_map(|r| r.meta.media.as_ref()).map(|m| m.audio_tracks.saturating_sub(1).min(3)).unwrap_or(0);
+        let extra_audio = runs.iter().rev().find_map(|r| r.meta.media.as_ref()).map(|m| m.audio_tracks.saturating_sub(1).min(PREVIEW_EXTRA)).unwrap_or(0);
         let rec = Arc::new(Rec {
             id: c.id.clone(),
             status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None, lost: 0, damaged: 0, preview_lag: 0, preview_dropped: false, black_since: None, frozen_since: None, silent_since: None }),
@@ -1200,7 +1078,6 @@ impl Manager {
             rtp: false.into(),
             preview_lag: 0.into(),
             content: Mutex::new(Content::default()),
-            levels: Mutex::new(Levels::default()),
             last_packet: 0.into(),
             last_sound: 0.into(),
             audio_extra: extra_audio.into(),
@@ -1486,7 +1363,7 @@ impl Manager {
                         doomed.push(run.wave_path(p.n));
                         run.audio.waves.remove(&p.n);
                         // The other sound tracks' fragment of the same number.
-                        doomed.extend((1..=3).map(|k| run.dir.join(format!("audio{k}")).join(format!("p{:08}.m4s", p.n))).filter(|f| f.exists()));
+                        doomed.extend((1..=PREVIEW_EXTRA).map(|k| run.dir.join(format!("audio{k}")).join(format!("p{:08}.m4s", p.n))).filter(|f| f.exists()));
                     }
                     run.track_mut(video).segs.pop_front();
                     changed = true;
@@ -1695,58 +1572,6 @@ mod glitch_tests {
         assert!(glitch_lines(&[], 0, 0).is_empty());
         let l = glitch_lines(&recs, 0, 12);
         assert!(l[0].contains("network card of this server") && l.iter().any(|x| x.contains("dropped 12 packets")), "{l:?}");
-    }
-
-    #[test]
-    fn levels_of_their_moment() {
-        let mut l = Levels::default();
-        // Measured late and all at once (a busy preview): each keeps its own moment.
-        for i in 0..10 {
-            l.moment(0, 5_000 + i * 100, 20_000);
-            l.measured(0, 0, -10.0 - i as f32, 20_000);
-            l.measured(0, 1, -12.0, 20_000);
-        }
-        // The last came with the least delay (14.1 s): the others are placed from it.
-        assert_eq!(l.read(0, 20_000)[0], -17.0, "the newest, at its moment");
-        assert_eq!(l.read(0, 19_500)[0], -12.0, "half a second before: the third");
-        assert_eq!(l.read(0, 30_000)[0], -90.0, "none then");
-        assert_eq!(level_moment("[ametadata@lv1 @ 0x5] [info] frame:3    pts:300000   pts_time:0.3"), Some((1, 300)));
-        // A broadcast's timestamps: to the millisecond (pts_time says 80001.5 for them all).
-        assert_eq!(level_moment("[ametadata@lv0 @ 0x5] [info] frame:9    pts:80001450022 pts_time:80001.5"), Some((0, 80_001_450)));
-    }
-
-    #[test]
-    fn levels_through_a_slow_preview() {
-        let mut l = Levels::default();
-        // 20 s measured on time, then 8 s late (a busy server), then on time again.
-        let mut now = 100_000;
-        for i in 0..400 {
-            let pts = i * 100;
-            now = 100_000 + pts + if (200..280).contains(&i) { 8_000 } else { 0 };
-            l.moment(0, pts, now);
-            l.measured(0, 0, -20.0, now);
-            l.measured(0, 1, -20.0, now);
-        }
-        // What was measured before the late ones is still there, at its moment.
-        assert_eq!(l.read(0, 100_000 + 15_000)[0], -20.0);
-        assert_eq!(l.read(0, now - 10_000)[0], -20.0);
-    }
-
-    #[test]
-    fn levels_of_a_mono_track() {
-        let mut l = Levels::default();
-        for i in 0..5 {
-            l.moment(0, i * 100, 1_000 + i * 100);
-            l.measured(0, 0, -18.0, 1_000 + i * 100);
-        }
-        assert_eq!(l.read(0, 1_300), [-18.0, -18.0]);
-    }
-
-    #[test]
-    fn levels_read() {
-        assert_eq!(level_line("[ametadata@lv0 @ 0x55c1] [info] lavfi.astats.2.Peak_level=-24.08"), Some((0, 1, -24.08)));
-        assert_eq!(level_line("[ametadata@lv2 @ 0x55c1] [info] lavfi.astats.1.Peak_level=-inf"), Some((2, 0, -90.0)));
-        assert_eq!(level_line("[ametadata@lv0 @ 0x55c1] [info] frame:3 pts:14400"), None);
     }
 
     #[test]

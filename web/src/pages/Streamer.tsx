@@ -110,7 +110,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   // the same fade.
   const [solo, setSolo] = useState<number | null>(null);
   const pg = prog.state?.program;
-  const nTracks = Math.min(4, prog.state?.tracks.length ?? 0);
+  const nTracks = prog.state?.tracks.length ?? 0;
   const isOn = (k: number) => pg?.tracks[k]?.on ?? k === 0;
   const firstOn = Array.from({ length: nTracks }, (_, k) => k).find(isOn);
   const heard = solo ?? firstOn ?? 0;
