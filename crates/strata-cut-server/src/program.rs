@@ -338,7 +338,10 @@ impl Programs {
             overlay: Arc::new(self.overlay(&ffmpeg, &p, &sh).await),
             slate: Arc::new(self.picture(&ffmpeg, slate_file.as_deref(), &sh, &name).await),
         }));
-        let inputs = Arc::new(Inputs::new(sh.fps));
+        // The delay a picture is played after its coming: a source in segments (HLS, the web) comes
+        // a segment at a time.
+        let delay = if crate::engine::in_segments(&rec) { 10 } else { 1 };
+        let inputs = Arc::new(Inputs::new(sh.fps, delay));
         let sink = Arc::new(Mutex::new(None));
         let done = Arc::new(AtomicBool::new(false));
         let _end = Ends(done.clone());

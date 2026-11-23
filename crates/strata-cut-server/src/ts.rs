@@ -18,6 +18,11 @@ impl Seen {
         self.tracks.len()
     }
 
+    /// Its audio tracks that sent something since `since`.
+    pub fn heard(&self, since: i64) -> usize {
+        self.tracks.iter().filter(|t| t.1 >= since).count()
+    }
+
     /// Its PMT was read: its tracks are known.
     pub fn known(&self) -> bool {
         self.read

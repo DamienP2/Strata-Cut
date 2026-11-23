@@ -61,16 +61,20 @@ pub async fn decode(recorders: Arc<Manager>, source: String, sh: Shape, inputs: 
             return;
         }
         if let Some(rec) = recorders.get(&source).filter(|r| r.flowing()) {
-            // How many tracks it has (its PMT, a moment to read it; else as it was described).
+            // How many tracks it has (its PMT, a moment to read it; else as it was described): those
+            // that send something (one that sends nothing would stop the decoder from starting).
             let mut tracks = None;
             for _ in 0..30 {
-                tracks = watch.tracks();
-                if tracks.is_some() {
-                    break;
+                if let Some((all, heard)) = watch.tracks() {
+                    tracks = Some(heard);
+                    if heard == all {
+                        break;
+                    }
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
             let tracks = tracks.unwrap_or(sh.tracks).min(TRACKS);
+            tracing::debug!("programme of {}: the decoder starts, {tracks} sound tracks", rec.config().name);
             let Some(why) = decode_once(&recorders.ffmpeg, &rec, &sh, tracks, &inputs, &mut stop).await else { return };
             // Said once (a source that comes and goes would fill the journal); to the lives too.
             if why != said {
@@ -84,6 +88,11 @@ pub async fn decode(recorders: Arc<Manager>, source: String, sh: Shape, inputs: 
             _ = stop.changed() => {}
         }
     }
+}
+
+/// A source that comes a segment at a time (HLS, the web): nothing between two segments.
+pub fn in_segments(rec: &Rec) -> bool {
+    matches!(rec.config().protocol, crate::recorder::Protocol::Hls | crate::recorder::Protocol::Web)
 }
 
 /// One run of the decoder, with the source's first `tracks` tracks: until it ends (why), or the
@@ -101,8 +110,10 @@ async fn decode_once(ffmpeg: &str, rec: &Arc<Rec>, sh: &Shape, tracks: usize, in
         Ok(p) => p,
         Err(e) => return Some(e),
     };
-    // 5 s without anything: it ends (the source lost), started again when it comes back.
-    let input = format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000");
+    // A while without anything (5 s; a source in segments: 30 s): it ends (the source lost),
+    // started again when it comes back.
+    let wait = if in_segments(rec) { 30_000_000 } else { 5_000_000 };
+    let input = format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout={wait}");
     let key = rand_key();
     rec.taps.lock().unwrap().push((key, port));
     let _untap = Untap(rec.clone(), key);
@@ -182,10 +193,10 @@ impl Watch {
         Ok(Watch { port, seen, done })
     }
 
-    /// Its sound tracks, once its PMT was read.
-    fn tracks(&self) -> Option<usize> {
+    /// Its sound tracks, and those that sent something these last seconds, once its PMT was read.
+    fn tracks(&self) -> Option<(usize, usize)> {
         let s = self.seen.lock().unwrap();
-        s.known().then(|| s.count())
+        s.known().then(|| (s.count(), s.heard(now_ms() - 2000)))
     }
 }
 
