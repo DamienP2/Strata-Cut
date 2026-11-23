@@ -482,24 +482,35 @@ impl Programs {
         let (vtx, vrx) = channel();
         let (atx, arx) = channel();
         let queued = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
-        write_to(lv, vrx, queued[0].clone(), done.clone());
-        write_to(la, arx, queued[1].clone(), done.clone());
+        let dead = Arc::new(AtomicBool::new(false));
+        write_to(lv, vrx, queued[0].clone(), done.clone(), dead.clone());
+        write_to(la, arx, queued[1].clone(), done.clone(), dead.clone());
         relay(out, r.clone(), done.clone());
         // A second waiting at most (the encoder starting, the server busy).
-        *sink.lock().unwrap() = Some(Sink { video: vtx, audio: atx, queued, most: sh.fps.max(1) as usize });
+        *sink.lock().unwrap() = Some(Sink { video: vtx, audio: atx, queued, most: sh.fps.max(1) as usize, dead: dead.clone() });
         r.epoch.fetch_add(1, Ordering::Relaxed);
         let mut cmd = Command::new(&self.recorders.ffmpeg);
         cmd.args(encoder_args(sh, vp, ap, op)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", self.recorders.ffmpeg))?;
         let last = last_words(&mut child);
-        tokio::select! {
-            status = child.wait() => {
-                let why = last.lock().unwrap().last().cloned().unwrap_or_else(|| format!("{status:?}"));
-                Err(format!("the encoder stopped: {why}"))
-            }
-            _ = stop.changed() => {
-                let _ = child.kill().await;
-                Ok(())
+        let mut look = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            tokio::select! {
+                status = child.wait() => {
+                    let why = last.lock().unwrap().last().cloned().unwrap_or_else(|| format!("{status:?}"));
+                    return Err(format!("the encoder stopped: {why}"));
+                }
+                _ = stop.changed() => {
+                    let _ = child.kill().await;
+                    return Ok(());
+                }
+                // One of its inputs broke (nothing would be sent to it any more): made again.
+                _ = look.tick() => {
+                    if dead.load(Ordering::Relaxed) {
+                        let _ = child.kill().await;
+                        return Err("the encoder's input broke: made again".into());
+                    }
+                }
             }
         }
     }
@@ -580,7 +591,7 @@ fn picture_args(sh: &Shape, caps: Caps) -> Vec<String> {
     let mut a = decoder_head();
     a.extend(["-map", "0:v:0", "-an", "-sn", "-dn", "-vf"].map(String::from));
     let info = if caps.checksum { "showinfo=checksum=0" } else { "showinfo" };
-    a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,{info}"));
+    a.push(format!("bwdif=mode=send_frame:deint=interlaced,scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p,settb=AVTB,{info}"));
     // Each picture decoded goes out once (none repeated to keep a rate: each is said, then read).
     a.extend([if caps.fps_mode { "-fps_mode" } else { "-vsync" }, "passthrough", "-f", "rawvideo", "-pix_fmt", "yuv420p", "pipe:1"].map(String::from));
     a
@@ -590,7 +601,7 @@ fn picture_args(sh: &Shape, caps: Caps) -> Vec<String> {
 fn sound_args(k: usize) -> Vec<String> {
     let mut a = decoder_head();
     a.extend(["-map".to_string(), format!("0:a:{k}")]);
-    a.extend(["-vn", "-sn", "-dn", "-af", "aresample=48000,aformat=sample_fmts=flt:channel_layouts=stereo,ashowinfo", "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1"].map(String::from));
+    a.extend(["-vn", "-sn", "-dn", "-af", "aresample=48000,aformat=sample_fmts=flt:channel_layouts=stereo,asettb=AVTB,ashowinfo", "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1"].map(String::from));
     a
 }
 
@@ -618,13 +629,16 @@ enum FrameBytes {
     PerSample(usize),
 }
 
-/// A frame said by `showinfo` or `ashowinfo`: its timestamp (s) and its samples (sound).
+/// A frame said by `showinfo` or `ashowinfo`: its timestamp (s) and its samples (sound). The
+/// timestamp in microseconds (`settb=AVTB` before), not `pts_time`: FFmpeg before 7 writes that
+/// one with 6 digits, a tenth of a second at a broadcast's timestamps (80001.5 for 3 pictures).
 fn frame_said(line: &str) -> Option<(Option<f64>, Option<usize>)> {
     if !line.contains("showinfo") || !line.contains(" n:") {
         return None;
     }
     let field = |k: &str| line.split_once(k).map(|x| x.1.split_whitespace().next().unwrap_or(""));
-    Some((field("pts_time:").and_then(|v| v.parse().ok()), field("nb_samples:").and_then(|v| v.parse().ok())))
+    let pts = field(" pts:").and_then(|v| v.parse::<i64>().ok()).map(|us| us as f64 / 1e6).or_else(|| field("pts_time:").and_then(|v| v.parse().ok()));
+    Some((pts, field("nb_samples:").and_then(|v| v.parse().ok())))
 }
 
 /// One run of a decoder: it reads the source's relay (a tap of its own), and gives each frame it
@@ -648,14 +662,17 @@ async fn decoding(ffmpeg: &str, rec: &Arc<Rec>, args: Vec<String>, bytes: FrameB
         Err(e) => return format!("cannot start {ffmpeg}: {e}"),
     };
     let (Some(mut out), Some(err)) = (child.stdout.take(), child.stderr.take()) else { return "no output".into() };
-    let mut lines = tokio::io::BufReader::new(err).lines();
+    let mut err = tokio::io::BufReader::new(err);
     let mut last: VecDeque<String> = VecDeque::new();
     // Each frame is said (its timestamp) before it is written: said, then read.
     let mut pts = 0.0;
+    let mut raw = Vec::new();
     loop {
+        raw.clear();
+        // Bytes, not text: a description in another charset (a DVB name) is not an end.
         let line = tokio::select! {
-            l = lines.next_line() => match l {
-                Ok(Some(l)) => l,
+            l = err.read_until(b'\n', &mut raw) => match l {
+                Ok(n) if n > 0 => String::from_utf8_lossy(&raw).trim_end().to_string(),
                 _ => break,
             },
             _ = stop.changed() => {
@@ -679,7 +696,7 @@ async fn decoding(ffmpeg: &str, rec: &Arc<Rec>, args: Vec<String>, bytes: FrameB
             break;
         }
         // Without one (rare): just after the one before.
-        pts = t.unwrap_or(pts + 0.04);
+        pts = t.unwrap_or(pts + samples.map_or(0.04, |n| n as f64 / crate::mixer::RATE as f64));
         take(pts, buf);
         while !room() {
             tokio::select! {
@@ -717,8 +734,9 @@ fn last_words(child: &mut tokio::process::Child) -> Arc<Mutex<Vec<String>>> {
 }
 
 /// Writes what the mixer makes to the encoder that connects (the first that does), counting
-/// down what waits. Ends when the encoder is gone (it is made again) or the run ends.
-fn write_to(listener: TcpListener, rx: Receiver<Vec<u8>>, queued: Arc<AtomicUsize>, done: Arc<AtomicBool>) {
+/// down what waits. Ends when the run ends; when the encoder is gone, or broke the link, `dead`
+/// (it is made again).
+fn write_to(listener: TcpListener, rx: Receiver<Vec<u8>>, queued: Arc<AtomicUsize>, done: Arc<AtomicBool>, dead: Arc<AtomicBool>) {
     let _ = std::thread::Builder::new().name("program-write".into()).spawn(move || {
         let _ = listener.set_nonblocking(true);
         let mut stream = loop {
@@ -728,7 +746,10 @@ fn write_to(listener: TcpListener, rx: Receiver<Vec<u8>>, queued: Arc<AtomicUsiz
             match listener.accept() {
                 Ok((s, _)) => break s,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(10)),
-                Err(_) => return,
+                Err(_) => {
+                    dead.store(true, Ordering::Relaxed);
+                    return;
+                }
             }
         };
         let _ = stream.set_nonblocking(false);
@@ -739,6 +760,9 @@ fn write_to(listener: TcpListener, rx: Receiver<Vec<u8>>, queued: Arc<AtomicUsiz
                     let ok = stream.write_all(&b).is_ok();
                     queued.fetch_sub(1, Ordering::Relaxed);
                     if !ok {
+                        if !done.load(Ordering::Relaxed) {
+                            dead.store(true, Ordering::Relaxed);
+                        }
                         return;
                     }
                 }
@@ -755,14 +779,16 @@ fn relay(sock: UdpSocket, r: Arc<Runner>, done: Arc<AtomicBool>) {
     let _ = std::thread::Builder::new().name("program-relay".into()).spawn(move || {
         let mut buf = vec![0u8; 65536];
         let mut taps: Vec<u16> = Vec::new();
-        let mut packets = 0u32;
+        // The lives reading it, looked at again every 100 ms (by time: a still picture makes few
+        // packets, a new live would wait seconds).
+        let mut looked: Option<Instant> = None;
         while !done.load(Ordering::Relaxed) {
             let Ok(n) = sock.recv(&mut buf) else { continue };
-            if packets.is_multiple_of(64) {
+            if looked.is_none_or(|t| t.elapsed() >= Duration::from_millis(100)) {
+                looked = Some(Instant::now());
                 taps = r.taps.lock().unwrap().iter().map(|t| t.1).collect();
                 r.last_packet.store(now_ms(), Ordering::Relaxed);
             }
-            packets = packets.wrapping_add(1);
             for &port in &taps {
                 let _ = sock.send_to(&buf[..n], (Ipv4Addr::LOCALHOST, port));
             }
@@ -838,6 +864,8 @@ pub(crate) struct Seen {
     /// Its PMT was read (the tracks below are the source's).
     read: bool,
     tracks: Vec<(u16, i64, i64)>,
+    /// The PMT being put together (it may take more than one packet: many tracks).
+    section: Vec<u8>,
 }
 
 impl Seen {
@@ -861,10 +889,10 @@ impl Seen {
             return;
         }
         let start = p[1] & 0x40 != 0;
-        if !start || (pid != 0 && Some(pid) != self.pmt) {
+        if pid != 0 && Some(pid) != self.pmt {
             return;
         }
-        // Its payload: after the adaptation field, the pointer field, then the section.
+        // Its payload: after the adaptation field (and, where a section starts, the pointer field).
         let afc = (p[3] >> 4) & 3;
         let mut i = 4;
         if afc & 2 != 0 {
@@ -873,13 +901,29 @@ impl Seen {
         if afc & 1 == 0 || i >= 188 {
             return;
         }
-        i += 1 + p[i] as usize;
-        let Some(sec) = p.get(i..) else { return };
         if pid == 0 {
-            if let Some(pmt) = pat_pmt(sec) {
+            if !start {
+                return;
+            }
+            i += 1 + p[i] as usize;
+            if let Some(pmt) = p.get(i..).and_then(pat_pmt) {
                 self.pmt = Some(pmt);
             }
-        } else if let Some(pids) = pmt_audio(sec) {
+            return;
+        }
+        if start {
+            i += 1 + p[i] as usize;
+            self.section = p.get(i..).unwrap_or(&[]).to_vec();
+        } else if !self.section.is_empty() {
+            self.section.extend_from_slice(&p[i..]);
+        }
+        let s = &self.section;
+        let whole = s.len() >= 3 && s.len() >= 3 + (((usize::from(s[1]) & 0x0f) << 8) | usize::from(s[2]));
+        if !whole {
+            return;
+        }
+        let section = std::mem::take(&mut self.section);
+        if let Some(pids) = pmt_audio(&section) {
             self.read = true;
             let old = std::mem::take(&mut self.tracks);
             self.tracks = pids.into_iter().map(|pid| old.iter().find(|t| t.0 == pid).copied().unwrap_or((pid, 0, 0))).collect();
@@ -1089,6 +1133,21 @@ mod tests {
         pmt.extend([0x0f, 0xe1, 0x05, 0xf0, 0]);
         pmt[2] = (pmt.len() - 3 + 4) as u8;
         pmt.extend([0, 0, 0, 0]);
+        // Over two packets (many tracks): put together.
+        let mut s = Seen::default();
+        s.packet(&psi(0, &pat), 0);
+        // Its payload's end: the start of the section only (the rest in the next packet).
+        let mut a = vec![0x47, 0x41, 0x00, 0x30, (188 - 5 - 1 - 10) as u8, 0];
+        a.resize(188 - 11, 0xff);
+        a.push(0);
+        a.extend_from_slice(&pmt[..10]);
+        let mut b = vec![0x47, 0x01, 0x00, 0x11];
+        b.extend_from_slice(&pmt[10..]);
+        b.resize(188, 0xff);
+        s.packet(&a, 0);
+        assert!(!s.read);
+        s.packet(&b, 0);
+        assert_eq!(s.tracks.iter().map(|t| t.0).collect::<Vec<_>>(), vec![0x102, 0x104, 0x105]);
         let mut s = Seen::default();
         s.packet(&psi(0, &pat), 0);
         assert_eq!(s.pmt, Some(0x100));
@@ -1119,11 +1178,12 @@ mod tests {
     #[test]
     fn decoders_and_encoder() {
         let sh = shape(2);
-        assert_eq!(
-            frame_said("[Parsed_showinfo_2 @ 0x5] n:   0 pts:     37 pts_time:1.48    duration:      1 fmt:yuv420p"),
-            Some((Some(1.48), None))
-        );
-        assert_eq!(frame_said("[Parsed_ashowinfo_2 @ 0x5] n:0 pts:70559 pts_time:1.46998 fmt:flt channels:2 rate:48000 nb_samples:1152 checksum:86"), Some((Some(1.46998), Some(1152))));
+        // The timestamps in microseconds: exact, where pts_time says the same for 3 pictures.
+        assert_eq!(frame_said("[Parsed_showinfo_3 @ 0x5] n:   1 pts:80001450022 pts_time:80001.5 duration: 40000 fmt:yuv420p"), Some((Some(80001.450022), None)));
+        assert_eq!(frame_said("[Parsed_showinfo_3 @ 0x5] n:   2 pts:80001490022 pts_time:80001.5 duration: 40000 fmt:yuv420p"), Some((Some(80001.490022), None)));
+        assert_eq!(frame_said("[Parsed_ashowinfo_3 @ 0x5] n:0 pts:1469980 pts_time:1.46998 fmt:flt channels:2 rate:48000 nb_samples:1152 checksum:86"), Some((Some(1.46998), Some(1152))));
+        // Without one: none.
+        assert_eq!(frame_said("[Parsed_showinfo_3 @ 0x5] n:   0 pts:NOPTS pts_time:NOPTS duration: 1"), Some((None, None)));
         assert_eq!(frame_said("[Parsed_showinfo_2 @ 0x5] config in time_base: 1/25"), None);
         let v = picture_args(&sh, Caps { fps_mode: true, checksum: true });
         // An older FFmpeg: the options it knows.

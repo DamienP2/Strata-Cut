@@ -510,8 +510,20 @@ impl Levels {
 /// A measure's timestamp line (`ametadata@lv<k>`: `frame:.. pts:.. pts_time:<s>`): (track, ms).
 pub fn level_moment(line: &str) -> Option<(usize, i64)> {
     let k = line.split_once("[ametadata@lv")?.1.chars().next()?.to_digit(10)? as usize;
-    let t: f64 = line.split_once("pts_time:")?.1.split_whitespace().next()?.parse().ok()?;
-    (k < 4 && t.is_finite()).then_some((k, (t * 1000.0).round() as i64))
+    // Its timestamp in microseconds (`asettb=AVTB` before): `pts_time` has 6 digits only before
+    // FFmpeg 7 (a tenth of a second at a broadcast's timestamps).
+    let us = line.split_once(" pts:").and_then(|x| x.1.split_whitespace().next()?.parse::<i64>().ok());
+    let ms = match us {
+        Some(us) => us / 1000,
+        None => {
+            let t: f64 = line.split_once("pts_time:")?.1.split_whitespace().next()?.parse().ok()?;
+            if !t.is_finite() {
+                return None;
+            }
+            (t * 1000.0).round() as i64
+        }
+    };
+    (k < 4).then_some((k, ms))
 }
 
 /// A level measured by the preview (`ametadata@lv<k>`: `lavfi.astats.<channel>.Peak_level=<dB>`):
@@ -1692,7 +1704,9 @@ mod glitch_tests {
         assert_eq!(l.read(0, 20_000)[0], -17.0, "the newest, at its moment");
         assert_eq!(l.read(0, 19_500)[0], -12.0, "half a second before: the third");
         assert_eq!(l.read(0, 30_000)[0], -90.0, "none then");
-        assert_eq!(level_moment("[ametadata@lv1 @ 0x5] [info] frame:3    pts:14400   pts_time:0.3"), Some((1, 300)));
+        assert_eq!(level_moment("[ametadata@lv1 @ 0x5] [info] frame:3    pts:300000   pts_time:0.3"), Some((1, 300)));
+        // A broadcast's timestamps: to the millisecond (pts_time says 80001.5 for them all).
+        assert_eq!(level_moment("[ametadata@lv0 @ 0x5] [info] frame:9    pts:80001450022 pts_time:80001.5"), Some((0, 80_001_450)));
     }
 
     #[test]

@@ -395,7 +395,7 @@ pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool
         // overlaps cut), else the sound after it is joined early and drifts ahead of the picture.
         let mut track = |k: u32, filter: &str, dir: &str| {
             // Its level, 10 times a second (the Streamer's meters).
-            let meter = format!("{filter},asetnsamples=n=4800,astats@lv{k}=metadata=1:reset=1:measure_overall=none:measure_perchannel=Peak_level,ametadata@lv{k}=mode=print");
+            let meter = format!("{filter},asetnsamples=n=4800,astats@lv{k}=metadata=1:reset=1:measure_overall=none:measure_perchannel=Peak_level,asettb=AVTB,ametadata@lv{k}=mode=print");
             a.extend(s(&["-map", &format!("0:a:{k}"), "-vn", "-af", &meter, "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-ar", "48000", "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", &PROXY_SEGMENT.to_string(), "-hls_list_size", "30", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename"]));
             a.push(d(&format!("{dir}/p%08d.m4s")));
             a.push(d(&format!("{dir}/index.m3u8")));
@@ -435,7 +435,7 @@ impl Relay {
         let spawned = std::thread::Builder::new().name("relay".into()).spawn(move || {
             let mut buf = vec![0u8; 65536];
             let mut taps: Vec<u16> = Vec::new();
-            let mut packets = 0u32;
+            let mut looked = 0i64;
             // Its audio tracks, read as they pass: does the source still send sound?
             let mut seen = crate::program::Seen::default();
             while !done.load(Ordering::Relaxed) {
@@ -445,13 +445,14 @@ impl Relay {
                 for p in buf[..n].chunks(188) {
                     seen.packet(p, now);
                 }
-                // The taps, looked at again every 64 packets (a few hundredths of a second).
-                if packets.is_multiple_of(64) {
+                // The taps, looked at again every 50 ms (by time: a source of little bitrate makes
+                // few packets).
+                if now - looked >= 50 {
+                    looked = now;
                     taps = rec.taps.lock().unwrap().iter().map(|t| t.1).collect();
                     rec.last_packet.store(now, Ordering::Relaxed);
                     rec.last_sound.store(seen.newest(), Ordering::Relaxed);
                 }
-                packets = packets.wrapping_add(1);
                 for &port in &taps {
                     let _ = sock.send_to(&buf[..n], (local, port));
                 }

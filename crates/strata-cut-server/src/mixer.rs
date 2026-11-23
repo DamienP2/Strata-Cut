@@ -39,6 +39,8 @@ const OVERLAY_FADE: f64 = 0.3;
 /// time) plays as smoothly as one that comes evenly, only later; neither faster nor out of step.
 pub struct Inputs {
     clock: Mutex<Clock>,
+    /// The last picture's timestamp: the others' turn of the clock taken from it.
+    reference: Mutex<Option<f64>>,
     pictures: Mutex<VecDeque<(f64, Vec<u8>)>>,
     /// When the last picture came (ms; 0: never).
     last_picture: AtomicI64,
@@ -98,6 +100,10 @@ struct Sound {
     head: f64,
 }
 
+/// MPEG-TS timestamps turn every 2^33 / 90 kHz (26.5 h): each decoder counts its turns from its
+/// own start, so one started after a turn is a turn away from one started before it.
+const TURN: f64 = 8_589_934_592.0 / 90_000.0;
+
 /// Our time, s.
 fn now_s() -> f64 {
     now_ms() as f64 / 1000.0
@@ -105,33 +111,47 @@ fn now_s() -> f64 {
 
 impl Default for Inputs {
     fn default() -> Self {
-        Inputs { clock: Mutex::default(), pictures: Mutex::new(VecDeque::new()), last_picture: AtomicI64::new(0), tracks: (0..TRACKS).map(|_| Mutex::new(Sound::default())).collect() }
+        Inputs { clock: Mutex::default(), reference: Mutex::new(None), pictures: Mutex::new(VecDeque::new()), last_picture: AtomicI64::new(0), tracks: (0..TRACKS).map(|_| Mutex::new(Sound::default())).collect() }
     }
 }
 
 impl Inputs {
     /// A picture of the source (YUV 4:2:0 at the programme's size), of the moment `pts`.
     pub fn picture(&self, pts: f64, f: Vec<u8>) {
+        let pts = self.same_turn(pts);
+        *self.reference.lock().unwrap() = Some(pts);
         // Back after it was lost: its time again from what comes now (not from what was late).
         if self.lost() {
             *self.clock.lock().unwrap() = Clock::default();
         }
         self.clock.lock().unwrap().seen(pts, now_s());
+        self.last_picture.store(now_ms(), Ordering::Relaxed);
         let mut q = self.pictures.lock().unwrap();
-        // Before the last one (the source started again): those waiting are of before.
-        if q.back().is_some_and(|b| pts <= b.0) {
-            q.clear();
+        match q.back().map(|b| pts - b.0) {
+            // Well before the last one (the source started again): those waiting are of before.
+            Some(d) if d < -1.0 => q.clear(),
+            // The same moment, or just before (out of order): one is enough.
+            Some(d) if d <= 0.0 => return,
+            _ => {}
         }
         q.push_back((pts, f));
         // The decoder waits for room (`room`): more, only if it did not.
         while q.len() > PICTURES_MOST * 2 {
             q.pop_front();
         }
-        self.last_picture.store(now_ms(), Ordering::Relaxed);
+    }
+
+    /// A timestamp on the same turn of the clock as the pictures'.
+    fn same_turn(&self, pts: f64) -> f64 {
+        match *self.reference.lock().unwrap() {
+            Some(r) => pts + ((r - pts) / TURN).round() * TURN,
+            None => pts,
+        }
     }
 
     /// Sound of a track (interleaved stereo), from the moment `pts`.
     pub fn sound(&self, track: usize, pts: f64, samples: &[f32]) {
+        let pts = self.same_turn(pts);
         // A source without pictures: its sound gives the time.
         if self.lost() {
             self.clock.lock().unwrap().seen(pts, now_s());
@@ -241,6 +261,8 @@ pub struct Sink {
     pub queued: [Arc<AtomicUsize>; 2],
     /// Frames waiting at most.
     pub most: usize,
+    /// One of its inputs broke (the encoder is made again).
+    pub dead: Arc<AtomicBool>,
 }
 
 /// A value going from one to another in some time.
@@ -403,7 +425,7 @@ impl Mixer {
     fn send(&self, picture: Vec<u8>, sound: Vec<f32>) -> bool {
         let sink = self.sink.lock().unwrap();
         let Some(s) = sink.as_ref() else { return false };
-        if s.queued.iter().any(|q| q.load(Ordering::Relaxed) >= s.most) {
+        if s.dead.load(Ordering::Relaxed) || s.queued.iter().any(|q| q.load(Ordering::Relaxed) >= s.most) {
             return false;
         }
         let bytes: Vec<u8> = sound.iter().flat_map(|x| x.to_le_bytes()).collect();
@@ -633,9 +655,19 @@ mod tests {
         // The moment: the latest after its timestamp, plus the margin.
         let play = inputs.play().unwrap();
         assert!((now_s() - play - DELAY - (now_s() - 100.0)).abs() < 1.0);
+        // The same moment twice (timestamps said to the tenth of a second): one kept, the rest not
+        // dropped.
+        inputs.picture(100.4, vec![5]);
+        inputs.picture(100.4, vec![6]);
+        inputs.picture(100.44, vec![7]);
+        assert_eq!(inputs.picture_at(100.4), Some(vec![5]));
+        assert_eq!(inputs.picture_at(100.44), Some(vec![7]));
         // The source started again (timestamps back): from the new ones.
         inputs.picture(3.0, vec![9]);
         assert_eq!(inputs.picture_at(3.0), Some(vec![9]));
+        // A sound decoder a turn of the clock away: on the pictures' turn.
+        assert!((inputs.same_turn(3.5 - TURN) - 3.5).abs() < 1e-6);
+        assert!((inputs.same_turn(3.5 + TURN) - 3.5).abs() < 1e-6);
         // All waiting, none due: the delay was too great.
         let inputs = Inputs::default();
         for k in 0..PICTURES_MOST {
