@@ -842,13 +842,15 @@ a.btn { color: inherit; }
 .hw-port.absent .hw-dot { background: transparent; border: 1px solid var(--text-3); }
 .asr-chip .sc-logo { vertical-align: -2px; margin-right: 5px; }
 /* Extraction: the playhead in a period not recorded (instead of a black picture). */
-.sc-hole { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 16px;
-  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--warn) 14%, transparent) 0 14px, transparent 14px 28px), radial-gradient(circle at 50% 45%, #1b1f27, #07080b 75%);
-  color: #d5d9e0; }
-.sc-hole svg { color: var(--warn); margin-bottom: 4px; }
-.sc-hole strong { font-size: clamp(15px, 2.4vw, 24px); letter-spacing: 0.02em; }
-.sc-hole span { font-family: var(--mono, ui-monospace, monospace); font-size: var(--fs-12, 12px); color: #aab0bb; }
-.sc-hole .sc-hole-hint { font-family: inherit; color: #7d8592; }
+.sc-hole { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.4cqw; text-align: center; padding: 16px; container-type: size;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--warn) 9%, transparent) 0 1.4cqw, transparent 1.4cqw 3cqw), radial-gradient(70% 70% at 50% 50%, #191b24, #0b0c12);
+  color: #e6e8f2; }
+.sc-hole-ic { display: grid; place-items: center; width: max(40px, 7cqw); height: max(40px, 7cqw); border-radius: 50%; background: color-mix(in srgb, var(--warn) 14%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn); }
+.sc-hole-ic svg { width: 50%; height: 50%; }
+.sc-hole-lb { font-size: max(11px, 1.9cqw); font-weight: 700; letter-spacing: 0.22em; text-transform: uppercase; color: var(--warn); }
+.sc-hole-du { font: 700 max(30px, 8cqw) var(--mono, ui-monospace, monospace); letter-spacing: -0.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+.sc-hole-du small { font-size: 0.42em; font-weight: 600; color: #7c8197; margin-left: 0.15em; }
+.sc-hole-fr { font: max(11px, 1.9cqw) var(--mono, ui-monospace, monospace); color: #7c8197; }
 /* The recorder's window: the settings on the left; its picture, details and guide on the right. */
 .modal.xwide { width: min(1120px, 100%); }
 .sc-rm-body { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, 1fr); gap: 22px; align-items: start; }
@@ -1273,9 +1275,13 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 @container centre (max-width: 880px) { .sc-volume input[type='range'] { display: none; } }
 
 /* Streamer: the source's slate (what its lives send while it is lost). */
-.slate-default { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 1px; padding: 4px; background: #0b0e16; color: #fff; text-align: center; overflow: hidden; }
-.slate-default b { font-size: 8px; line-height: 1.1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.slate-default span { font-size: 6px; opacity: 0.8; line-height: 1.1; }
+.slate-default { width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 2.4cqw; padding: 4px; background: linear-gradient(180deg, #111420, #07080d); color: #fff; text-align: center; overflow: hidden; container-type: inline-size; font-family: 'DejaVu Sans', Verdana, sans-serif; }
+.slate-default .sd-tx { display: flex; align-items: center; gap: 2cqw; font-size: 1.7cqw; letter-spacing: 0.32em; color: #9aa1bb; text-transform: uppercase; white-space: nowrap; }
+.slate-default .sd-tx i { width: 7cqw; height: 1px; background: #3a4058; }
+.slate-default b { max-width: 88%; font-size: 7cqw; line-height: 1.12; font-weight: 700; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.slate-default .sd-dots { display: flex; gap: 1.2cqw; }
+.slate-default .sd-dots i { width: 0.9cqw; height: 0.9cqw; min-width: 2px; min-height: 2px; border-radius: 50%; background: #8fa3ff; opacity: 0.9; }
+.slate-default .sd-dots i:nth-child(2) { opacity: 0.55; } .slate-default .sd-dots i:nth-child(3) { opacity: 0.25; }
 
 /* Streamer: the sources, the programme (picture, on air, sound), the destinations as cards */
 .sc-edit.st-page { grid-template-rows: minmax(0, 1fr); grid-template-areas: 'nav center side'; }
@@ -1298,8 +1304,6 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .ps-mirror, .ps-full { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 .ps-full { background: #0b0e16; }
 .ps-full img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.ps-full .slate-default b { font-size: clamp(12px, 5cqw, 30px); }
-.ps-full .slate-default span { font-size: clamp(9px, 2.4cqw, 16px); }
 .ps-win.ready .pg-ovl.edit { outline: 1.5px dashed var(--pvw); }
 .ps-win.ready .pg-handle { box-shadow: 0 0 0 2px var(--pvw); }
 .ps-guide { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(34, 197, 94, 0.7); z-index: 6; pointer-events: none; }
@@ -1312,7 +1316,6 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .ps-th > img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .ps-th.checker { background: repeating-conic-gradient(#1a1d29 0 25%, #12141d 0 50%) 0 0 / 12px 12px; }
 .ps-th.checker > img { position: absolute; height: auto; object-fit: initial; }
-.ps-th .slate-default b { font-size: 9px; } .ps-th .slate-default span { font-size: 6px; }
 .ps-nm { display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 2px; font-weight: 600; font-size: 12.5px; white-space: nowrap; min-width: 0; }
 .ps-nm .check { gap: 0; }
 .ps-dot { display: none; width: 7px; height: 7px; border-radius: 50%; flex: none; }
@@ -1349,8 +1352,6 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .pg-layer { position: absolute; inset: 0; }
 .pg-image { position: absolute; inset: 0; background: #0b0e16; pointer-events: none; }
 .pg-image img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.pg-image .slate-default b { font-size: clamp(14px, 3.2cqw, 34px); }
-.pg-image .slate-default span { font-size: clamp(10px, 1.6cqw, 18px); }
 .pg-ovl { position: absolute; transition: opacity 0.3s linear; pointer-events: none; }
 .pg-ovl img { width: 100%; height: auto; display: block; user-select: none; }
 .pg-ovl.edit { pointer-events: auto; cursor: move; outline: 1px dashed rgba(255, 255, 255, 0.75); outline-offset: 2px; touch-action: none; }
@@ -1412,7 +1413,6 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .gal-tile.on { border-color: var(--text-2); box-shadow: 0 0 0 1px var(--text-2); }
 .gal-pic { display: block; aspect-ratio: 16 / 9; background: #0b0e16; overflow: hidden; }
 .gal-pic img { width: 100%; height: 100%; object-fit: contain; display: block; }
-.gal-pic .slate-default b { font-size: 12px; } .gal-pic .slate-default span { font-size: 9px; }
 .gal-name { padding: 7px 10px; font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gal-tile.on .gal-name { color: var(--text); font-weight: 600; }
 .gal-check { position: absolute; left: 7px; top: 7px; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; background: var(--text); color: var(--bg); }

@@ -263,7 +263,6 @@ export const business: Record<string, string> = {
   'Invalid timecode': 'Timecode non valide',
   'The in and out points must be in the same recording': 'L’entrée et la sortie doivent être dans le même enregistrement continu',
   'Not recorded': 'Non enregistré',
-  'Play or → goes on with the next recording.': 'Lecture ou → reprend à l’enregistrement suivant.',
   'Hardware inputs': 'Entrées hardware',
   'From the IN again': 'Rejouer depuis le IN',
   'Extract the sound': 'Extraire le son',

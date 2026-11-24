@@ -180,6 +180,97 @@ fn overlay_filter(p: &Program, sh: &Shape) -> String {
     format!("scale=w={bw}:h={h}:force_original_aspect_ratio=decrease,format=rgba,pad={w}:{h}:{x}:{y}:color=black@0,format=yuva420p")
 }
 
+/// The default image (no image chosen): on a dark ground, « Le direct reprend dans un instant »
+/// spaced out between two rules, the source's name big (two lines at most), three dots under it.
+/// FFmpeg's input and filter, and the text files it reads (to remove after).
+fn default_slate(dir: &Path, name: &str, w: u32, h: u32) -> (Vec<String>, String, Vec<PathBuf>) {
+    let (wf, hf) = (w as f64, h as f64);
+    // The name: one line, else two smaller (cut at a space), cut short beyond.
+    let lines = name_lines(name);
+    let size = (wf * if lines.len() > 1 { 0.055 } else { 0.07 }).round();
+    let line_h = size * 1.12;
+    let block = line_h * lines.len() as f64;
+    let top = hf * 0.51 - block / 2.0;
+    let small = (wf * 0.017).round().max(10.0);
+    let gap = hf * 0.045;
+    // The phrase in spaced capitals; the rules around it (the same width each side: it stays centred).
+    let spaced = "LE DIRECT REPREND DANS UN INSTANT".split(' ').map(|word| word.chars().map(String::from).collect::<Vec<_>>().join("\u{2009}")).collect::<Vec<_>>().join("   ");
+    let rule = "\u{2500}".repeat(7);
+    let mut files = Vec::new();
+    let mut file = |text: &str| {
+        let f = dir.join(format!("program-{}.txt", rand_key()));
+        let _ = std::fs::write(&f, text);
+        let s = f.to_string_lossy().replace('\\', "/").replace(':', "\\\\:").replace('\'', "");
+        files.push(f);
+        s
+    };
+    let ruled = file(&format!("{rule}    {spaced}    {rule}"));
+    let phrase = file(&spaced);
+    let named = file(&lines.join("\n"));
+    let dot = file("\u{25CF}");
+    let py = top - gap - small;
+    let dy = top + block + gap;
+    let ds = (wf * 0.012).round().max(6.0);
+    let step = wf * 0.021;
+    // The bold one by its file (a font's name cannot say its weight to FFmpeg); else the regular one.
+    let regular = "font='DejaVu Sans'".to_string();
+    let bold = Some(Path::new(BOLD)).filter(|p| p.is_file()).map_or_else(|| regular.clone(), |p| format!("fontfile='{}'", p.display()));
+    let text = |f: &str, font: &str, color: &str, size: f64, x: &str, y: f64| format!("drawtext=textfile='{f}':{font}:fontcolor={color}:fontsize={size}:x={x}:y={y:.0}");
+    let filter = [
+        text(&ruled, &regular, "0x3a4058", small, "(w-tw)/2", py),
+        text(&phrase, &regular, "0x9aa1bb", small, "(w-tw)/2", py),
+        format!("{}:text_align=C:line_spacing={:.0}", text(&named, &bold, "white", size, "(w-tw)/2", top), line_h - size),
+        text(&dot, &regular, "0x8fa3ff@0.9", ds, &format!("(w-tw)/2-{step:.0}"), dy),
+        text(&dot, &regular, "0x8fa3ff@0.55", ds, "(w-tw)/2", dy),
+        text(&dot, &regular, "0x8fa3ff@0.25", ds, &format!("(w-tw)/2+{step:.0}"), dy),
+    ]
+    .join(",");
+    let input = ["-f", "lavfi", "-i", &format!("gradients=s={w}x{h}:c0=0x111420:c1=0x07080d:x0=0:y0=0:x1=0:y1={h}:nb_colors=2:speed=0.00001")].map(String::from).to_vec();
+    (input, filter, files)
+}
+
+/// DejaVu Sans Bold (fonts-dejavu-core, as the install script puts it).
+const BOLD: &str = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+
+/// The source's name on one line, or two (cut at a space), cut short beyond.
+fn name_lines(name: &str) -> Vec<String> {
+    const ONE: usize = 19;
+    const TWO: usize = 23;
+    let name = name.trim();
+    if name.chars().count() <= ONE {
+        return vec![name.to_string()];
+    }
+    let mut first = String::new();
+    let mut rest = Vec::new();
+    for word in name.split_whitespace() {
+        if rest.is_empty() && first.chars().count() + word.chars().count() + usize::from(!first.is_empty()) <= TWO {
+            if !first.is_empty() {
+                first.push(' ');
+            }
+            first.push_str(word);
+        } else {
+            rest.push(word);
+        }
+    }
+    // A first word too long: cut.
+    if first.is_empty() {
+        let all: Vec<char> = name.chars().collect();
+        let second: String = all[TWO..].iter().collect();
+        return vec![all[..TWO].iter().collect(), cut(&second, TWO)];
+    }
+    let second = rest.join(" ");
+    if second.is_empty() { vec![first] } else { vec![first, cut(&second, TWO)] }
+}
+
+/// A text cut to `n` characters, an ellipsis ending it when cut.
+fn cut(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n - 1).collect::<String>().trim_end())
+    }
+}
+
 /// A raw picture made by FFmpeg (one frame, YUVA 4:2:0), or none.
 async fn render(ffmpeg: &str, input: &[String], filter: &str, sh: &Shape) -> Option<Vec<u8>> {
     let mut cmd = Command::new(ffmpeg);
@@ -468,13 +559,11 @@ impl Programs {
                 render(ffmpeg, &input, &format!("scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=0x0b0e16,setsar=1"), sh).await
             }
             None => {
-                let text = self.data_dir.join(format!("program-{}.txt", rand_key()));
-                let _ = std::fs::write(&text, format!("{name}\nLe direct reprend dans un instant"));
-                let file = text.to_string_lossy().replace('\\', "/").replace(':', "\\\\:").replace('\'', "");
-                let size = (h / 16).max(16);
-                let input = ["-f", "lavfi", "-i", &format!("color=c=0x0b0e16:s={w}x{h}")].map(String::from).to_vec();
-                let made = render(ffmpeg, &input, &format!("drawtext=textfile='{file}':fontcolor=white:fontsize={size}:line_spacing={}:x=(w-tw)/2:y=(h-th)/2", size / 2), sh).await;
-                let _ = std::fs::remove_file(&text);
+                let (input, filter, files) = default_slate(&self.data_dir, name, w, h);
+                let made = render(ffmpeg, &input, &filter, sh).await;
+                for f in files {
+                    let _ = std::fs::remove_file(f);
+                }
                 made
             }
         };
@@ -600,6 +689,36 @@ mod tests {
 
     fn shape(tracks: usize) -> Shape {
         Shape { w: 1920, h: 1080, rate: Rate { num: 25, den: 1 }, tracks, kbps: 8000 }
+    }
+
+    #[test]
+    fn default_slate_is_made() {
+        // FFmpeg there (a build server may lack it): the picture made, kept where SC_SLATE_PNG says.
+        if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("slate-{}", rand_key()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (k, name) in ["France Inter", "Assemblée nationale — séance publique"].iter().enumerate() {
+            let (input, filter, files) = default_slate(&dir, name, 1920, 1080);
+            let out = std::env::var("SC_SLATE_PNG").map(|p| format!("{p}-{k}.png")).unwrap_or_else(|_| dir.join("s.png").to_string_lossy().into_owned());
+            let st = std::process::Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error", "-y"]).args(&input).args(["-vf", &filter, "-frames:v", "1", &out]).output().unwrap();
+            assert!(st.status.success(), "{}", String::from_utf8_lossy(&st.stderr));
+            for f in files {
+                let _ = std::fs::remove_file(f);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn names_on_two_lines_at_most() {
+        assert_eq!(name_lines("France Inter"), vec!["France Inter"]);
+        assert_eq!(name_lines("Assemblée nationale — séance publique"), vec!["Assemblée nationale —", "séance publique"]);
+        let l = name_lines("Une source au nom vraiment beaucoup trop long pour tenir");
+        assert_eq!(l.len(), 2);
+        assert!(l[1].ends_with('…') && l[1].chars().count() <= 23);
+        assert_eq!(name_lines("Abcdefghijklmnopqrstuvwxyzabcdefghij").len(), 2);
     }
 
     #[test]

@@ -47,12 +47,21 @@ export function usePictures(): [Pictures | null, () => Promise<void>] {
   return [s, load];
 }
 
-/** The default picture, drawn small: the source's name on a dark picture. */
+/** The default picture (as the server makes it): « Le direct reprend dans un instant » between two rules, the source's name, three dots. */
 export function DefaultSlate({ name }: { name: string }) {
   return (
     <span className="slate-default">
+      <span className="sd-tx">
+        <i />
+        {t("The live comes back in a moment")}
+        <i />
+      </span>
       <b>{name}</b>
-      <span>{t("The live comes back in a moment")}</span>
+      <span className="sd-dots">
+        <i />
+        <i />
+        <i />
+      </span>
     </span>
   );
 }

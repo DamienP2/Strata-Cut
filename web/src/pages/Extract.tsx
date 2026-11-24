@@ -11,7 +11,6 @@ import { LoopPlayer, type RunInfo } from '../player';
 import { ClipPreview } from './ClipPreview';
 import { behind, clock, day, duration, fpsOf, parseTimecode, timecode } from '../tc';
 import { Empty } from '../ui/Empty';
-import { formatDuration } from '../ui/format';
 import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
 import { GrainCache } from '../audio';
 import type { Clip, Job, Recorder } from '../types';
@@ -605,12 +604,14 @@ function Editor({ rec }: { rec: Recorder }) {
             <video ref={videoRef} className="sc-video" playsInline />
             {hole && (
               <div className="sc-hole">
-                <VideoOff size={34} strokeWidth={1.5} />
-                <strong>{t('Not recorded')}</strong>
-                <span>
-                  {clock(hole.from, timezone).slice(0, 8)} → {clock(hole.to, timezone).slice(0, 8)} · {formatDuration((hole.to - hole.from) / 1000)}
+                <span className="sc-hole-ic">
+                  <VideoOff size={22} strokeWidth={1.6} />
                 </span>
-                <span className="sc-hole-hint">{t('Play or → goes on with the next recording.')}</span>
+                <span className="sc-hole-lb">{t('Not recorded')}</span>
+                <HoleLength ms={hole.to - hole.from} />
+                <span className="sc-hole-fr">
+                  {clock(hole.from, timezone).slice(0, 8)} → {clock(hole.to, timezone).slice(0, 8)}
+                </span>
               </div>
             )}
             {run?.audio && <Meters out={audio.out} />}
@@ -1386,5 +1387,18 @@ function Timeline(props: { rec: Recorder; pos: Mark | null; playing: boolean; fp
         {pos && x(pos.wall) >= 0 && x(pos.wall) <= 100 && <div className="sc-head" style={{ left: `${x(pos.wall)}%` }} />}
       </div>
     </div>
+  );
+}
+
+/** A period not recorded, big: m:ss min (h:mm h beyond an hour; s under a minute). */
+function HoleLength({ ms }: { ms: number }) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const two = (n: number) => String(n).padStart(2, '0');
+  const [v, unit] = s < 60 ? [String(s), 's'] : s < 3600 ? [`${Math.floor(s / 60)}:${two(s % 60)}`, 'min'] : [`${Math.floor(s / 3600)}:${two(Math.floor(s / 60) % 60)}`, 'h'];
+  return (
+    <span className="sc-hole-du">
+      {v}
+      <small>{unit}</small>
+    </span>
   );
 }
