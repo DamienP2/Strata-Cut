@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
-import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Settings, Square } from 'lucide-react';
+import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Square } from 'lucide-react';
 import { useDisplayPref } from '../displayPrefs';
 import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tc, tn } from '../i18n';
@@ -26,7 +26,7 @@ import { confirmDialog } from '../ui/dialogs';
 import { SourceGroups } from '../ui/SourceGroups';
 import { usePageTools } from '../ui/PageTools';
 import { Mixer, ProgramLayer, SettingsModal, useProgram, type Tab } from './StreamerProgram';
-import { AirOverlay, Bank, Passage, ReadyWindow, useNext } from './StreamerPass';
+import { ControlBar, ReadyWindow, useNext } from './StreamerPass';
 
 /** A message of the server, translated: whole, or its known beginning and what follows (FFmpeg's words). */
 function said(m: string): string {
@@ -66,14 +66,14 @@ export function Streamer({ source }: { source?: string }) {
           ) : null;
         }}
       />
-      {rec ? <Center key={rec.id} rec={rec} streams={streams.filter((s) => s.source === rec.id)} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
+      {rec ? <Center key={rec.id} rec={rec} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
       <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} streams={streams} failed={all.filter((s) => s.state === 'failed')} />}</aside>
     </section>
   );
 }
 
 /** The programme of the source: the picture as it goes out, what is on air, the sound. */
-function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
+function Center({ rec }: { rec: Recorder }) {
   const { st, timezone } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone })));
   const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const prog = useProgram(rec.id);
@@ -82,35 +82,35 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   const [wall, setWall] = useState<number | null>(null);
   const [settings, setSettings] = useState<Tab | null>(null);
   const [next, setNext] = useNext(prog);
-  // Each « Passer » (its ring turns while the fade goes).
+  // Each passage (AUTO's button fills while its fade goes).
   const [passing, setPassing] = useState(0);
-  const pass = () => {
+  const pass = (cut: boolean) => {
     const p = prog.state?.program;
     if (!p || !next || !run) return;
+    const same = (a: number, b: number) => Math.abs(a - b) < 1e-4;
+    if (next.image === p.imageOn && (!p.overlay || (same(next.overlay.x, p.x) && same(next.overlay.y, p.y) && same(next.overlay.size, p.size)))) return;
     const was = p.imageOn;
-    // The overlay stays on or off as it is on air (that is said under the window on air).
-    prog.pass({ ...next, overlay: { ...next.overlay, on: p.overlayOn } });
+    // The overlay stays on or off as it is on air (its switch says that).
+    prog.pass({ ...next, overlay: { ...next.overlay, on: p.overlayOn } }, cut);
     setPassing((n) => n + 1);
-    // What was on air comes back on the left: a second « Passer » goes back.
+    // What was on air comes back on the left: a second passage goes back.
     setNext({ ...next, image: was });
   };
   const passRef = useRef(pass);
   passRef.current = pass;
-  // Space: « Passer » (not while writing, nor while piloting a page).
+  // Space: AUTO; Enter: CUT (not while writing, nor in a window, nor while piloting a page).
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (e.code !== 'Space' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      if ((e.code !== 'Space' && e.key !== 'Enter') || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
-      if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(el.tagName))) return;
+      if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(el.tagName))) return;
       if (document.querySelector('.modal-back')) return;
       e.preventDefault();
-      passRef.current();
+      passRef.current(e.key === 'Enter');
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
   }, []);
-  // On air since the first live of the source that is live.
-  const since = streams.reduce<number | null>((a, s) => (s.state === 'live' && s.liveSince && (!a || s.liveSince < a) ? s.liveSince : a), null);
   const player = useRef<LoopPlayer | null>(null);
   // The moment the picture shows (server ms): the meters show the sound of that moment.
   // The timestamp of the frame shown (the source's, ms): the meters show its sound.
@@ -187,15 +187,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
     <div className="sc-center pg-center">
       {page.bar && <div className="ps-bar">{page.bar}</div>}
       <div className="ps-duo">
-        <div className="ps-col">
-          {prog.state && next && (
-            <>
-              <ReadyWindow rec={rec} prog={prog} next={next} setNext={setNext} video={video} received={received} editable={run} />
-              <Bank rec={rec} prog={prog} next={next} setNext={setNext} editable={run} />
-            </>
-          )}
-        </div>
-        {prog.state && next ? <Passage prog={prog} next={next} onPass={pass} editable={run} passing={passing} /> : <div />}
+        <div className="ps-col">{prog.state && next && <ReadyWindow rec={rec} prog={prog} next={next} setNext={setNext} video={video} received={received} editable={run} />}</div>
         <div className="ps-col">
           <div className="ps-win air">
             <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
@@ -203,25 +195,9 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
             {received && page.mode === 'view' && <ProgramLayer rec={rec} prog={prog} />}
             {page.over}
           </div>
-          {page.below ?? (
-            <>
-              <div className="ps-under">
-                <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
-                {since && (
-                  <span className="ps-since" data-tip={t('On air since')}>
-                    {clockOf(serverNow() - since)}
-                  </span>
-                )}
-                <span className="spacer" />
-                <button type="button" className="icon-btn ghost" data-tip={t('Settings')} aria-label={t('Settings')} onClick={() => setSettings('image')}>
-                  <Settings size={15} />
-                </button>
-              </div>
-              {prog.state && next && <AirOverlay prog={prog} next={next} setNext={setNext} editable={run} onSettings={() => setSettings('overlay')} />}
-            </>
-          )}
         </div>
       </div>
+      {page.below ?? (prog.state && next && <ControlBar rec={rec} prog={prog} next={next} setNext={setNext} editable={run} passing={passing} onPass={pass} clock={wall ? timecode(wall, fps, timezone) : '--:--:--:--'} onSettings={setSettings} />)}
       <Mixer rec={rec} prog={prog} shown={() => shown.current} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, solo, setSolo, heard }} />
       {settings && createPortal(<SettingsModal rec={rec} prog={prog} initial={settings} onClose={() => setSettings(null)} />, document.body)}
     </div>

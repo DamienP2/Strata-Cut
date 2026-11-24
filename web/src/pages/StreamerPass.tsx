@@ -1,12 +1,12 @@
 /*
  * Streamer: what goes on air next. Two windows side by side — on the left what is made ready (the
- * source or the image; the overlay placed on it), on the right what is on air (the overlay put on
- * or taken off under it) — and between them the passage: CUT or AUTO (a fade, its length), Space.
- * What was on air comes back on the left: a second passage goes back.
+ * source or the image; the overlay placed on it), on the right what is on air — and one bar under
+ * them: what comes next, CUT (Enter) or AUTO (Space, a fade of the length chosen), the overlay on
+ * air or not, the timecode. What was on air comes back on the left: a second passage goes back.
  */
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Move } from "lucide-react";
-import { t } from "../i18n";
+import { Move, Settings } from "lucide-react";
+import { t, tc } from "../i18n";
 import { Switch } from "../settings/ui";
 import type { Recorder } from "../types";
 import { DefaultSlate, pictureUrl } from "./StreamerSlate";
@@ -119,76 +119,63 @@ export function ReadyWindow({ rec, prog, next, setNext, video, received, editabl
   );
 }
 
-/** What can be made ready: the source, the image. */
-export function Bank({ rec, prog, next, setNext, editable }: { rec: Recorder; prog: ProgramApi; next: Next; setNext: (n: Next) => void; editable: boolean }) {
+/** Under the two windows, one bar: what comes next, CUT and AUTO (its length), the overlay on air, the timecode. */
+export function ControlBar({ rec, prog, next, setNext, editable, passing, onPass, clock, onSettings }: { rec: Recorder; prog: ProgramApi; next: Next; setNext: (n: Next) => void; editable: boolean; passing: number; onPass: (cut: boolean) => void; clock: string; onSettings: (tab: "image" | "overlay") => void }) {
   const p = prog.state!.program;
   const [tick, setTick] = useState(0);
   useEffect(() => {
     const i = window.setInterval(() => setTick((n) => n + 1), 2000);
     return () => window.clearInterval(i);
   }, []);
-  const key = (image: boolean, name: string, pic: ReactNode) => (
-    <button type="button" className={`ps-key ${next.image === image ? "next" : ""}`} disabled={!editable} onClick={() => setNext({ ...next, image })}>
+  const nothing = changes(prog, next).length === 0;
+  const input = (image: boolean, name: string, pic: ReactNode) => (
+    <button type="button" className={`ps-inp ${next.image === image ? "next" : ""}`} disabled={!editable} onClick={() => setNext({ ...next, image })}>
       <span className="ps-th">{pic}</span>
-      <span className="ps-nm">{name}</span>
+      {name}
     </button>
   );
-  return (
-    <div className="ps-bank">
-      {key(false, t("Source"), <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${tick}`} alt="" onError={(e) => (e.currentTarget.style.visibility = "hidden")} />)}
-      {key(true, t("Image"), p.image ? <img src={pictureUrl(p.image)} alt="" /> : <DefaultSlate name={rec.name} />)}
-    </div>
-  );
-}
-
-/** Between the windows: a cut or a fade (its length), « Passer » and what it would change. */
-export function Passage({ prog, next, onPass, editable, passing }: { prog: ProgramApi; next: Next; onPass: () => void; editable: boolean; passing: number }) {
-  const p = prog.state!.program;
-  const what = changes(prog, next);
-  return (
-    <div className="ps-pass">
-      <div className="ps-vseg" role="radiogroup">
-        <button type="button" className={!p.fadeOn ? "on" : ""} disabled={!editable} onClick={() => prog.set({ fadeOn: false })}>
-          {t("Cut")}
-        </button>
-        <button type="button" className={p.fadeOn ? "on" : ""} disabled={!editable} onClick={() => prog.set({ fadeOn: true })}>
-          {t("Fade")}
-        </button>
-      </div>
-      <div className={`ps-dur ${p.fadeOn ? "" : "off"}`}>
-        {DURATIONS.map((d) => (
-          <button key={d} type="button" className={same(p.fadeSecs, d) ? "on" : ""} disabled={!editable || !p.fadeOn} onClick={() => prog.set({ fadeSecs: d })}>
-            {secs(d)}
-          </button>
-        ))}
-      </div>
-      <button type="button" className="ps-take" disabled={!editable || what.length === 0} onClick={onPass} data-tip={t("Space")}>
-        {passing > 0 && (
-          <svg key={passing} viewBox="0 0 88 88" aria-hidden="true">
-            <circle cx="44" cy="44" r="42" style={{ animationDuration: `${prog.lastFade}s` }} />
-          </svg>
-        )}
-        <span>{p.fadeOn ? "AUTO" : "CUT"}</span>
-      </button>
-    </div>
-  );
-}
-
-/** Under the window on air: the overlay put on or taken off (on air at once, by the transition chosen), its settings. */
-export function AirOverlay({ prog, next, setNext, editable, onSettings }: { prog: ProgramApi; next: Next; setNext: (n: Next) => void; editable: boolean; onSettings: () => void }) {
-  const p = prog.state!.program;
   const on = p.overlayOn && !!p.overlay;
-  const toggle = (want: boolean) => {
-    // It goes on where it was placed on the left; what else is on air stays.
+  // The overlay on air or not, at once (by AUTO's fade), where it was placed on the left.
+  const overlay = (want: boolean) => {
     const n = { ...next, overlay: { ...next.overlay, on: want } };
     setNext(n);
-    prog.pass({ image: p.imageOn, overlay: n.overlay });
+    prog.pass({ image: p.imageOn, overlay: { ...n.overlay, ...(want ? {} : { x: p.x, y: p.y, size: p.size }) } }, false);
   };
   return (
-    <div className="ps-ovlrow">
-      <Switch checked={on} disabled={!editable || !p.overlay} onChange={toggle} label={t("Overlay")} />
-      <button type="button" className="icon-btn ghost" data-tip={t("Overlay settings")} aria-label={t("Overlay settings")} onClick={onSettings}>
-        <Move size={14} />
+    <div className="ps-cbar">
+      <div className="ps-grp">
+        <small>{tc("streamer", "Next")}</small>
+        {input(false, t("Source"), <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${tick}`} alt="" onError={(e) => (e.currentTarget.style.visibility = "hidden")} />)}
+        {input(true, t("Image"), p.image ? <img src={pictureUrl(p.image)} alt="" /> : <DefaultSlate name={rec.name} />)}
+      </div>
+      <span className="ps-vsep" />
+      <div className="ps-grp">
+        <button type="button" className="ps-tbtn" disabled={!editable || nothing} data-tip={t("Enter")} onClick={() => onPass(true)}>
+          CUT
+        </button>
+        <button type="button" className="ps-tbtn auto" disabled={!editable || nothing} data-tip={t("Space")} onClick={() => onPass(false)}>
+          {passing > 0 && prog.lastFade > 0 && <i key={passing} className="ps-fill" style={{ animationDuration: `${prog.lastFade}s` }} />}
+          <span>AUTO</span>
+        </button>
+        <span className="ps-dur">
+          {DURATIONS.map((d) => (
+            <button key={d} type="button" className={same(p.fadeSecs, d) ? "on" : ""} disabled={!editable} onClick={() => prog.set({ fadeSecs: d })}>
+              {secs(d)}
+            </button>
+          ))}
+        </span>
+      </div>
+      <span className="ps-vsep" />
+      <div className="ps-grp">
+        <Switch checked={on} disabled={!editable || !p.overlay} onChange={overlay} label={t("Overlay")} />
+        <button type="button" className="icon-btn ghost" data-tip={t("Overlay settings")} aria-label={t("Overlay settings")} onClick={() => onSettings("overlay")}>
+          <Move size={14} />
+        </button>
+      </div>
+      <span className="spacer" />
+      <span className="pg-tc">{clock}</span>
+      <button type="button" className="icon-btn ghost" data-tip={t("Settings")} aria-label={t("Settings")} onClick={() => onSettings("image")}>
+        <Settings size={15} />
       </button>
     </div>
   );

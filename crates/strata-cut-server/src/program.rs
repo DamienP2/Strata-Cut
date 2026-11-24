@@ -63,9 +63,9 @@ pub struct Program {
     pub image: Option<String>,
     /// The image is on air (rather than the source).
     pub image_on: bool,
-    /// What is passed (the source or the image, the overlay) passes by a fade, else at once.
+    /// Kept for the settings written before CUT / AUTO (each passage now says which).
     pub fade_on: bool,
-    /// The fade's length, s.
+    /// AUTO's fade, s.
     pub fade_secs: f64,
     /// The overlay (a PNG of the Streamer's overlays), and whether it is on air.
     pub overlay: Option<String>,
@@ -622,6 +622,9 @@ struct Take {
     image: bool,
     /// The overlay as it was made ready: on air or not, where, how big.
     overlay: Option<OverlayAt>,
+    /// CUT: at once; else AUTO, by a fade of the programme's length.
+    #[serde(default)]
+    cut: bool,
 }
 
 #[derive(Deserialize)]
@@ -645,7 +648,7 @@ async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
         p.normalize().map_err(bad)?;
     }
     if p != was {
-        let secs = if p.fade_on { p.fade_secs } else { 0.0 };
+        let secs = if t.cut { 0.0 } else { p.fade_secs };
         programs.put(&source, p.clone(), secs).map_err(bad)?;
         tracing::info!("{} passes {}{} on air for {}", me.username, if t.image { "the image" } else { "the source" }, if p.overlay_on { " and the overlay" } else { "" }, rec.config().name);
     }
@@ -678,7 +681,7 @@ async fn overlay_on(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPa
     let programs = &s.streams.programs;
     let mut p = programs.get(&source);
     p.overlay_on = b.on;
-    let secs = if p.fade_on { p.fade_secs } else { 0.0 };
+    let secs = p.fade_secs;
     programs.put(&source, p.clone(), secs).map_err(bad)?;
     Ok(Json(json!(p)))
 }

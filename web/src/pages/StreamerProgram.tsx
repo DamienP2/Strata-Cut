@@ -21,7 +21,7 @@ export interface Program {
   image: string | null;
   imageOn: boolean;
   fadeOn: boolean;
-  /** The fade's length, s. */
+  /** AUTO's fade, s. */
   fadeSecs: number;
   overlay: string | null;
   overlayOn: boolean;
@@ -81,14 +81,14 @@ export function useProgram(recId: string) {
       return { ...s, program };
     });
   };
-  /** What was made ready goes on air (the source or the image, the overlay), by the transition chosen. */
-  const pass = (next: Next) => {
+  /** What was made ready goes on air (the source or the image, the overlay): CUT at once, else AUTO (a fade). */
+  const pass = (next: Next, cut: boolean) => {
     if (!state) return;
     const p = state.program;
-    setLastFade(p.fadeOn ? p.fadeSecs : 0);
+    setLastFade(cut ? 0 : p.fadeSecs);
     const o = next.overlay;
     setState({ ...state, program: { ...p, imageOn: next.image, overlayOn: o.on && !!p.overlay, x: o.x, y: o.y, size: o.size } });
-    api("POST", `/api/program/${recId}/take`, { image: next.image, overlay: o }).catch(fail);
+    api("POST", `/api/program/${recId}/take`, { image: next.image, overlay: o, cut }).catch(fail);
   };
   return { state, set, pass, lastFade };
 }

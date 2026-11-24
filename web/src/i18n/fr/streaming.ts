@@ -290,4 +290,6 @@ export const streaming: Record<string, string> = {
   'Overlay moved': 'Habillage déplacé',
   'Overlay settings': 'Réglages de l\'habillage',
   'On air since': 'À l\'antenne depuis',
+  'streamer|Next': 'Suivant',
+  Enter: 'Entrée',
 };
