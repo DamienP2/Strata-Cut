@@ -252,6 +252,82 @@ fn free_display() -> u32 {
         .unwrap_or(399)
 }
 
+/// The Xorg of the system and its dummy driver, where installed.
+const XORG: &str = "/usr/lib/xorg/Xorg";
+const DUMMY: &str = "/usr/lib/xorg/modules/drivers/dummy_drv.so";
+/// Set once Xorg did not start here: Xvfb then.
+static NO_XORG: AtomicBool = AtomicBool::new(false);
+
+/// The page's screen, ready. Xorg's dummy screen refreshes at the page's rate: the browser draws
+/// only the pictures filmed (Xvfb's, at 60 a second, draws more than twice too many at 25).
+async fn screen(page: &Page, display: u32) -> Option<tokio::process::Child> {
+    let (w, h) = (page.w, page.h);
+    let socket = format!("/tmp/.X11-unix/X{display}");
+    if !NO_XORG.load(Ordering::Relaxed) && Path::new(XORG).is_file() && Path::new(DUMMY).is_file() {
+        let conf = page.dir.join("xorg.conf");
+        let _ = std::fs::write(&conf, xorg_conf(w, h, page.rate));
+        let mut cmd = Command::new(XORG);
+        cmd.arg(format!(":{display}")).arg("-config").arg(&conf).arg("-logfile").arg(page.dir.join("xorg.log")).args(["-noreset", "-nolisten", "tcp"]);
+        if let Ok(mut c) = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).process_group(0).spawn() {
+            if appears(Path::new(&socket), 10).await {
+                return Some(c);
+            }
+            kill_group(&c);
+            let _ = c.kill().await;
+        }
+        tracing::warn!("{}: Xorg does not start here (see {}): Xvfb instead", page.name, page.dir.join("xorg.log").display());
+        NO_XORG.store(true, Ordering::Relaxed);
+        let _ = (std::fs::remove_file(format!("/tmp/.X{display}-lock")), std::fs::remove_file(&socket));
+    }
+    let mut c = Command::new("Xvfb").args([format!(":{display}"), "-screen".into(), "0".into(), format!("{w}x{h}x24"), "-nolisten".into(), "tcp".into()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).process_group(0).spawn().ok()?;
+    if appears(Path::new(&socket), 10).await {
+        return Some(c);
+    }
+    kill_group(&c);
+    let _ = c.kill().await;
+    None
+}
+
+/// Xorg's dummy screen: the page's size, refreshed at its rate.
+fn xorg_conf(w: u32, h: u32, rate: (u32, u32)) -> String {
+    let (ht, vt) = (w + 280, h + 45);
+    let clock = ht as f64 * vt as f64 * rate.0 as f64 / rate.1.max(1) as f64 / 1e6;
+    format!(
+        r#"Section "ServerFlags"
+  Option "AutoAddDevices" "false"
+  Option "AutoAddGPU" "false"
+  Option "DontVTSwitch" "true"
+EndSection
+Section "Device"
+  Identifier "dummy"
+  Driver "dummy"
+  VideoRam 256000
+EndSection
+Section "Monitor"
+  Identifier "page"
+  HorizSync 5-300
+  VertRefresh 20-100
+  Modeline "page" {clock:.3} {w} {} {} {ht} {h} {} {} {vt} +hsync +vsync
+EndSection
+Section "Screen"
+  Identifier "screen"
+  Device "dummy"
+  Monitor "page"
+  DefaultDepth 24
+  SubSection "Display"
+    Depth 24
+    Modes "page"
+    Virtual {w} {h}
+  EndSubSection
+EndSection
+"#,
+        w + 88,
+        w + 132,
+        h + 4,
+        h + 9,
+    )
+}
+
 /// Stops a process and everything it started (a browser's many processes).
 fn kill_group(c: &tokio::process::Child) {
     if let Some(pid) = c.id() {
@@ -307,13 +383,7 @@ async fn run_once(pages: &Pages, page: &Arc<Page>, stop: &mut watch::Receiver<bo
     let display = free_display();
     let (w, h) = (page.w, page.h);
     // Its screen.
-    let mut xvfb = match Command::new("Xvfb").args([format!(":{display}"), "-screen".into(), "0".into(), format!("{w}x{h}x24"), "-nolisten".into(), "tcp".into()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).process_group(0).spawn() {
-        Ok(c) => c,
-        Err(e) => return Some(format!("cannot start Xvfb (run the install script again): {e}")),
-    };
-    if !appears(Path::new(&format!("/tmp/.X11-unix/X{display}")), 10).await {
-        return Some("its screen (Xvfb) does not start".into());
-    }
+    let Some(mut xvfb) = screen(page, display).await else { return Some("its screen (Xorg or Xvfb) does not start (run the install script again)".into()) };
     // Its sound card: a sink only it plays into.
     let socket = rt.join("pulse.sock");
     let _ = std::fs::remove_file(&socket);
@@ -340,6 +410,7 @@ async fn run_once(pages: &Pages, page: &Arc<Page>, stop: &mut watch::Receiver<bo
     let mut args: Vec<String> = [
         "--kiosk", "--no-first-run", "--no-default-browser-check", "--noerrdialogs", "--disable-infobars", "--disable-session-crashed-bubble", "--hide-crash-restore-bubble",
         "--autoplay-policy=no-user-gesture-required", "--disable-features=Translate,MediaRouter,DialMediaRouteProvider", "--password-store=basic", "--disable-dev-shm-usage", "--window-position=0,0",
+        "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-default-apps", "--disable-extensions",
     ]
     .map(String::from)
     .to_vec();
@@ -388,7 +459,7 @@ async fn run_once(pages: &Pages, page: &Arc<Page>, stop: &mut watch::Receiver<bo
     let film = film(pages, page, display, &socket, audio_port);
     let watch_cast = tokio::spawn(cast(page.clone(), cdp.clone()));
     let why = tokio::select! {
-        s = xvfb.wait() => Some(format!("its screen (Xvfb) stopped: {s:?}")),
+        s = xvfb.wait() => Some(format!("its screen stopped: {s:?}")),
         s = async { match pulse.as_mut() { Some(p) => p.wait().await, None => std::future::pending().await } } => Some(format!("its sound card (PulseAudio) stopped: {s:?}")),
         s = chrome.wait() => Some(format!("the browser stopped: {s:?}")),
         r = film => Some(r),
@@ -424,7 +495,7 @@ async fn film(pages: &Pages, page: &Arc<Page>, display: u32, socket: &Path, audi
     }
     enc.args(["-thread_queue_size", "64", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", &format!("{w}x{h}"), "-framerate", &rate, "-i", "pipe:0"]);
     let k = page.kbps;
-    enc.args(["-map", "1:v", "-map", "0:a", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string(), "-c:a", "aac", "-b:a", "160k", "-f", "mpegts"]);
+    enc.args(["-map", "1:v", "-map", "0:a", "-c:v", "libx264", "-preset", "superfast", "-pix_fmt", "yuv420p", "-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string(), "-c:a", "aac", "-b:a", "160k", "-f", "mpegts"]);
     enc.arg(format!("udp://127.0.0.1:{}?pkt_size=1316", page.port));
     enc.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut enc = match enc.spawn() {
@@ -986,6 +1057,13 @@ mod tests {
         let c = clamp(Crop { x: 1800.0, y: 900.0, w: 960.0 }, 1920, 1080);
         assert_eq!(c, Crop { x: 960.0, y: 540.0, w: 960.0 });
         assert_eq!(clamp(Crop { x: 0.0, y: 0.0, w: 10.0 }, 1920, 1080).w, 480.0);
+    }
+
+    #[test]
+    fn xorg_at_the_page_rate() {
+        let c = xorg_conf(1920, 1080, (25, 1));
+        assert!(c.contains(r#"Modeline "page" 61.875 1920 2008 2052 2200 1080 1084 1089 1125"#), "{c}");
+        assert!(xorg_conf(1280, 720, (60000, 1001)).contains(r#"Modeline "page" 71.532 1280"#));
     }
 
     #[test]

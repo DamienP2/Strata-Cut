@@ -364,8 +364,9 @@ else
   # (Desktop Video) et FFmpeg encode leurs images ; lspci les montre même sans pilote.
   APT_LIGHT=1 apt_install pciutils
   desktop_video
-  # Sources « page web » : un navigateur sur un écran virtuel, avec sa carte son.
-  APT_LIGHT=1 apt_install xvfb pulseaudio fonts-noto-core fonts-noto-color-emoji
+  # Sources « page web » : un navigateur sur un écran virtuel (Xorg « dummy », à la cadence de la
+  # source ; Xvfb sinon), avec sa carte son.
+  APT_LIGHT=1 apt_install xserver-xorg-core xserver-xorg-video-dummy xvfb pulseaudio fonts-noto-core fonts-noto-color-emoji
   if command -v google-chrome-stable >/dev/null || command -v chromium >/dev/null || command -v chromium-browser >/dev/null; then
     ok "navigateur des pages web en place"
   elif [ "$(dpkg --print-architecture)" = amd64 ]; then
