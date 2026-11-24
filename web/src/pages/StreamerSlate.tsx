@@ -10,6 +10,7 @@ import { Check, Plus, Trash2 } from "lucide-react";
 import { t } from "../i18n";
 import { api, useApp, useChanged } from "../store";
 import { confirmDialog } from "../ui/dialogs";
+import { showError } from "../ui/serverError";
 
 export interface Picture {
   id: string;
@@ -132,7 +133,7 @@ export function Gallery({
       if (chosen === img.id) await onChoose(null);
       await reload();
     } catch (e) {
-      toast(t((e as Error).message), "error");
+      showError(e);
     }
   };
 

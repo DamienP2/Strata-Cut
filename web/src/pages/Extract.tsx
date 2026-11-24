@@ -19,6 +19,7 @@ import { Transport, useTransportKeys, type TransportActs } from '../ui/Transport
 import { usePageTools } from '../ui/PageTools';
 import { ClipFormat, DEFAULT_FORMAT, FORMATS, sizeText, useClipsFree, weightOf, type ClipKind } from '../ui/ClipFormat';
 import { confirmDialog } from '../ui/dialogs';
+import { showError } from '../ui/serverError';
 
 /** A marked frame: its run, its source time and its server time. */
 interface Mark {
@@ -156,7 +157,6 @@ function Editor({ rec }: { rec: Recorder }) {
   const pendingMark = useRef<{ which: 'in' | 'out'; wall: number } | null>(null);
   /** What the clip holds: the picture with its sound, the sound alone, the picture under the playhead. */
   const [kind, setKind] = useDisplayPref<'video' | 'audio' | 'image'>('extract.kind', 'video');
-  // The source's subtitles burnt into a video clip (when it has some).
   const [clips, setClips] = useState<Clip[]>([]);
   const [guide, setGuide] = useState<Programme[]>([]);
   const fps = fpsOf(run?.media?.fpsNum, run?.media?.fpsDen);
@@ -440,7 +440,7 @@ function Editor({ rec }: { rec: Recorder }) {
       setOut(null);
       setName('');
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   // The guide for the right panel: on air first, then what was recorded (newest first), then what comes.
@@ -466,7 +466,7 @@ function Editor({ rec }: { rec: Recorder }) {
       await api('POST', '/api/schedules', { recorder: rec.id, name: g.name, date: day, days: [], start: clock(g.start, timezone).slice(0, 5), end: clock(g.end, timezone).slice(0, 5) });
       toast(t('Recording of “{name}” programmed', { name: g.name }));
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   const markIn = () => pos && !hole && setIn(pos);
@@ -574,7 +574,7 @@ function Editor({ rec }: { rec: Recorder }) {
         await api('POST', '/api/clips', { recorder: rec.id, run: pos.run, t: pos.t, frames: 1, kind, format, name: name.trim() || `${rec.name} ${timecode(pos.wall, fps, timezone)}` });
         setName('');
       } catch (e) {
-        toast(t((e as Error).message), 'error');
+        showError(e);
       }
       return;
     }
@@ -587,7 +587,7 @@ function Editor({ rec }: { rec: Recorder }) {
       setOut(null);
       setName('');
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
 
@@ -936,7 +936,6 @@ function MarkTag({ kind, mark, fps, timezone, onType, onClear, onMark }: { kind:
  */
 /** The extraction button, on two floors: the format (`top`) over the action and the clip's weight; while clips are made, their progress. */
 function ExtractButton({ jobs, recId, canCut, onCut, kind, top, weight }: { jobs: Job[]; recId: string; canCut: boolean; onCut: () => void; kind: 'video' | 'audio' | 'image'; top: React.ReactNode; weight: { text: string; over: boolean } }) {
-  const toast = useApp((s) => s.toast);
   const [open, setOpen] = useState(false);
   const closing = useRef(0);
   // When each job was first seen running and how far: the time left from its pace.
@@ -962,7 +961,7 @@ function ExtractButton({ jobs, recId, canCut, onCut, kind, top, weight }: { jobs
     try {
       await api('DELETE', `/api/jobs/${j.id}`);
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   const left = (j: Job) => {

@@ -50,10 +50,7 @@ export const common: Record<string, string> = {
   // Shortcuts
   'key|Shift': 'Maj',
   'key|Space': 'Espace',
-  'Play / pause': 'Lecture / pause',
-  'Play backwards': 'Lecture arrière',
   Pause: 'Pause',
-  'Play forwards': 'Lecture avant',
   'Previous frame': 'Image précédente',
   'Next frame': 'Image suivante',
   'Set the in point': 'Point d’entrée',
@@ -86,6 +83,7 @@ export const common: Record<string, string> = {
   TB: 'To',
   PB: 'Po',
   '{d}d {h}h': '{d} j {h} h',
+  '{n} d': '{n} j',
   '{h}h {m}m': '{h} h {m} min',
   '{m}m {s}s': '{m} min {s} s',
   '{s}s': '{s} s',

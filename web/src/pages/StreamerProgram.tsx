@@ -12,6 +12,7 @@ import { api, can, useApp, useChanged } from "../store";
 import type { Recorder } from "../types";
 import { DefaultSlate, Gallery, pictureUrl } from "./StreamerSlate";
 import { trackLabel } from "../audioLabel";
+import { showError } from "../ui/serverError";
 
 export interface Track {
   on: boolean;
@@ -50,7 +51,6 @@ const trackOf = (p: Program, k: number): Track => p.tracks[k] ?? { on: k === 0, 
 
 /** The programme of a source: read, changed (sent a moment after the last change), switched. */
 export function useProgram(recId: string) {
-  const toast = useApp((s) => s.toast);
   const [state, setState] = useState<ProgramState | null>(null);
   // The fade of the last switch (s; 0: at once), for the picture.
   const [lastFade, setLastFade] = useState(0);
@@ -67,7 +67,7 @@ export function useProgram(recId: string) {
     if (!timer.current) void load();
   });
   const fail = (e: unknown) => {
-    toast(t((e as Error).message), "error");
+    showError(e);
     void load();
   };
   const set = (patch: Partial<Program>) => {
@@ -230,8 +230,6 @@ export interface Monitor {
   /** The track heard alone (solo), or none: the output. */
   solo: number | null;
   setSolo: (k: number | null) => void;
-  /** The track played (the solo, else the first on). */
-  heard: number;
 }
 
 /** A vertical fader. */
@@ -394,11 +392,6 @@ export type Tab = "image" | "overlay";
 export function PicturesModal({ rec, prog, use, onClose, onPlace }: { rec: Recorder; prog: ProgramApi; use: Tab; onClose: () => void; onPlace: (p: { x: number; y: number; size: number }) => void }) {
   const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
   const width = useApp((s) => s.status[rec.id]?.media?.width) || 1920;
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [onClose]);
   if (!prog.state) return null;
   const p = prog.state.program;
   // The overlay at its own size (its pixels on the programme's), or in the middle.

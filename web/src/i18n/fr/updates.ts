@@ -1,6 +1,5 @@
 // French texts of the Updates page.
 export const updates: Record<string, string> = {
-  Updates: 'Mises à jour',
   'Check now': 'Vérifier maintenant',
   Installed: 'Installée',
   'Checking…': 'Vérification…',

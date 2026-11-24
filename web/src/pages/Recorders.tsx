@@ -14,8 +14,9 @@ import { NumberField, Segmented } from '../ui/fields';
 import { Field } from '../settings/ui';
 import { InfoTip } from '../ui/InfoTip';
 import type { Protocol, Recorder, RecorderStatus } from '../types';
-import { clockOf, useStreams, type StreamInfo } from '../streams';
+import { clockOf, MASKED, useStreams, type StreamInfo } from '../streams';
 import { explainGuard } from '../ui/guard';
+import { showError } from '../ui/serverError';
 
 const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'udp', label: 'UDP', detail: 'udp://' },
@@ -68,7 +69,6 @@ export function platformOf(url: string): string {
 const PLATFORM_NAME: Record<string, string> = { youtube: 'YouTube', facebook: 'Facebook', instagram: 'Instagram', x: 'X', linkedin: 'LinkedIn', web: 'Web' };
 /** The badge on a recorder's picture: the protocol, or the platform of a web page. */
 const badge = (r: Recorder) => (r.protocol === 'web' ? PLATFORM_NAME[platformOf(r.url)] : r.protocol === 'decklink' ? 'DeckLink' : r.protocol.toUpperCase());
-const MASKED = '••••••••';
 
 const CODECS: Record<string, string> = { h264: 'H.264', hevc: 'HEVC', mpeg2video: 'MPEG-2', mpeg4: 'MPEG-4', prores: 'ProRes', dnxhd: 'DNxHD' };
 
@@ -261,7 +261,7 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
     try {
       await api('POST', `/api/recorders/${rec.id}/recording`, { mode });
     } catch (e) {
-      if (!explainGuard(e)) toast(t((e as Error).message), 'error');
+      if (!explainGuard(e)) showError(e);
     }
   };
   const clearLoop = async () => {
@@ -270,7 +270,7 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
       await api('POST', `/api/recorders/${rec.id}/clear`);
       toast(t('Loop emptied'));
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   const remove = async () => {
@@ -278,7 +278,7 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
     try {
       await api('DELETE', `/api/recorders/${rec.id}`);
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
     void reloadRecorders();
   };
@@ -425,7 +425,7 @@ interface Space {
 }
 
 function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; from?: Recorder; preset?: Partial<Recorder>; onClose: () => void }) {
-  const { recorders, toast, status } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast, status: s.status })));
+  const { recorders, status } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status })));
   const [space, setSpace] = useState<Space | null>(null);
   useEffect(() => {
     api<Space>('GET', '/api/storage').then(setSpace, () => setSpace(null));
@@ -507,12 +507,12 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
           else if (logo.url) await api('POST', `/api/recorders/${id}/logo/url`, { url: logo.url });
           else if (logo.remove) await api('DELETE', `/api/recorders/${id}/logo`);
         } catch (e) {
-          toast(t((e as Error).message), 'error');
+          showError(e);
         }
       }
       onClose();
     } catch (e) {
-      if (!explainGuard(e)) toast(t((e as Error).message), 'error');
+      if (!explainGuard(e)) showError(e);
     } finally {
       setBusy(false);
       void reloadRecorders();
@@ -923,12 +923,10 @@ function InputPreview({ device, connection, mode, onFormat }: { device: number; 
 
 /** A recorder's still, every 3 s. */
 function RecorderThumb({ id }: { id: string }) {
-  const [n, setN] = useState(0);
+  const n = useTick(3000);
   const [ok, setOk] = useState(true);
-  useEffect(() => {
-    const i = setInterval(() => setN((x) => x + 1), 3000);
-    return () => clearInterval(i);
-  }, []);
+  // Tried again at each tick (the picture may come later).
+  useEffect(() => setOk(true), [n]);
   return (
     <div className="sc-dlprev">
       <div className="sc-dlprev-pic">

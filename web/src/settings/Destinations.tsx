@@ -6,7 +6,6 @@
  */
 import { useState } from 'react';
 import { AlertTriangle, Check, Eye, EyeOff, MoreHorizontal, Pencil, Plug, Plus, Radio, Trash2, X } from 'lucide-react';
-import { useShallow } from 'zustand/react/shallow';
 import { api, serverNow, useApp } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { PageHead } from '../pages/SidePage';
@@ -16,6 +15,7 @@ import { confirmDialog } from '../ui/dialogs';
 import { openContextMenu } from '../ui/ContextMenu';
 import { Field } from './ui';
 import { blankDestination, clockOf, MASKED, mbps, useDestinations, useStreams, type DestProtocol, type Destination, type StreamInfo } from '../streams';
+import { showError } from '../ui/serverError';
 
 export const PROTO_LABEL: Record<DestProtocol, string> = { rtmp: 'RTMP', rtmps: 'RTMPS', srt: 'SRT' };
 const PLACEHOLDER: Record<DestProtocol, string> = { rtmp: 'rtmp://live.example.com/app', rtmps: 'rtmps://live.example.com:443/app', srt: 'srt://encoder.example.com:9000' };
@@ -77,7 +77,6 @@ export function Destinations() {
 }
 
 function DestCard({ d, stream, sourceName, onEdit }: { d: Destination; stream?: StreamInfo; sourceName: (id: string) => string; onEdit: () => void }) {
-  const toast = useApp((s) => s.toast);
   const [test, setTest] = useState<{ busy: boolean; ok?: boolean; text?: string }>({ busy: false });
   const live = stream?.state === 'live';
   const run = async () => {
@@ -94,7 +93,7 @@ function DestCard({ d, stream, sourceName, onEdit }: { d: Destination; stream?: 
     try {
       await api('DELETE', `/api/destinations/${d.id}`);
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   return (
@@ -173,7 +172,6 @@ function DestCard({ d, stream, sourceName, onEdit }: { d: Destination; stream?: 
 }
 
 function DestModal({ dest, onClose }: { dest: Destination; onClose: () => void }) {
-  const toast = useApp(useShallow((s) => s.toast));
   const [d, setD] = useState<Destination>(dest);
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
@@ -186,7 +184,7 @@ function DestModal({ dest, onClose }: { dest: Destination; onClose: () => void }
       else await api('POST', '/api/destinations', d);
       onClose();
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     } finally {
       setBusy(false);
     }

@@ -15,6 +15,7 @@ import { clock, day, duration, fpsOf, size, timecode } from '../tc';
 import type { Clip } from '../types';
 import { ClipPlayer } from './ClipPlayer';
 import { loadGroups, useGroups, type Group } from './Groups';
+import { showError } from '../ui/serverError';
 
 /** "il y a 2 min", "il y a 3 h", else the date. */
 function ago(ms: number, now: number, tz: string): string {
@@ -60,7 +61,7 @@ export function Clips() {
     try {
       setClips(await api<Clip[]>('GET', '/api/clips'));
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   }, [toast]);
   useEffect(() => {
@@ -141,7 +142,7 @@ export function Clips() {
     try {
       await api('DELETE', `/api/clips/${c.id}`);
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
 

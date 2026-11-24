@@ -123,7 +123,6 @@ export const business: Record<string, string> = {
   'Next': 'Prochain',
   'Paused': 'En pause',
   'in {d}': 'dans {d}',
-  'Over': 'Terminé',
   'Edit the slot': 'Modifier l’enregistrement',
   'Repeat': 'Répétition',
   'Once': 'Une fois',
@@ -173,7 +172,6 @@ export const business: Record<string, string> = {
   'Extract it now': 'L’extraire tout de suite',
   Clear: 'Effacer',
   'Recording of “{name}” programmed': 'Enregistrement de «\u00a0{name}\u00a0» programmé',
-  'Play faster': 'Lecture avant',
   'Set the in point here': 'Poser l’entrée ici',
   'Set the out point here': 'Poser la sortie ici',
   'Name of the clip': 'Nom de l’extrait',
@@ -379,7 +377,6 @@ export const business: Record<string, string> = {
   // Storage
   Storage: 'Stockage',
   Loops: 'Boucles',
-  Other: 'Autres',
   Disk: 'Disque',
 
   // Server answers (plain English texts from the engine)
@@ -528,12 +525,9 @@ export const business: Record<string, string> = {
   'The first track': 'La première piste',
   'High quality': 'Haute qualité',
   'Lossless': 'Sans perte',
-  'estimated': 'estimé',
-  'More than the free space of the clips ({free})': 'Plus que la place libre des extraits ({free})',
   'This clip may not fit': 'Cet extrait risque de ne pas tenir',
   'About {size} for {free} free on the disk of the clips.': 'Environ {size} pour {free} libres sur le disque des extraits.',
   'Extract anyway': 'Extraire quand même',
-  'Format of the clip': 'Format de l\'extrait',
   'MP4 light': 'MP4 léger',
   'TS copy': 'TS copie',
   'More than the free space of the clips': 'Plus que la place libre des extraits',

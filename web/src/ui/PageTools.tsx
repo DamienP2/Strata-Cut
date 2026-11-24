@@ -8,7 +8,8 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ArrowLeft, ArrowRight, Hand, Lock, RotateCw, Scan } from 'lucide-react';
 import { t } from '../i18n';
-import { api, useApp } from '../store';
+import { api } from '../store';
+import { showError } from './serverError';
 
 export type PageMode = 'view' | 'crop' | 'pilot';
 
@@ -53,7 +54,6 @@ const live = (recId: string) => `/api/pages/${recId}/live`;
  * page are offered (the Extraction: at the live).
  */
 export function usePageTools(recId: string, on: boolean, can: boolean): { mode: PageMode; bar: ReactNode; over: ReactNode; below: ReactNode } {
-  const toast = useApp((s) => s.toast);
   const { info, load } = usePageInfo(recId, on);
   const [mode, setMode] = useState<PageMode>('view');
   const [typed, setTyped] = useState<string | null>(null);
@@ -65,7 +65,7 @@ export function usePageTools(recId: string, on: boolean, can: boolean): { mode: 
   const W = info?.width ?? 1920;
   const H = info?.height ?? 1080;
   const crop = info?.crop ?? { x: 0, y: 0, w: W };
-  const fail = (e: unknown) => toast(t((e as Error).message), 'error');
+  const fail = (e: unknown) => showError(e);
   const go = async (url: string) => {
     try {
       await api('POST', `/api/pages/${recId}/go`, { url });

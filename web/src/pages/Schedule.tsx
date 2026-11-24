@@ -20,6 +20,7 @@ import { RecLogo } from '../ui/RecLogo';
 import { ContentFlags } from '../ui/ContentFlags';
 import type { Programme, Recorder, Slot } from '../types';
 import { explainGuard } from '../ui/guard';
+import { showError } from '../ui/serverError';
 
 /** 1 = Monday … 7 = Sunday: their short names in the interface's language. */
 function dayNames(): string[] {
@@ -45,7 +46,7 @@ export function Schedule() {
     try {
       setSlots((await api<{ slots: Slot[] }>('GET', '/api/schedules')).slots);
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   }, [toast]);
   useEffect(() => void load(), [load, recorders]);
@@ -100,7 +101,6 @@ function repeatOf(s: Slot, names: string[]): string {
  * then those finished over the last days (what was recorded of each, to extract).
  */
 function SlotPanel({ slots, recorders, names, timezone, admin, only, setOnly, onOpen, onNew }: { slots: Slot[]; recorders: Recorder[]; names: string[]; timezone: string; admin: boolean; only: string | null; setOnly: (id: string | null) => void; onOpen: (s: Slot) => void; onNew: () => void }) {
-  const toast = useApp((s) => s.toast);
   const done = useFinished();
   const now = serverNow();
   const nameOf = (id: string) => recorders.find((r) => r.id === id)?.name ?? '—';
@@ -127,7 +127,7 @@ function SlotPanel({ slots, recorders, names, timezone, admin, only, setOnly, on
     try {
       await api('POST', `/api/recorders/${r.id}/recording`, { mode: 'slots' });
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
 
@@ -136,14 +136,14 @@ function SlotPanel({ slots, recorders, names, timezone, admin, only, setOnly, on
     try {
       await api('DELETE', `/api/schedules/${s.id}`);
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   const toggle = async (s: Slot) => {
     try {
       await api('PUT', `/api/schedules/${s.id}`, { ...s, enabled: !s.enabled });
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
 
@@ -339,11 +339,10 @@ function until(ms: number): string {
   const m = Math.max(0, Math.round(ms / 60_000));
   if (m < 60) return `${m} min`;
   if (m < 48 * 60) return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')}`;
-  return `${Math.round(m / 1440)} j`;
+  return t('{n} d', { n: Math.round(m / 1440) });
 }
 
 function SlotModal({ slot, initial, recorders, preset, names, timezone, admin, onClose }: { slot: Slot | null; initial?: Partial<Slot>; recorders: Recorder[]; preset: string | null; names: string[]; timezone: string; admin: boolean; onClose: () => void }) {
-  const toast = useApp((s) => s.toast);
   const [s, setS] = useState<Slot>(
     () =>
       slot ?? {
@@ -374,7 +373,7 @@ function SlotModal({ slot, initial, recorders, preset, names, timezone, admin, o
       await api('DELETE', `/api/schedules/${slot.id}`);
       onClose();
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   const [busy, setBusy] = useState(false);
@@ -409,7 +408,7 @@ function SlotModal({ slot, initial, recorders, preset, names, timezone, admin, o
       else await api('POST', '/api/schedules', s);
       onClose();
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     } finally {
       setBusy(false);
     }
@@ -634,7 +633,6 @@ const recMode = (r: Recorder): RecMode => (r.enabled ? 'continuous' : r.slotsOff
  * and (as the role allows) REC to record it all the time, or Stop. */
 function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
   const st = useApp((s) => s.status[rec.id]);
-  const toast = useApp((s) => s.toast);
   const [busy, setBusy] = useState(false);
   const setMode = async (mode: 'continuous' | 'slots') => {
     if (mode === 'slots' && !(await confirmDialog({ title: t('Stop recording “{name}”?', { name: rec.name }), message: t('What it recorded stays in its loop.'), confirm: t('Stop'), danger: true }))) return;
@@ -642,7 +640,7 @@ function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
     try {
       await api('POST', `/api/recorders/${rec.id}/recording`, { mode });
     } catch (e) {
-      if (!explainGuard(e)) toast(t((e as Error).message), 'error');
+      if (!explainGuard(e)) showError(e);
     }
     setBusy(false);
   };
@@ -980,7 +978,7 @@ function TzWarning({ timezone, admin }: { timezone: string; admin: boolean }) {
       // The server restarts its web part; the page reads the new clock.
       setTimeout(() => location.reload(), 2500);
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
       setBusy(false);
     }
   };

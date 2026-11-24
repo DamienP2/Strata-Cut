@@ -27,6 +27,7 @@ import { SourceGroups } from '../ui/SourceGroups';
 import { usePageTools } from '../ui/PageTools';
 import { Mixer, PicturesModal, ProgramLayer, useProgram, type Tab } from './StreamerProgram';
 import { OverlayEditor, PassBar, type Place } from './StreamerPass';
+import { showError } from '../ui/serverError';
 
 /** A message of the server, translated: whole, or its known beginning and what follows (FFmpeg's words). */
 function said(m: string): string {
@@ -79,7 +80,8 @@ function Center({ rec }: { rec: Recorder }) {
   const prog = useProgram(rec.id);
   const video = useRef<HTMLVideoElement>(null);
   const audio = useAudioOut(video, 'streamer');
-  const [wall, setWall] = useState<number | null>(null);
+  // The moment of the frame shown (server ms): read by the timecode alone (not a render of all per frame).
+  const wall = useRef<number | null>(null);
   const [settings, setSettings] = useState<Tab | null>(null);
   // Each passage (its AUTO fills while its fade goes).
   const [passing, setPassing] = useState({ image: 0, overlay: 0 });
@@ -123,7 +125,6 @@ function Center({ rec }: { rec: Recorder }) {
     return () => window.removeEventListener('keydown', key);
   }, []);
   const player = useRef<LoopPlayer | null>(null);
-  // The moment the picture shows (server ms): the meters show the sound of that moment.
   // The timestamp of the frame shown (the source's, ms): the meters show its sound.
   const shown = useRef<number | null>(null);
   const received = st?.state === 'recording';
@@ -133,12 +134,12 @@ function Center({ rec }: { rec: Recorder }) {
   // its last recording).
   useEffect(() => {
     if (!received) {
-      setWall(null);
+      wall.current = null;
       return;
     }
     const p = new LoopPlayer(video.current!, rec.id, serverNow);
     p.onFrame = (w, tt) => {
-      setWall(w);
+      wall.current = w;
       shown.current = Math.round(tt * 1000);
     };
     p.onFollowers = setFollowers;
@@ -180,10 +181,12 @@ function Center({ rec }: { rec: Recorder }) {
   const factor = (db: number) => 10 ** (db / 20);
   // Each track at its fader; the output's level after (none under the image).
   const level = !pg || solo !== null ? 1 : pg.imageOn || firstOn === undefined ? 0 : factor(pg.master);
-  useEffect(() => audio.out?.setMain(pg ? factor(gainOf(heard)) : 1)); // eslint-disable-line react-hooks/exhaustive-deps
+  const mainGain = pg ? factor(gainOf(heard)) : 1;
+  useEffect(() => audio.out?.setMain(mainGain), [audio.out, mainGain]);
+  const othersKey = others.map((k) => `${k}:${gainOf(k)}`).join(',');
   useEffect(() => {
     audio.out?.setOthers(new Map([...followers].filter(([k]) => others.includes(k)).map(([k, el]) => [el, factor(gainOf(k))])));
-  }); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [audio.out, followers, othersKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // The image coming or going: the sound fades as the picture does; a fader: at once.
   const imageWas = useRef(pg?.imageOn);
   useEffect(() => {
@@ -207,15 +210,30 @@ function Center({ rec }: { rec: Recorder }) {
         </div>
         {page.below ?? (
           <div className="ps-tcrow">
-            <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
+            <Timecode wall={wall} fps={fps} timezone={timezone} />
           </div>
         )}
       </div>
       {!page.below && prog.state && <PassBar rec={rec} prog={prog} editable={run} passing={passing} onImage={passImage} onOverlay={passOverlay} onPictures={setSettings} />}
-      <Mixer rec={rec} prog={prog} shown={() => shown.current} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, solo, setSolo, heard }} />
+      <Mixer rec={rec} prog={prog} shown={() => shown.current} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, solo, setSolo }} />
       {settings && createPortal(<PicturesModal rec={rec} prog={prog} use={settings} onPlace={place} onClose={() => setSettings(null)} />, document.body)}
     </div>
   );
+}
+
+/** The timecode of the frame shown, drawn again at each of the screen's frames (only itself). */
+function Timecode({ wall, fps, timezone }: { wall: React.RefObject<number | null>; fps: number; timezone: string }) {
+  const [text, setText] = useState('--:--:--:--');
+  useEffect(() => {
+    let raf = 0;
+    const draw = () => {
+      setText(wall.current ? timecode(wall.current, fps, timezone) : '--:--:--:--');
+      raf = requestAnimationFrame(draw);
+    };
+    draw();
+    return () => cancelAnimationFrame(raf);
+  }, [wall, fps, timezone]);
+  return <span className="pg-tc">{text}</span>;
 }
 
 /** What the operator gives for a live (when handed over), and the last test of each destination. */
@@ -264,7 +282,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
     try {
       await api('DELETE', `/api/streams/${d.id}`);
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   // This source's lives: how many, their bitrate, all stopped at once.
@@ -274,7 +292,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
     try {
       await api('POST', '/api/streams/stop', { source: rec.id });
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   // The free destinations ready to go (a key given for each live: once it is written).

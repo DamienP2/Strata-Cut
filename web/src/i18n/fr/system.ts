@@ -25,17 +25,12 @@ export const system: Record<string, string> = {
   'Running for': 'En marche depuis',
 
   // Performance
-  CPU: 'CPU',
   Memory: 'Mémoire',
 
   // Health
   Incidents: 'Incidents',
-  Incident: 'Incident',
   Log: 'Journal',
   'No incident': 'Aucun incident',
-  Level: 'Niveau',
-  Times: 'Fois',
-  Last: 'Dernière fois',
   'First: {date}': 'Première fois : {date}',
   Crash: 'Plantage',
   Error: 'Erreur',
@@ -138,7 +133,6 @@ export const system: Record<string, string> = {
   Members: 'Membres',
   'Create the group': 'Créer le groupe',
   'a group already has this name': 'Un groupe porte déjà ce nom.',
-  'no such group': 'Groupe introuvable.',
   '{used} used of {total}': '{used} utilisés sur {total}',
   'The loops once full: {s}': 'Les boucles une fois pleines\u00a0: {s}',
   '{used} used of {total} available for Strata LiveCut ({p})': '{used} utilisés sur {total} disponibles pour Strata LiveCut ({p})',

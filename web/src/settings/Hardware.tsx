@@ -1,13 +1,15 @@
 /* Système › Serveur › Matériel: the capture cards (Blackmagic DeckLink), drawn with their inputs. */
 import { useEffect, useState } from 'react';
 import { Check, Cpu, Pencil, Plus, RefreshCw, Scissors, Search, Trash2, X } from 'lucide-react';
-import { api, useApp } from '../store';
+import { api } from '../store';
 import { lang, t, tn } from '../i18n';
 import { formatName } from '../tc';
 import { navigate } from '../router';
 import { PageHead } from '../pages/SidePage';
 import { modelOf, type ConnKind, type Connector } from './decklinkModels';
 import { Card } from './ui';
+import { confirmDialog } from '../ui/dialogs';
+import { showError } from '../ui/serverError';
 
 /** `absent`: an adopted input the driver did not list at the last search. */
 type PortState = 'signal' | 'nosignal' | 'busy' | 'unknown' | 'absent' | 'checking';
@@ -51,7 +53,6 @@ const STATE_LABEL = (s: PortState) => ({ signal: t('Signal'), nosignal: t('No si
 let last: Hardware | null = null;
 
 export function Hardware() {
-  const toast = useApp((s) => s.toast);
   const [hw, setHwState] = useState<Hardware | null>(last);
   const [loading, setLoading] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -78,18 +79,18 @@ export function Hardware() {
       setHw(await api<Hardware>('POST', '/api/system/hardware/search'));
       setFailed(false);
     } catch (e) {
-      toast((e as Error).message, 'error');
+      showError(e);
     } finally {
       setSearching(false);
     }
   };
   const forget = async (c: CaptureCard) => {
-    if (!window.confirm(t('Forget the card “{name}”? It comes back if a search finds it again.', { name: c.name || c.model }))) return;
+    if (!(await confirmDialog({ title: t('Forget the card “{name}”? It comes back if a search finds it again.', { name: c.name || c.model }), confirm: t('Forget'), danger: true }))) return;
     try {
       await api('POST', '/api/system/hardware/forget', { key: c.key });
       await load();
     } catch (e) {
-      toast((e as Error).message, 'error');
+      showError(e);
     }
   };
   // The inputs' signal changes: asked again every 3 s while the page is open. The server answers
@@ -190,7 +191,6 @@ export function Hardware() {
 
 /** A card's title: the name given to it (its model under it), renamed in place. */
 function CardName({ card, onSaved }: { card: CaptureCard; onSaved: () => void }) {
-  const toast = useApp((s) => s.toast);
   const model = modelOf(card.model, card.inputs.length, card.connector === 'hdmi').name;
   const [edit, setEdit] = useState<string | null>(null);
   const save = async () => {
@@ -200,7 +200,7 @@ function CardName({ card, onSaved }: { card: CaptureCard; onSaved: () => void })
       setEdit(null);
       onSaved();
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   if (edit !== null)

@@ -13,6 +13,7 @@ import { confirmDialog } from '../ui/dialogs';
 import { formatDateTime, formatDuration, timeAgo } from '../ui/format';
 import { healthSeen, loadHealth, useHealth, type Incident } from '../ui/health';
 import { logText } from '../logText';
+import { showError } from '../ui/serverError';
 
 type Tab = 'incidents' | 'log';
 
@@ -26,7 +27,7 @@ export function Health() {
       await loadHealth();
       toast(t('Journal emptied'));
     } catch (e) {
-      toast(t((e as Error).message), 'error');
+      showError(e);
     }
   };
   const [tab, setTab] = useDisplayPref<Tab>('health.tab', 'incidents');
