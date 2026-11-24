@@ -1353,7 +1353,6 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .pg-ovl.edit { pointer-events: auto; cursor: move; outline: 1px dashed rgba(255, 255, 255, 0.75); outline-offset: 2px; touch-action: none; }
 .pg-handle { position: absolute; right: -7px; bottom: -7px; width: 10px; height: 10px; border-radius: 2px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4); cursor: nwse-resize; }
 .pg-mixer { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
-.pg-mixer > header { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
 .pg-strips { flex: 1; min-height: 0; display: flex; gap: 16px; }
 .pg-strip-group { display: flex; gap: 6px; min-height: 0; }
 .pg-strip-group.end { margin-left: auto; gap: 8px; }

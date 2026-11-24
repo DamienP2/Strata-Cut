@@ -6,7 +6,7 @@
  * fades).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Headphones, RotateCcw, Volume2, VolumeX, Wand2, X } from "lucide-react";
+import { Headphones, Volume2, VolumeX, Wand2, X } from "lucide-react";
 import { t, tc, tn } from "../i18n";
 import { api, can, useApp, useChanged } from "../store";
 import type { Recorder } from "../types";
@@ -44,7 +44,6 @@ interface ProgramState {
   kinds?: string[];
 }
 
-const CHANNELS: Program["channels"][] = ["lr", "l", "r", "mono"];
 const CHANNEL_LABEL: Record<Program["channels"], string> = { lr: "L+R", l: "L", r: "R", mono: "Mono" };
 
 const trackOf = (p: Program, k: number): Track => p.tracks[k] ?? { on: k === 0, gain: 0 };
@@ -268,9 +267,6 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
     next[k] = { ...next[k], ...x };
     prog.set({ tracks: next });
   };
-  // The source's own levels again (each track at 0 dB; on and off kept).
-  const reset = () => prog.set({ tracks: all().map((tr) => ({ ...tr, gain: 0 })), master: 0 });
-  const changed = all().some((tr) => tr.gain !== 0) || p.master !== 0;
   // AUTO: the track's peaks of the last 10 s brought to the target.
   const auto = (k: number) => {
     const peak = recent(k, 100);
@@ -305,18 +301,6 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
   outPeak = outPeak <= -90 ? -90 : outPeak + p.master;
   return (
     <section className="pg-mixer" aria-label={t("Sound")}>
-      <header>
-        <span className="segmented">
-          {CHANNELS.map((c) => (
-            <button key={c} type="button" className={p.channels === c ? "on" : ""} disabled={!run || n === 0} onClick={() => prog.set({ channels: c })}>
-              {tc("channels", CHANNEL_LABEL[c])}
-            </button>
-          ))}
-        </span>
-        <button type="button" className="btn small" disabled={!run || !changed} onClick={reset}>
-          <RotateCcw size={12} /> {t("Reset")}
-        </button>
-      </header>
       <div className="pg-strips">
         <div className="pg-strip-group tracks">
           {n === 0 && <span className="muted pg-nosound">{t("No sound")}</span>}
