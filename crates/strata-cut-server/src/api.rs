@@ -35,6 +35,7 @@ pub fn router() -> Router<Shared> {
         .merge(crate::alerts::routes())
         .merge(crate::program::routes())
         .merge(crate::slates::routes())
+        .merge(crate::pages::routes())
         .merge(crate::users::routes())
         .merge(crate::groups::routes())
         .merge(crate::roles::routes())

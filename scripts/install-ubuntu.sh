@@ -364,6 +364,24 @@ else
   # (Desktop Video) et FFmpeg encode leurs images ; lspci les montre même sans pilote.
   APT_LIGHT=1 apt_install pciutils
   desktop_video
+  # Sources « page web » : un navigateur sur un écran virtuel, avec sa carte son.
+  APT_LIGHT=1 apt_install xvfb pulseaudio fonts-noto-core fonts-noto-color-emoji
+  if command -v google-chrome-stable >/dev/null || command -v chromium >/dev/null || command -v chromium-browser >/dev/null; then
+    ok "navigateur des pages web en place"
+  elif [ "$(dpkg --print-architecture)" = amd64 ]; then
+    chrome_deb="$(mktemp -d)/google-chrome-stable_current_amd64.deb"
+    if curl -fsSL --retry 3 -o "$chrome_deb" https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb; then
+      chmod 0644 "$chrome_deb"
+      echo "  installation de Google Chrome (sources page web)"
+      NEEDRESTART_SUSPEND=1 NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive LC_ALL=C apt-get install -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$chrome_deb" </dev/null 2>&1 | apt_progress || warn "Google Chrome ne s'est pas installé : les sources page web ne marcheront pas"
+    else
+      warn "Google Chrome non téléchargé : les sources page web ne marcheront pas"
+    fi
+    rm -f "$chrome_deb"; rmdir "$(dirname "$chrome_deb")" 2>/dev/null || true
+    if command -v google-chrome-stable >/dev/null; then ok "Google Chrome $(google-chrome-stable --version 2>/dev/null | awk '{print $NF}') (sources page web)"; fi
+  else
+    warn "pas de Google Chrome pour $(dpkg --print-architecture) : installez Chromium (paquet .deb, pas snap) pour les sources page web"
+  fi
 fi
 
 # FFmpeg doit savoir recevoir et encoder ce que le serveur lui demande.
@@ -377,6 +395,10 @@ for p in udp rtp rtmp srt; do
 done
 grep -qw libx264 <<<"$encoders" || die "ffmpeg $FF_VERSION n'a pas l'encodeur libx264"
 grep -qw aac <<<"$encoders" || die "ffmpeg $FF_VERSION n'a pas l'encodeur aac"
+devices="$(ffmpeg -hide_banner -devices 2>/dev/null)"
+for d in x11grab pulse; do
+  grep -qw "$d" <<<"$devices" || warn "ffmpeg $FF_VERSION n'a pas l'entrée $d : les sources page web ne marcheront pas"
+done
 ffmpeg -hide_banner -h muxer=image2 2>/dev/null | grep -q atomic_writing || warn "ffmpeg $FF_VERSION est ancien (option atomic_writing absente) : Ubuntu 24.04 est conseillé"
 ok "ffmpeg $FF_VERSION"
 

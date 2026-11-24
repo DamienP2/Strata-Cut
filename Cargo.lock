@@ -1638,6 +1638,7 @@ dependencies = [
  "tar",
  "thiserror",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
  "tower",
  "tower-http",

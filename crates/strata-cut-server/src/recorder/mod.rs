@@ -93,6 +93,9 @@ pub enum Protocol {
     Pattern,
     /// An NDI source of the network (`url`: its name), received with the NDI library (`ndi`).
     Ndi,
+    /// A web page shown by a browser of the server (`crate::pages`): its address, its frame and
+    /// its piloting from the Streamer and the Extraction.
+    Page,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -232,6 +235,9 @@ impl RecorderConfig {
         if self.protocol == Protocol::Ndi && self.bitrate == 0.0 {
             self.bitrate = ndi::DEFAULT_BITRATE;
         }
+        if self.protocol == Protocol::Page && self.bitrate == 0.0 {
+            self.bitrate = 6.0;
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -257,6 +263,15 @@ impl RecorderConfig {
             Protocol::Decklink => return decklink::validate(self),
             Protocol::Pattern => return pattern::validate(self),
             Protocol::Ndi => return ndi::validate(self),
+            Protocol::Page => {
+                if !crate::pages::FORMATS.contains(&self.video_mode.as_str()) {
+                    return Err("choose the format of the page".into());
+                }
+                if !(1.0..=50.0).contains(&self.bitrate) {
+                    return Err("the bitrate is 1 to 50 mb/s".into());
+                }
+                return Ok(());
+            }
         };
         if self.protocol == Protocol::Hls {
             if !self.url.starts_with("https://") && !self.url.starts_with("http://") {
@@ -827,6 +842,7 @@ impl Manager {
                 }
             }
         });
+        crate::pages::init(&m);
         m
     }
 

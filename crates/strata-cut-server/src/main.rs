@@ -23,6 +23,7 @@ mod engine;
 mod meter;
 mod mixer;
 mod ntp;
+mod pages;
 mod paths;
 mod perf;
 mod prefs;

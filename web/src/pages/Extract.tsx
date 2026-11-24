@@ -17,6 +17,7 @@ import { GrainCache } from '../audio';
 import type { Clip, Job, Recorder } from '../types';
 import { trackLabel } from '../audioLabel';
 import { Transport, useTransportKeys, type TransportActs } from '../ui/Transport';
+import { usePageTools } from '../ui/PageTools';
 
 /** A marked frame: its run, its source time and its server time. */
 interface Mark {
@@ -592,10 +593,13 @@ function Editor({ rec }: { rec: Recorder }) {
   const now = serverNow();
   const ago = pos ? now - pos.wall : 0;
   const myJobs = jobs;
+  // A web page: browsed, reframed and piloted at the live only (the past is not played again).
+  const page = usePageTools(rec.id, rec.protocol === 'page', can.extract(user) && recording && live && ago < 30_000);
 
   return (
     <>
       <div className="sc-center">
+        {page.bar && <div className="sc-pagebar">{page.bar}</div>}
         <div className="sc-viewer-wrap">
           <div className="sc-viewer">
             <video ref={videoRef} className="sc-video" playsInline />
@@ -626,8 +630,10 @@ function Editor({ rec }: { rec: Recorder }) {
                 )}
               </div>
             )}
+            {page.over}
           </div>
         </div>
+        {page.below && <div className="sc-pagebar">{page.below}</div>}
         <div className="sc-transport">
           <div className="sc-tc-big">{pos ? timecode(pos.wall, fps, timezone) : '--:--:--:--'}</div>
           <Transport acts={acts} rate={rate} playing={playing} hasIn={!!mIn} hasOut={!!mOut} />

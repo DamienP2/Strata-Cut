@@ -27,7 +27,12 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'decklink', label: 'Hardware inputs', detail: 'SDI · HDMI' },
   { value: 'ndi', label: 'NDI', detail: 'NDI®' },
   { value: 'pattern', label: 'Test pattern', detail: 'lip sync' },
+  { value: 'page', label: 'Web page', detail: 'browser' },
 ];
+/** A web page's formats (as the server films them). */
+export const PAGE_FORMATS = ['1080p25', '1080p50', '1080p2997', '1080p5994', '720p50', '720p5994'];
+/** A new web page source, as made by « Add a web source ». */
+const PAGE_PRESET: Partial<Recorder> = { protocol: 'page', mode: 'caller', url: '', videoMode: '1080p25', bitrate: 6, audioChannels: 2 };
 
 /** The test pattern: its styles and its formats (as the server makes them). */
 const PATTERNS: { value: string; label: string }[] = [
@@ -75,6 +80,7 @@ export function sourceAddress(r: Recorder): string {
   if (r.protocol === 'decklink') return `${t('Input {n}', { n: (r.device ?? 0) + 1 })} · ${dlConnection(r.connection ?? 'auto')} · ${dlMode(r.videoMode ?? 'auto')}`;
   if (r.protocol === 'ndi') return r.url + (r.host ? ` · ${r.host}` : '');
   if (r.protocol === 'pattern') return `${t(PATTERNS.find((p) => p.value === r.pattern)?.label ?? 'Test pattern')} · ${formatName(r.videoMode ?? '1080i50', lang() === 'fr')}`;
+  if (r.protocol === 'page') return `${t('Browser')} · ${formatName(r.videoMode ?? '1080p25', lang() === 'fr')}${(r.audioChannels ?? 2) > 0 ? ` · ${t('sound')}` : ''}`;
   return r.url + (r.iface && (r.protocol === 'udp' || r.protocol === 'rtp') ? ` · ${r.iface}` : '');
 }
 
@@ -182,7 +188,7 @@ export function Recorders() {
           </div>
         )}
         <div className="project-grid">
-          {shown.map((r) => (
+          {shown.filter((r) => r.protocol !== 'page').map((r) => (
             <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} streams={streams.filter((x) => x.source === r.id)} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
           ))}
           {shown.length === 0 && (q || chip !== 'all') && (
@@ -204,6 +210,23 @@ export function Recorders() {
             </button>
           )}
         </div>
+        {/* The web pages: a browser of the server each, its page chosen in the Streamer and the Extraction. */}
+        {(shown.some((r) => r.protocol === 'page') || (admin && !q && chip === 'all')) && (
+          <>
+            <div className="asr-group-head">{t('Web pages')}</div>
+            <div className="project-grid">
+              {shown.filter((r) => r.protocol === 'page').map((r) => (
+                <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} streams={streams.filter((x) => x.source === r.id)} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
+              ))}
+              {admin && !q && chip === 'all' && (
+                <button className="project-new" onClick={() => setEdit({ rec: null, preset: { ...PAGE_PRESET, name: `Web ${recorders.filter((r) => r.protocol === 'page').length + 1}` } })}>
+                  <Plus size={22} />
+                  <span>{t('Add a web source')}</span>
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
       {edit && <RecorderModal rec={edit.rec} from={edit.from} preset={edit.preset} onClose={() => setEdit(null)} />}
     </>
@@ -510,7 +533,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label={t('Source')} group>
-            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: t(p.detail) }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' || v === 'hls' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}), ...(v === 'pattern' ? { pattern: c.pattern || 'smpte', videoMode: PATTERN_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080i50', bitrate: c.bitrate >= 1 && c.bitrate <= 200 ? c.bitrate : 8 } : {}), ...(v === 'ndi' ? { mode: 'caller' as const, url: c.protocol === 'ndi' ? c.url : '', bitrate: c.bitrate >= 5 && c.bitrate <= 200 ? c.bitrate : 25 } : {}), ...(c.protocol === 'ndi' && v !== 'ndi' ? { url: '' } : {}) })} />
+            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: t(p.detail) }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' || v === 'hls' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}), ...(v === 'pattern' ? { pattern: c.pattern || 'smpte', videoMode: PATTERN_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080i50', bitrate: c.bitrate >= 1 && c.bitrate <= 200 ? c.bitrate : 8 } : {}), ...(v === 'ndi' ? { mode: 'caller' as const, url: c.protocol === 'ndi' ? c.url : '', bitrate: c.bitrate >= 5 && c.bitrate <= 200 ? c.bitrate : 25 } : {}), ...(v === 'page' ? { ...PAGE_PRESET, videoMode: PAGE_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080p25', bitrate: c.bitrate >= 1 && c.bitrate <= 50 ? c.bitrate : 6 } : {}), ...(c.protocol === 'ndi' && v !== 'ndi' ? { url: '' } : {}) })} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
             <Field label={t('Mode')} group>
@@ -521,6 +544,18 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
             <DecklinkFields c={c} set={set} info={dl} detected={detected} rec={rec} />
           ) : c.protocol === 'ndi' ? (
             <NdiFields c={c} set={set} />
+          ) : c.protocol === 'page' ? (
+            <>
+              <Field label={t('Format')}>
+                <Dropdown value={c.videoMode ?? '1080p25'} options={PAGE_FORMATS.map((f) => ({ value: f, label: formatName(f, lang() === 'fr') }))} onChange={(v) => set({ videoMode: v })} />
+              </Field>
+              <Field label={t('Sound of the page')} group>
+                <Segmented value={(c.audioChannels ?? 2) > 0 ? 'on' : 'off'} options={[{ value: 'on', label: t('Recorded') }, { value: 'off', label: t('Silent') }]} onChange={(v) => set({ audioChannels: v === 'on' ? 2 : 0 })} />
+              </Field>
+              <Field label={t('Recording bitrate')}>
+                <NumberField value={c.bitrate} min={1} max={50} step={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
+              </Field>
+            </>
           ) : c.protocol === 'pattern' ? (
             <>
               <Field label={t('Pattern')} group>
@@ -915,19 +950,20 @@ function sameSource(rec: Recorder | null, c: Recorder): boolean {
   if (c.protocol === 'decklink') return rec.device === c.device;
   if (c.protocol === 'pattern') return rec.pattern === c.pattern && rec.videoMode === c.videoMode && rec.bitrate === c.bitrate && rec.name === c.name;
   if (c.protocol === 'ndi') return rec.url === c.url && (rec.host ?? '') === (c.host ?? '');
+  if (c.protocol === 'page') return rec.videoMode === c.videoMode && rec.bitrate === c.bitrate && (rec.audioChannels ?? 2) === (c.audioChannels ?? 2);
   return rec.url === c.url && rec.mode === c.mode && rec.port === c.port && rec.iface === c.iface && (rec.variant ?? '') === (c.variant ?? '');
 }
 
 /** The source as written can be tried: an address of its kind, a caller (a listening one waits for its source). */
 /** How each source's address is written (shown in its field). */
-const PLACEHOLDERS: Record<Protocol, string> = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', hls: 'https://server/live/stream.m3u8', web: 'https://www.youtube.com/watch?v=…', decklink: '', pattern: '', ndi: '' };
+const PLACEHOLDERS: Record<Protocol, string> = { udp: 'udp://239.1.1.1:5000', rtp: 'rtp://239.1.1.1:5004', rtmp: 'rtmp://server/live/key', srt: 'srt://server:9000', hls: 'https://server/live/stream.m3u8', web: 'https://www.youtube.com/watch?v=…', decklink: '', pattern: '', ndi: '', page: '' };
 
 /** The address as written, made usable: no spaces around it, the scheme added when left out
  * ("1.2.3.4:9000" → "srt://1.2.3.4:9000") or written in capitals. */
 export function cleaned(c: Recorder): Recorder {
   // Spaces and invisible characters (pasted with it) are no part of an address.
   const url = c.url.replace(/[\s\u200B-\u200D\u2060\uFEFF]/g, '');
-  if (c.protocol === 'decklink' || c.protocol === 'web' || c.protocol === 'pattern') return { ...c, url };
+  if (c.protocol === 'decklink' || c.protocol === 'web' || c.protocol === 'pattern' || c.protocol === 'page') return { ...c, url };
   // An NDI name is kept as written ("MACHINE (Channel 1)").
   if (c.protocol === 'ndi') return { ...c, url: c.url.trim() };
   if (!url) return c;
@@ -936,7 +972,7 @@ export function cleaned(c: Recorder): Recorder {
 }
 
 function triable(c: Recorder): boolean {
-  if (c.protocol === 'decklink') return false;
+  if (c.protocol === 'decklink' || c.protocol === 'page') return false;
   if (c.protocol === 'pattern') return true;
   if (c.protocol === 'ndi') return c.url.trim().length > 0;
   if ((c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener') return false;
@@ -981,7 +1017,7 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
   const listening = (c.protocol === 'rtmp' || c.protocol === 'srt') && c.mode === 'listener';
   const tried = probe.result;
   const rows: [string, string][] = [];
-  if (c.protocol === 'pattern' || c.protocol === 'ndi') {
+  if (c.protocol === 'pattern' || c.protocol === 'ndi' || c.protocol === 'page') {
     rows.push([t('Source'), sourceAddress(c) || '—']);
     rows.push([t('Recording bitrate'), `${c.bitrate} Mb/s · H.264 / AAC`]);
   } else if (card) {

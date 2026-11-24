@@ -23,6 +23,7 @@ import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
 import { explainGuard } from '../ui/guard';
 import { SourceGroups } from '../ui/SourceGroups';
+import { usePageTools } from '../ui/PageTools';
 import { Antenne, Mixer, ProgramLayer, SettingsModal, useProgram } from './StreamerProgram';
 
 /** A message of the server, translated: whole, or its known beginning and what follows (FFmpeg's words). */
@@ -83,6 +84,8 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   // The timestamp of the frame shown (the source's, ms): the meters show its sound.
   const shown = useRef<number | null>(null);
   const received = st?.state === 'recording';
+  // A web page: its browser's bar, its reframing, its piloting.
+  const page = usePageTools(rec.id, rec.protocol === 'page', run && received);
   // Only what is received now is shown: a stopped source shows nothing (not what is left of
   // its last recording).
   useEffect(() => {
@@ -158,15 +161,19 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   return (
     <div className="sc-center pg-center">
       <div className="pg-top">
-        <div className="pg-picture">
+        <div className={`pg-picture ${page.bar ? 'with-bar' : ''}`}>
+          {page.bar}
           <div className="pg-viewer">
             <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
             {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
-            {received && <ProgramLayer rec={rec} prog={prog} editable={run} />}
+            {received && page.mode === 'view' && <ProgramLayer rec={rec} prog={prog} editable={run} />}
+            {page.over}
           </div>
-          <div className="pg-meta">
-            <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
-          </div>
+          {page.below ?? (
+            <div className="pg-meta">
+              <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
+            </div>
+          )}
         </div>
         <Antenne rec={rec} prog={prog} live={streams.length} kbps={mbps(streams.reduce((a, s) => a + s.kbps, 0), locale())} onStopAll={() => void stopAll()} onSettings={() => setSettings(true)} />
       </div>

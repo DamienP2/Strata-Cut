@@ -92,6 +92,9 @@ pub async fn probe(m: &Manager, mut c: RecorderConfig) -> Result<Value, String> 
     if c.protocol == Protocol::Decklink {
         return Err("a card's input has its own preview".into());
     }
+    if c.protocol == Protocol::Page {
+        return Err("a web page is chosen in the Streamer and the Extraction".into());
+    }
     // An NDI source: a picture of what it sends now, and its format.
     if c.protocol == Protocol::Ndi {
         if c.url.trim().is_empty() {

@@ -285,6 +285,11 @@ pub fn input_args_as(c: &RecorderConfig, rtp: bool) -> Vec<String> {
         }
         // GStreamer's named pipe, made for each recording (record_once).
         Protocol::Decklink | Protocol::Ndi => String::new(),
+        // Its browser's pictures, encoded here, on a local port (record_once).
+        Protocol::Page => {
+            a.extend(["-f".into(), "mpegts".into()]);
+            format!("udp://127.0.0.1:{}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=10000000", crate::pages::port(&c.id).unwrap_or(0))
+        }
         // Made by its own FFmpeg, read on the standard input (record_once).
         Protocol::Pattern => {
             a.extend(["-f".into(), "mpegts".into()]);
@@ -516,6 +521,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     // named pipe the receiver reads.
     let mut capture: Option<CardCapture> = None;
     let clog: Arc<Mutex<VecDeque<String>>> = Default::default();
+    // A web page: its browser started (or kept), before its stream is read.
+    if cfg.protocol == Protocol::Page && crate::pages::ensure(cfg).is_none() {
+        finish_run(rec, &run_id);
+        return Outcome::Exited { had_data: false, message: "page: cannot open its browser".into() };
+    }
     let input = match &source {
         Some(s) => super::web::input_args(s),
         None if cfg.protocol == Protocol::Decklink => {

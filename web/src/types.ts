@@ -1,6 +1,6 @@
 // The app's own data, as the server sends it.
 
-export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'hls' | 'web' | 'decklink' | 'pattern' | 'ndi';
+export type Protocol = 'udp' | 'rtp' | 'rtmp' | 'srt' | 'hls' | 'web' | 'decklink' | 'pattern' | 'ndi' | 'page';
 
 /** A recorder's settings. */
 export interface Recorder {
