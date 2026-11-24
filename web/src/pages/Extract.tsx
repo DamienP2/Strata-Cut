@@ -17,7 +17,7 @@ import type { Clip, Job, Recorder } from '../types';
 import { trackLabel } from '../audioLabel';
 import { Transport, useTransportKeys, type TransportActs } from '../ui/Transport';
 import { usePageTools } from '../ui/PageTools';
-import { ClipFormat, DEFAULT_FORMAT, FORMATS, sizeText, useClipsFree, type ClipKind } from '../ui/ClipFormat';
+import { ClipFormat, DEFAULT_FORMAT, FORMATS, sizeText, useClipsFree, weightOf, type ClipKind } from '../ui/ClipFormat';
 import { confirmDialog } from '../ui/dialogs';
 
 /** A marked frame: its run, its source time and its server time. */
@@ -686,16 +686,14 @@ function Editor({ rec }: { rec: Recorder }) {
         </div>
         {/* The clip: its in and out (the timeline's E and S), its length, its name. */}
         <div className="sc-clipbar">
-          <span className="sc-clipbar-l">{t('Clip')}</span>
           <div className="sc-kind" role="radiogroup" aria-label={t('What the clip holds')}>
             {([
               ['video', <Film key="v" size={14} />, t('Video'), t('The picture with its sound')],
               ['audio', <AudioLines key="a" size={14} />, t('Sound'), t('The sound alone (every track)')],
               ['image', <Camera key="i" size={14} />, t('Image'), t('The picture under the playhead')],
             ] as const).map(([k, icon, label, tip]) => (
-              <button key={k} type="button" role="radio" aria-checked={kind === k} className={`sc-kind-b ${k} ${kind === k ? 'on' : ''}`} data-tip={tip} onClick={() => setKind(k)}>
+              <button key={k} type="button" role="radio" aria-checked={kind === k} aria-label={label} className={`sc-kind-b ${k} ${kind === k ? 'on' : ''}`} data-tip={`${label} · ${tip}`} onClick={() => setKind(k)}>
                 {icon}
-                <span>{label}</span>
               </button>
             ))}
           </div>
@@ -709,8 +707,17 @@ function Editor({ rec }: { rec: Recorder }) {
           <button className="ctl sc-preview" data-tip={t('Preview the clip: from IN to OUT')} disabled={kind === 'image' || frames === 0} onClick={previewClip}>
             <PlayCircle size={18} />
           </button>
-          {can.extract(user) && <ClipFormat kind={kind} value={format} onChange={(id) => setFormats((f) => ({ ...f, [kind]: id }))} basis={basis} free={free} />}
-          {can.extract(user) && <ExtractButton jobs={myJobs} recId={rec.id} canCut={canCut} onCut={() => void cut()} kind={kind} />}
+          {can.extract(user) && (
+            <ExtractButton
+              jobs={myJobs}
+              recId={rec.id}
+              canCut={canCut}
+              onCut={() => void cut()}
+              kind={kind}
+              top={<ClipFormat kind={kind} value={format} onChange={(id) => setFormats((f) => ({ ...f, [kind]: id }))} basis={basis} />}
+              weight={weightOf(kind, format, basis, free)}
+            />
+          )}
         </div>
       </div>
       {/* The timeline takes the whole width, under the panels. */}
@@ -927,7 +934,8 @@ function MarkTag({ kind, mark, fps, timezone, onType, onClear, onMark }: { kind:
  * clip ready: play it in Clips, download it, put it away). A click extracts the marks (queued
  * after the others); without marks, it opens the bubble.
  */
-function ExtractButton({ jobs, recId, canCut, onCut, kind }: { jobs: Job[]; recId: string; canCut: boolean; onCut: () => void; kind: 'video' | 'audio' | 'image' }) {
+/** The extraction button, on two floors: the format (`top`) over the action and the clip's weight; while clips are made, their progress. */
+function ExtractButton({ jobs, recId, canCut, onCut, kind, top, weight }: { jobs: Job[]; recId: string; canCut: boolean; onCut: () => void; kind: 'video' | 'audio' | 'image'; top: React.ReactNode; weight: { text: string; over: boolean } }) {
   const toast = useApp((s) => s.toast);
   const [open, setOpen] = useState(false);
   const closing = useRef(0);
@@ -969,7 +977,8 @@ function ExtractButton({ jobs, recId, canCut, onCut, kind }: { jobs: Job[]; recI
     return secs < 60 ? t('{n} s left', { n: Math.max(1, Math.round(secs)) }) : t('{n} min left', { n: Math.round(secs / 60) });
   };
   return (
-    <div className="sc-xwrap" onMouseEnter={show} onMouseLeave={hide}>
+    <div className={`sc-xwrap two k-${kind} ${weight.over && !busy ? 'over' : ''}`} onMouseEnter={show} onMouseLeave={hide}>
+      {top}
       <button
         className={`ctl primary sc-xbtn kind-${kind} ${busy ? 'busy' : ''}`}
         data-tip={busy ? undefined : kind === 'audio' ? t('Extract the sound') : kind === 'image' ? t('Extract the picture under the playhead') : t('Extract the video')}
@@ -987,9 +996,9 @@ function ExtractButton({ jobs, recId, canCut, onCut, kind }: { jobs: Job[]; recI
           </>
         ) : (
           <>
-            <Scissors size={17} />
-            {/* What it makes, in the mode's colour. */}
-            <span className="sc-xkind">{kind === 'audio' ? t('Sound') : kind === 'image' ? t('Image') : t('Video')}</span>
+            <Scissors size={15} />
+            <span className="sc-xkind">{t('Extract')}</span>
+            {weight.text && <span className="sc-xw" data-tip={weight.over ? t('More than the free space of the clips') : undefined}>{weight.text}</span>}
             {ready > 0 && <span className="sc-xready" />}
           </>
         )}

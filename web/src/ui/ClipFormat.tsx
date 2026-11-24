@@ -78,8 +78,16 @@ export function useClipsFree(): number | null {
   return free;
 }
 
-/** The format menu and the chosen one's weight. */
-export function ClipFormat({ kind, value, onChange, basis, free }: { kind: ClipKind; value: string; onChange: (id: string) => void; basis: Basis; free: number | null }) {
+/** The chosen format's weight for the clip ("" when the clip has no length yet), and whether it is more than the space left. */
+export function weightOf(kind: ClipKind, value: string, basis: Basis, free: number | null): { text: string; over: boolean } {
+  const list = FORMATS.filter((f) => f.kind === kind);
+  const cur = list.find((f) => f.id === value) ?? list[0];
+  const est = cur.size(basis);
+  return { text: kind === 'image' || basis.seconds > 0 ? sizeText(est) : '', over: free !== null && est[est.length - 1] > free };
+}
+
+/** The extraction button's upper floor: the chosen format, a click opens the formats (each with its weight). */
+export function ClipFormat({ kind, value, onChange, basis }: { kind: ClipKind; value: string; onChange: (id: string) => void; basis: Basis }) {
   const [open, setOpen] = useState(false);
   const box = useRef<HTMLSpanElement>(null);
   useEffect(() => {
@@ -90,18 +98,12 @@ export function ClipFormat({ kind, value, onChange, basis, free }: { kind: ClipK
   }, [open]);
   const list = FORMATS.filter((f) => f.kind === kind);
   const cur = list.find((f) => f.id === value) ?? list[0];
-  const est = cur.size(basis);
-  const over = free !== null && est[est.length - 1] > free;
   return (
     <span className="cf" ref={box}>
-      <button type="button" className="cf-btn" aria-haspopup="listbox" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        {t(cur.name)}
-        <ChevronDown size={13} />
+      <button type="button" className="cf-btn" aria-haspopup="listbox" aria-expanded={open} data-tip={t('Format of the clip')} onClick={() => setOpen((o) => !o)}>
+        <span>{t(cur.name)}</span>
+        <ChevronDown size={11} />
       </button>
-      <span className={`cf-est ${over ? 'over' : ''}`} data-tip={over ? t('More than the free space of the clips ({free})', { free: say(free ?? 0) }) : undefined}>
-        <b>{kind === 'image' || basis.seconds > 0 ? sizeText(est) : '—'}</b>
-        <small>{t('estimated')}</small>
-      </span>
       {open && (
         <div className="cf-menu" role="listbox">
           {list.map((f) => (

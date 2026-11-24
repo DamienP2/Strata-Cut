@@ -691,8 +691,7 @@ a.btn { color: inherit; }
 .ctl.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-2); }
 .ctl-rate { position: absolute; top: -7px; right: -6px; padding: 0 4px; height: 15px; line-height: 15px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font: 700 10px var(--mono); pointer-events: none; }
 .sc-transport .sc-sep { height: 26px; }
-.sc-clipbar { flex: none; display: flex; align-items: center; gap: 10px; margin: 0 16px 12px; padding: 8px 10px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
-.sc-clipbar-l { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+.sc-clipbar { flex: none; display: flex; align-items: center; gap: 8px; margin: 0 16px 12px; padding: 8px 10px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
 .sc-mtag { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px 0 4px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-3); }
 .sc-mtag.set { border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: var(--accent-soft); }
 /* IN / OUT: a button that sets the point at the playhead. */
@@ -704,7 +703,7 @@ a.btn { color: inherit; }
 .sc-mtag-x { border: none; background: none; color: var(--text-3); cursor: pointer; display: grid; place-items: center; padding: 2px; border-radius: 4px; }
 .sc-mtag-x:hover { color: var(--text); background: var(--panel-2); }
 .sc-clipdur { font: 600 14px var(--mono); font-variant-numeric: tabular-nums; padding: 0 2px; }
-.sc-clipname { flex: 1; min-width: 80px; }
+.sc-clipname { flex: 1; min-width: 48px; }
 .sc-guide-panel { display: flex; flex-direction: column; min-height: 0; }
 .sc-guide-sec { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .sc-guide { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 2px; }
@@ -975,13 +974,18 @@ a.btn { color: inherit; }
 .sc-kind-b.audio.on svg { color: var(--mask, #2dd4bf); }
 .sc-kind-b.image.on svg { color: #f472b6; }
 /* Extraction: the clip's format, and its weight. */
-.cf { position: relative; display: inline-flex; align-items: center; gap: 10px; flex: none; }
-.cf-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text); font: 500 12.5px Inter, sans-serif; white-space: nowrap; cursor: pointer; }
-.cf-btn svg { color: var(--text-3); }
-.cf-est { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1.15; min-width: 74px; }
-.cf-est b { font: 700 13.5px var(--mono); white-space: nowrap; }
-.cf-est small { font-size: 10.5px; color: var(--text-3); }
-.cf-est.over b { color: var(--warn); }
+.sc-xwrap.two { display: inline-flex; flex-direction: column; flex: none; --xk: var(--accent); }
+.sc-xwrap.two.k-audio { --xk: var(--mask, #2dd4bf); }
+.sc-xwrap.two.k-image { --xk: #f472b6; }
+.cf { position: relative; display: block; }
+.cf-btn { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; height: 19px; padding: 0 8px; border: 1px solid var(--xk, var(--accent)); border-bottom: 0; border-radius: 9px 9px 0 0; background: color-mix(in srgb, var(--xk, var(--accent)) 16%, transparent); color: color-mix(in srgb, var(--xk, var(--accent)) 55%, #fff); font: 500 10.5px Inter, sans-serif; white-space: nowrap; cursor: pointer; }
+.cf-btn span { overflow: hidden; text-overflow: ellipsis; }
+.sc-xwrap.two .cf { width: 0; min-width: 100%; }
+.sc-xwrap.two .sc-xbtn { height: 30px; min-width: 136px; padding: 0 10px !important; border-radius: 0 0 9px 9px; justify-content: flex-start; }
+.sc-xwrap.two .sc-xbtn.busy { border-top: 0; }
+.sc-xw { margin-left: auto; padding-left: 10px; font: 700 12px var(--mono); white-space: nowrap; }
+.sc-xwrap.two.over .sc-xbtn:not(.busy), .sc-xwrap.two.over .sc-xbtn:not(.busy):hover:not(:disabled) { background: var(--warn); color: #0b0c12; }
+.sc-xwrap.two.over .cf-btn { border-color: var(--warn); }
 .cf-menu { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30; width: 400px; padding: 6px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--line-2); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; gap: 2px; }
 .cf-menu button { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .cf-menu button:hover { background: var(--panel-3); }
@@ -994,10 +998,15 @@ a.btn { color: inherit; }
    running under the panel beside it. */
 .sc-center { container-type: inline-size; container-name: centre; }
 @container centre (max-width: 1100px) {
-  .sc-kind-b span, .sc-clipbar-l { display: none; }
-  .sc-mtag input { width: 92px; }
+  .sc-kind-b span { display: none; }
+  .sc-clipbar { gap: 6px; }
+  .sc-mtag { gap: 4px; }
+  .sc-mtag input { width: 86px; font-size: 12px; }
+  .sc-mtag { padding-right: 4px; }
+  .sc-mtag-x { display: none; }
+  .sc-clipdur { font-size: 13px; }
 }
-@container centre (max-width: 880px) {
+@container centre (max-width: 800px) {
   .sc-clipbar { flex-wrap: wrap; row-gap: 8px; }
   /* Line 1: what, in, out, length; line 2: its name and what to do with it. */
   .sc-clipbar .sc-clipname, .sc-clipbar .sc-preview, .sc-clipbar .sc-xwrap { order: 2; }
@@ -1326,7 +1335,6 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .ps-tcrow { display: flex; align-items: center; min-height: 26px; }
 .ps-bar2 { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
 .ps-blk { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
-.ps-blk.air { border-color: rgba(255, 59, 92, 0.5); background: linear-gradient(0deg, rgba(255, 59, 92, 0.06), rgba(255, 59, 92, 0.06)), var(--panel); }
 .ps-thumb { position: relative; flex: none; width: 60px; aspect-ratio: 16 / 9; padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: #000; box-shadow: 0 0 0 1px var(--line-2); cursor: pointer; container-type: inline-size; }
 .ps-thumb.checker { background: repeating-conic-gradient(#1a1d29 0 25%, #12141d 0 50%) 0 0 / 10px 10px; }
 .ps-thumb > img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -1340,7 +1348,7 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .pg-ovl-set label { flex: 1; display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--text-2); }
 .pg-ovl-set input { flex: 1; accent-color: var(--accent); }
 .pg-ovl-set b { font: 600 12px var(--mono); min-width: 44px; text-align: right; color: var(--text); }
-.ps-win.air { box-shadow: 0 0 0 2px var(--live); }
+.ps-win.air { box-shadow: 0 0 0 1px var(--line); }
 .ps-win .sc-video { width: 100%; height: 100%; object-fit: contain; display: block; }
 .ps-guide { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(34, 197, 94, 0.7); z-index: 6; pointer-events: none; }
 .pg-tc { font: 600 17px var(--mono); color: var(--text); font-variant-numeric: tabular-nums; }
