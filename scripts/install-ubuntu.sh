@@ -947,6 +947,9 @@ set -eu
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 result="$(dirname "$1")/storage.result"
 d="$(head -n 1 "$1" | head -c 1024)"
+# Le résultat, écrit dans un fichier neuf : jamais à travers un lien que le service aurait mis
+# à sa place (noclobber : la création échoue si le nom existe, lien compris).
+say() { rm -f "$result"; ( set -C; printf '%s\n' "$1" >"$result" ); }
 
 grow() {
   lv="$1"
@@ -978,7 +981,7 @@ grow() {
 
 case "$d" in
   "extend "*)
-    if out="$(grow "${d#extend }" 2>&1)"; then echo ok >"$result"; echo "$out"; else printf 'error: %s\n' "$(echo "$out" | tail -n 1)" >"$result"; echo "$out" >&2; exit 1; fi
+    if out="$(grow "${d#extend }" 2>&1)"; then say ok; echo "$out"; else say "error: $(echo "$out" | tail -n 1)"; echo "$out" >&2; exit 1; fi
     exit 0 ;;
 esac
 case "$d" in
@@ -1000,7 +1003,7 @@ parent="$(dirname "$d")"
 [ "$(basename "$parent")" = strata-cut ] && chown -h "$2:$2" "$parent"
 chown -h "$2:$2" "$d"
 [ -L "$d" ] || chmod 0750 "$d"
-echo ok >"$result"
+say ok
 EOF
   chmod 0755 "$STORAGE_HELPER"
   chown root:root "$STORAGE_HELPER"

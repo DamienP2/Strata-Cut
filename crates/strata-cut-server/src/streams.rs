@@ -353,7 +353,8 @@ impl Streams {
     }
 
     fn save(&self, all: &[Destination]) -> Result<(), String> {
-        crate::paths::write_json(&path(&self.data_dir), all, false).map_err(|e| e.to_string())
+        // Their keys and passphrases: for the service alone.
+        crate::paths::write_json(&path(&self.data_dir), all, true).map_err(|e| e.to_string())
     }
 
     fn changed(&self) {
@@ -983,12 +984,20 @@ async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResul
     Ok(Json(Value::Array(all.iter().map(|d| if me.is_admin() { d.public() } else { d.for_operator() }).collect())))
 }
 
-/// The saved secrets are kept when the form sends them masked.
-fn keep_secrets(d: &mut Destination, old: Option<&Destination>) {
+/// The saved secrets are kept when the form sends them masked, for the same server only: sent
+/// elsewhere, they are given again.
+fn keep_secrets(d: &mut Destination, old: Option<&Destination>) -> Result<(), String> {
+    let same = old.is_some_and(|o| o.protocol == d.protocol && o.host().eq_ignore_ascii_case(&d.host()));
     if d.key == MASKED {
+        if !same && old.is_some_and(|o| !o.key.is_empty()) {
+            return Err("give the key again for this server".into());
+        }
         d.key = old.map(|o| o.key.clone()).unwrap_or_default();
     }
     if d.passphrase == MASKED {
+        if !same && old.is_some_and(|o| !o.passphrase.is_empty()) {
+            return Err("give the passphrase again for this server".into());
+        }
         d.passphrase = old.map(|o| o.passphrase.clone()).unwrap_or_default();
     }
     if d.key_live {
@@ -997,12 +1006,13 @@ fn keep_secrets(d: &mut Destination, old: Option<&Destination>) {
     d.name = d.name.trim().to_string();
     d.url = d.url.trim().to_string();
     d.key = d.key.trim().to_string();
+    Ok(())
 }
 
 async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut d): Json<Destination>) -> ApiResult<Json<Value>> {
     require(me.is_admin())?;
     let _one = WRITE.lock().unwrap();
-    keep_secrets(&mut d, None);
+    keep_secrets(&mut d, None).map_err(bad)?;
     d.validate().map_err(bad)?;
     let mut all = s.streams.list();
     d.id = crate::api::new_id();
@@ -1018,7 +1028,7 @@ async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
     let _one = WRITE.lock().unwrap();
     let mut all = s.streams.list();
     let i = all.iter().position(|x| x.id == id).ok_or_else(|| not_found("destination"))?;
-    keep_secrets(&mut d, Some(&all[i]));
+    keep_secrets(&mut d, Some(&all[i])).map_err(bad)?;
     d.id = id;
     d.validate().map_err(bad)?;
     all[i] = d.clone();

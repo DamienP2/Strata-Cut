@@ -86,10 +86,19 @@ async fn put_config(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(
     cfg.normalize();
     cfg.validate().map_err(bad)?;
     let old = s.config.load_full();
+    // A saved secret goes only where it went: another provider or mail server, it is given again.
     if cfg.security.sso.client_secret == MASK {
+        let (n, o) = (&cfg.security.sso, &old.security.sso);
+        if (n.provider.as_str(), n.issuer.trim(), n.client_id.trim()) != (o.provider.as_str(), o.issuer.trim(), o.client_id.trim()) && !o.client_secret.is_empty() {
+            return Err(bad("give the client secret again for this provider"));
+        }
         cfg.security.sso.client_secret = old.security.sso.client_secret.clone();
     }
     if cfg.alerts.smtp_password == MASK {
+        let (n, o) = (&cfg.alerts, &old.alerts);
+        if (n.smtp_host.trim(), n.smtp_port, n.smtp_security.as_str(), n.smtp_user.trim()) != (o.smtp_host.trim(), o.smtp_port, o.smtp_security.as_str(), o.smtp_user.trim()) && !o.smtp_password.is_empty() {
+            return Err(bad("give the password again for this server"));
+        }
         cfg.alerts.smtp_password = old.alerts.smtp_password.clone();
     }
     if cfg.youtube.cookies == MASK {

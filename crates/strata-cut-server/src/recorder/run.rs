@@ -326,6 +326,35 @@ fn urlencode(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
+/// What FFmpeg says of a source, without its secrets (it is logged, shown, exported for support):
+/// its address as the host alone (a key or a token in its path or query), its passphrase as given
+/// or as written in the address, any `passphrase=` value.
+pub(crate) fn redact(text: &str, cfg: &RecorderConfig) -> String {
+    let mut t = text.to_string();
+    let url = cfg.url.trim();
+    if url.contains("://") && t.contains(url) {
+        t = t.replace(url, &super::only_host(url));
+    }
+    for secret in [cfg.passphrase.clone(), urlencode(&cfg.passphrase)] {
+        if secret.len() >= 3 && secret != super::MASKED {
+            t = t.replace(&secret, "••••");
+        }
+    }
+    let mut out = String::with_capacity(t.len());
+    let mut rest = t.as_str();
+    while let Some(i) = rest.find("passphrase=") {
+        let (head, tail) = rest.split_at(i + "passphrase=".len());
+        out.push_str(head);
+        let end = tail.find(|c: char| c == '&' || c.is_whitespace()).unwrap_or(tail.len());
+        if end > 0 {
+            out.push_str("••••");
+        }
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// The receiver's FFmpeg (without the program): the stream as received in segments, the
 /// guide on its output, and a copy of the stream on the loopback for the preview.
 /// Copying only, it keeps up with the source even when the server is short of CPU: the
@@ -842,6 +871,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
         let log = log.clone();
         let name = cfg.name.clone();
         let (rec2, epg_new2, mapped, data_dir2) = (rec.clone(), epg_new.clone(), epg_map.is_some(), m.data_dir().to_path_buf());
+        let said_of = cfg.clone();
         tokio::spawn(async move {
             let mut lines = tokio::io::BufReader::new(err).lines();
             let mut info = super::epg::InfoReader::default();
@@ -851,6 +881,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             // Which of the input's streams are pictures ("Stream #0:1[0x101]: Video: …").
             let mut pictures: Vec<u32> = Vec::new();
             while let Ok(Some(l)) = lines.next_line().await {
+                let l = redact(&l, &said_of);
                 if let Some(n) = empty_stream(&l) {
                     let mut e = rec2.empty_streams.lock().unwrap();
                     if !e.contains(&n) {
@@ -1709,6 +1740,18 @@ mod tests {
         assert!(best_line(&lines).contains("IP_ADD_MEMBERSHIP"));
         assert_eq!(udp_reason(&best_line(&lines)), "udp: cannot join the multicast on this network card");
         assert_eq!(udp_reason("Error opening input files: Input/output error"), "udp: nothing received (address, network card, multicast)");
+    }
+
+    #[test]
+    fn secrets_not_said() {
+        let srt = RecorderConfig { url: "srt://encoder.example:9000?mode=caller".into(), passphrase: "très secret&1".into(), ..cfg(Protocol::Srt, Mode::Caller) };
+        let said = "[srt @ 0x1] Connection to srt://encoder.example:9000?mode=caller&latency=200000&passphrase=tr%C3%A8s%20secret%261 failed: Input/output error";
+        let r = redact(said, &srt);
+        assert!(!r.contains("secret") && !r.contains("%C3"), "{r}");
+        assert!(r.contains("srt://encoder.example:9000") && r.contains("failed: Input/output error"), "{r}");
+        let rtmp = RecorderConfig { url: "rtmp://live.example/app/KEY123456".into(), ..cfg(Protocol::Srt, Mode::Caller) };
+        assert_eq!(redact("rtmp://live.example/app/KEY123456: I/O error", &rtmp), "rtmp://live.example: I/O error");
+        assert_eq!(redact("x passphrase=abc&y=1", &cfg(Protocol::Udp, Mode::Caller)), "x passphrase=••••&y=1");
     }
 
     #[test]

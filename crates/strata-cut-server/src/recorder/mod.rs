@@ -1341,7 +1341,8 @@ impl Manager {
     }
 
     /// The sources, for an admin; for the others, their addresses without what may be secret
-    /// (a stream key in the path, a token in the query, a user and password).
+    /// (a stream key in the path, a token in the query, a user and password, the path an encoder
+    /// publishes to).
     pub fn list_json(&self, admin: bool) -> Value {
         Value::Array(
             self.recs()
@@ -1350,6 +1351,8 @@ impl Manager {
                     let mut v = r.config().public();
                     if !admin {
                         v["url"] = json!(only_host(&r.config().url));
+                        // The path an encoder publishes to (RTMP listener): its stream key.
+                        v["path"] = json!("");
                     }
                     // The logo's version: the interface asks for it again when it changes.
                     v["logo"] = json!(logo::version(&self.data_dir, &r.id));
