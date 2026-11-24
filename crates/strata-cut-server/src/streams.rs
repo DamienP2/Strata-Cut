@@ -267,7 +267,7 @@ struct Stats {
 
 /// A live whose destination's server cut the link this long (ms) is stopped: a person sees why,
 /// and starts it again when that server is back.
-const DOWN_LIMIT: i64 = 30_000;
+const DOWN_LIMIT: i64 = 120_000;
 
 pub struct Streams {
     data_dir: PathBuf,
@@ -562,8 +562,9 @@ impl Streams {
             if r.ended() {
                 return true;
             }
-            // Its first picture of the source too (a few seconds more): the live begins with it.
-            if r.flowing() && (r.pictured() || since.elapsed() > Duration::from_secs(15)) {
+            // Its first picture of the source too: nothing is sent to the destination before (a
+            // server that receives a stream without a picture may refuse it, or show black).
+            if r.flowing() && r.pictured() {
                 self.set(s, |st| {
                     if st.message == "waiting for the source" || st.message == "the programme is being made" {
                         st.message.clear();
@@ -738,7 +739,7 @@ impl Streams {
                 let now = now_ms();
                 let since = self.set(&s, |st| *st.down_since.get_or_insert(now));
                 if now - since >= DOWN_LIMIT {
-                    self.give_up(&s, &d, "the destination's server cut the link for 30 s: the live was stopped".into());
+                    self.give_up(&s, &d, "the destination's server cut the link for 2 minutes: the live was stopped".into());
                     break;
                 }
             }

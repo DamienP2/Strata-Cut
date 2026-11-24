@@ -297,8 +297,9 @@ const GAIN_MARKS = [12, 6, 0, -6, -12, -20, -30, -40];
 const gainShare = (db: number) => (db + 40) / 52;
 
 /**
- * The levels of the source's tracks, measured by the server (5 a second while shown): as a meter
- * shows them (a peak falls back slowly), and the highest of each track over its last readings.
+ * The levels of the source's tracks, measured by the server (10 a second while shown), of the frame
+ * the picture shows: as a meter shows them (a peak falls back at 60 dB a second: a sound that stops
+ * is seen to stop at once), and the highest of each track over its last readings.
  */
 function useLevels(recId: string, n: number, shown: () => number | null): { lv: number[][]; recent: (k: number, readings: number) => number } {
   const [lv, setLv] = useState<number[][]>([]);
@@ -306,23 +307,29 @@ function useLevels(recId: string, n: number, shown: () => number | null): { lv: 
   useEffect(() => {
     if (n === 0) return;
     let on = true;
+    let busy = false;
     history.current = [];
-    const get = () =>
-      api<{ tracks: number[][] }>("GET", `/api/program/${recId}/levels${shown() ? `?at=${Math.round(shown()!)}` : ""}`).then(
+    const get = () => {
+      if (busy) return;
+      busy = true;
+      void api<{ tracks: number[][] }>("GET", `/api/program/${recId}/levels${shown() !== null ? `?t=${shown()}` : ""}`).then(
         (r) => {
           if (!on) return;
           r.tracks.forEach((tr, k) => {
             const h = (history.current[k] ??= []);
             h.push(Math.max(-90, ...tr));
-            if (h.length > 50) h.shift();
+            if (h.length > 100) h.shift();
           });
-          // A peak falls back slowly (as a meter's needle): 2.5 dB a reading, 12 dB a second.
-          setLv((prev) => r.tracks.map((tr, k) => tr.map((db, c) => Math.max(db, (prev[k]?.[c] ?? -90) - 2.5))));
+          // A peak falls back at 6 dB a reading (60 dB a second).
+          setLv((prev) => r.tracks.map((tr, k) => tr.map((db, c) => Math.max(db, (prev[k]?.[c] ?? -90) - 6))));
         },
         () => {},
-      );
-    void get();
-    const i = window.setInterval(get, 200);
+      ).finally(() => {
+        busy = false;
+      });
+    };
+    get();
+    const i = window.setInterval(get, 100);
     return () => {
       on = false;
       window.clearInterval(i);
@@ -383,7 +390,7 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
   const changed = all().some((tr) => tr.gain !== 0) || p.master !== 0;
   // AUTO: the track's peaks of the last 10 s brought to the target.
   const auto = (k: number) => {
-    const peak = recent(k, 50);
+    const peak = recent(k, 100);
     if (peak <= SILENT) {
       toast(t("This track is silent: nothing to set"), "info");
       return;
@@ -410,7 +417,7 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
   let outPeak = -90;
   tracks.forEach((_, k) => {
     const tr = trackOf(p, k);
-    if (tr.on) outPeak = Math.max(outPeak, recent(k, 15) + tr.gain);
+    if (tr.on) outPeak = Math.max(outPeak, recent(k, 30) + tr.gain);
   });
   outPeak = outPeak <= -90 ? -90 : outPeak + p.master;
   return (
@@ -435,7 +442,7 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
             // As it goes into the mix: the source's level with this track's.
             // Each of its channels (none measured yet: two).
             const lv = (levels[k]?.length ? levels[k] : [-90, -90]).map((db) => (db <= -90 ? -90 : db + tr.gain));
-            const peak = recent(k, 15) + tr.gain;
+            const peak = recent(k, 30) + tr.gain;
             const solo = monitor.solo === k;
             const label = trackLabel(lang, prog.state?.kinds?.[k]);
             return (

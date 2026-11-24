@@ -80,6 +80,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   const [settings, setSettings] = useState(false);
   const player = useRef<LoopPlayer | null>(null);
   // The moment the picture shows (server ms): the meters show the sound of that moment.
+  // The timestamp of the frame shown (the source's, ms): the meters show its sound.
   const shown = useRef<number | null>(null);
   const received = st?.state === 'recording';
   // Only what is received now is shown: a stopped source shows nothing (not what is left of
@@ -90,9 +91,9 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
       return;
     }
     const p = new LoopPlayer(video.current!, rec.id, serverNow);
-    p.onFrame = (w) => {
+    p.onFrame = (w, tt) => {
       setWall(w);
-      shown.current = w;
+      shown.current = Math.round(tt * 1000);
     };
     p.onFollowers = setFollowers;
     player.current = p;
@@ -281,7 +282,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
                       <AlertTriangle size={12} /> {t('The destination no longer answers')}
                     </span>
                     <b>{t('Stops in {n} s', { n: left })}</b>
-                    <i style={{ width: `${(left / 30) * 100}%` }} />
+                    <i style={{ width: `${(left / 120) * 100}%` }} />
                   </div>
                 )}
                 {on && s && (

@@ -503,17 +503,17 @@ async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
 
 #[derive(Deserialize)]
 struct At {
-    /// The moment (server ms) the page shows; now if not said.
-    at: Option<i64>,
+    /// The timestamp (the source's, ms) of the frame the page shows; none: the newest measured.
+    t: Option<i64>,
 }
 
-/// Each sound track's peaks, each of its channels (dB, -90: silence; none yet: none), of a moment:
-/// the one the page's picture shows (it plays some seconds behind the source).
+/// Each sound track's peaks, each of its channels (dB, -90: silence; none yet: none), of the frame
+/// the page shows (it plays some seconds behind the source): by that frame's own timestamp.
 async fn levels(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, axum::extract::Query(q): axum::extract::Query<At>) -> ApiResult<Json<Value>> {
     require(me.can("stream.view") || me.is_admin())?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let n = rec.status.lock().unwrap().media.as_ref().map_or(0, |m| m.audio_tracks as usize);
-    Ok(Json(json!({ "tracks": s.streams.programs.meters.read(&source, n, q.at) })))
+    Ok(Json(json!({ "tracks": s.streams.programs.meters.read(&source, n, q.t) })))
 }
 
 #[derive(Deserialize)]
