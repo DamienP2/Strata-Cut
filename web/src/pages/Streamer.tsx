@@ -26,7 +26,7 @@ import { confirmDialog } from '../ui/dialogs';
 import { SourceGroups } from '../ui/SourceGroups';
 import { usePageTools } from '../ui/PageTools';
 import { Mixer, ProgramLayer, SettingsModal, useProgram, type Tab } from './StreamerProgram';
-import { AirPills, Bank, Passage, ReadyWindow, useNext } from './StreamerPass';
+import { AirOverlay, Bank, Passage, ReadyWindow, useNext } from './StreamerPass';
 
 /** A message of the server, translated: whole, or its known beginning and what follows (FFmpeg's words). */
 function said(m: string): string {
@@ -88,7 +88,8 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
     const p = prog.state?.program;
     if (!p || !next || !run) return;
     const was = p.imageOn;
-    prog.pass(next);
+    // The overlay stays on or off as it is on air (that is said under the window on air).
+    prog.pass({ ...next, overlay: { ...next.overlay, on: p.overlayOn } });
     setPassing((n) => n + 1);
     // What was on air comes back on the left: a second « Passer » goes back.
     setNext({ ...next, image: was });
@@ -190,14 +191,13 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
           {prog.state && next && (
             <>
               <ReadyWindow rec={rec} prog={prog} next={next} setNext={setNext} video={video} received={received} editable={run} />
-              <Bank rec={rec} prog={prog} next={next} setNext={setNext} editable={run} onOverlaySettings={() => setSettings('overlay')} />
+              <Bank rec={rec} prog={prog} next={next} setNext={setNext} editable={run} />
             </>
           )}
         </div>
         {prog.state && next ? <Passage prog={prog} next={next} onPass={pass} editable={run} passing={passing} /> : <div />}
         <div className="ps-col">
           <div className="ps-win air">
-            <span className="ps-tally" />
             <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
             {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
             {received && page.mode === 'view' && <ProgramLayer rec={rec} prog={prog} />}
@@ -209,7 +209,6 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
                 <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
                 {since && (
                   <span className="ps-since" data-tip={t('On air since')}>
-                    <i />
                     {clockOf(serverNow() - since)}
                   </span>
                 )}
@@ -218,7 +217,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
                   <Settings size={15} />
                 </button>
               </div>
-              {prog.state && <AirPills prog={prog} />}
+              {prog.state && next && <AirOverlay prog={prog} next={next} setNext={setNext} editable={run} onSettings={() => setSettings('overlay')} />}
             </>
           )}
         </div>
