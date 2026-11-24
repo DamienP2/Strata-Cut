@@ -1,5 +1,5 @@
 /*
- * Système › Serveur › Stockage: how full the space of Strata Cut is: the recordings (the loops)
+ * Système › Serveur › Stockage: how full the space of Strata LiveCut is: the recordings (the loops)
  * and the clips, then each recorder; and the disks they are written on. The loops and the clips
  * share their disk: when it is full, the oldest recordings go first.
  */
@@ -26,7 +26,7 @@ interface Physical {
   growable: number;
   lv: string | null;
 }
-/** One disk as Strata Cut sees it: `available` = total − other files − the system's reserve. */
+/** One disk as Strata LiveCut sees it: `available` = total − other files − the system's reserve. */
 interface Usage {
   mount: string;
   total: number;
@@ -100,7 +100,7 @@ export function Storage() {
     label: d.mount === '/' ? t('System disk') : d.mount,
     detail: t('{free} free of {total}', { free: sz(d.free), total: sz(d.total) }),
   }));
-  /** The folder Strata Cut uses on a disk: its default one on the system disk, else <disk>/strata-cut/<kind>. */
+  /** The folder Strata LiveCut uses on a disk: its default one on the system disk, else <disk>/strata-cut/<kind>. */
   const folderOn = (mount: string, kind: 'loops' | 'clips') => (mount === '/' ? '' : `${mount}/strata-cut/${kind}`);
   const loopsFolder = str('recordingsDir') || info?.recordings.dir || '';
   const clipsFolder = str('clipsDir') || info?.clips.dir || '';
@@ -112,7 +112,7 @@ export function Storage() {
   const loops = info?.recordings.bytes ?? 0;
   const clips = info?.clips.bytes ?? 0;
   const reserved = info?.reserved ?? 0;
-  // The space of Strata Cut: what the disk(s) leave available.
+  // The space of Strata LiveCut: what the disk(s) leave available.
   const loopsSpace = ld?.available ?? 0;
   const clipsSpace = same ? loopsSpace : (cd?.available ?? 0);
   const total = same ? loopsSpace : loopsSpace + clipsSpace;
@@ -142,7 +142,7 @@ export function Storage() {
     }
   };
 
-  /** The space of a disk for Strata Cut: the recordings, the clips, what is free. */
+  /** The space of a disk for Strata LiveCut: the recordings, the clips, what is free. */
   const spaceBar = (u: Usage, withLoops: boolean, withClips: boolean) => {
     const a = u.available;
     const l = withLoops ? u.loops : 0;
@@ -205,12 +205,12 @@ export function Storage() {
             <dt>
               <i className="sc-hatch" />
               {t('Kept for the system')}
-              <InfoTip text={t('Never used by Strata Cut, so that the system keeps working.')} />
+              <InfoTip text={t('Never used by Strata LiveCut, so that the system keeps working.')} />
             </dt>
             <dd>{sz(u.reserve)}</dd>
           </div>
           <div className="strong">
-            <dt>{t('Available for Strata Cut')}</dt>
+            <dt>{t('Available for Strata LiveCut')}</dt>
             <dd>{sz(u.available)}</dd>
           </div>
         </dl>
@@ -223,7 +223,7 @@ export function Storage() {
 
   return (
     <>
-      <PageHead title={t('Storage')} sub={info && total > 0 ? t('{used} used of {total} available for Strata Cut ({p})', { used: sz(used), total: sz(total), p: pctText(pctOf(used, total)) }) : undefined} />
+      <PageHead title={t('Storage')} sub={info && total > 0 ? t('{used} used of {total} available for Strata LiveCut ({p})', { used: sz(used), total: sz(total), p: pctText(pctOf(used, total)) }) : undefined} />
 
       {info && ld && !moved && (
         <Card icon={<PieChart size={16} />} title={t('Occupancy')}>

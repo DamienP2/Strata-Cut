@@ -2,9 +2,9 @@
  * The player's controls, the same in the Extraction and in the clip's preview: to the IN, a frame
  * back, fast backwards, play / pause, fast forwards, a frame on, to the OUT; and their keys.
  *
- * Keys: K or Space play / pause (playing fast: back to normal speed), L ↑ → 10 s on, J ↓ ← 10 s
- * back, Shift ← → a frame, F fast forwards and R fast backwards (each press: ×1.5, ×2, ×4), M the
- * sound off or on.
+ * Keys: K or Space play / pause (playing fast: back to normal speed), L ↑ 10 s on, J ↓ 10 s back,
+ * ← → a frame, F fast forwards and R fast backwards (each press: ×1.5, ×2, ×4), M the sound off
+ * or on.
  */
 import { useEffect, useRef } from 'react';
 import { ArrowLeftToLine, ArrowRightToLine, FastForward, Pause, Play, Rewind, StepBack, StepForward } from 'lucide-react';
@@ -49,7 +49,7 @@ export function Transport({ acts, rate, playing, hasIn, hasOut }: { acts: Transp
       <button className="ctl" data-tip={t('Go to the in point')} data-keys="⇧ I" disabled={!hasIn || !acts.toIn} onClick={acts.toIn}>
         <ArrowLeftToLine size={18} />
       </button>
-      <button className="ctl" data-tip={t('Previous frame')} data-keys="⇧ ←" onClick={() => acts.step(-1)}>
+      <button className="ctl" data-tip={t('Previous frame')} data-keys="←" onClick={() => acts.step(-1)}>
         <StepBack size={18} />
       </button>
       <button className={`ctl ${back ? 'on' : ''}`} data-tip={t('Fast backwards: ×1.5, ×2, ×4')} data-keys="R" onClick={() => acts.fast(nextFast(rate, -1))}>
@@ -63,7 +63,7 @@ export function Transport({ acts, rate, playing, hasIn, hasOut }: { acts: Transp
         <FastForward size={18} />
         {ahead && <span className="ctl-rate">{said(rate)}</span>}
       </button>
-      <button className="ctl" data-tip={t('Next frame')} data-keys="⇧ →" onClick={() => acts.step(1)}>
+      <button className="ctl" data-tip={t('Next frame')} data-keys="→" onClick={() => acts.step(1)}>
         <StepForward size={18} />
       </button>
       <button className="ctl" data-tip={t('Go to the out point')} data-keys="⇧ O" disabled={!hasOut || !acts.toOut} onClick={acts.toOut}>
@@ -90,10 +90,10 @@ export function useTransportKeys(acts: TransportActs, now: { rate: number; playi
       const { acts: a, now: n } = ref.current;
       const k = e.key.toLowerCase();
       if (k === ' ' || k === 'k') n.playing && n.rate !== 1 ? a.normal() : a.toggle();
-      else if ((k === 'arrowright' || k === 'arrowleft') && e.shiftKey) a.step(k === 'arrowright' ? 1 : -1);
+      else if (k === 'arrowright' || k === 'arrowleft') a.step(k === 'arrowright' ? 1 : -1);
       else if (e.shiftKey) return;
-      else if (k === 'l' || k === 'arrowup' || k === 'arrowright') a.jump(10);
-      else if (k === 'j' || k === 'arrowdown' || k === 'arrowleft') a.jump(-10);
+      else if (k === 'l' || k === 'arrowup') a.jump(10);
+      else if (k === 'j' || k === 'arrowdown') a.jump(-10);
       else if (k === 'f') a.fast(nextFast(n.playing ? n.rate : 1, 1));
       else if (k === 'r') a.fast(nextFast(n.playing ? n.rate : 1, -1));
       else if (k === 'm') a.mute();

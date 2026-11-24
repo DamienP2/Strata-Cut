@@ -131,7 +131,7 @@ export function Updates() {
             useApp
               .getState()
               .toast(
-                t("Strata Cut {version} is running", { version: h.version }),
+                t("Strata LiveCut {version} is running", { version: h.version }),
               );
             setTimeout(() => location.reload(), 600);
             return;
@@ -200,7 +200,7 @@ export function Updates() {
     const ok = await confirmDialog({
       title: back
         ? t("Go back to version {v}?", { v: version })
-        : t("Install Strata Cut {v}?", { v: version }),
+        : t("Install Strata LiveCut {v}?", { v: version }),
       message: `${t("The server restarts: it is unavailable for a few seconds.")}${cuts ? ` ${cuts}` : ""}`,
       confirm: back ? t("Go back") : t("Install"),
       danger: back || !!cuts,

@@ -1,4 +1,4 @@
-/* After a crash (admins): « Strata Cut s’est arrêté de façon inattendue le … puis a redémarré. » */
+/* After a crash (admins): « Strata LiveCut s’est arrêté de façon inattendue le … puis a redémarré. » */
 import { useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import { t } from '../i18n';
@@ -13,7 +13,7 @@ export function CrashBanner({ hidden = false }: { hidden?: boolean }) {
   return (
     <div className="crash-banner" role="alert">
       <TriangleAlert size={16} />
-      <span>{t('Strata Cut stopped unexpectedly on {date} and restarted.', { date: formatDateTime(health.lastCrash) })}</span>
+      <span>{t('Strata LiveCut stopped unexpectedly on {date} and restarted.', { date: formatDateTime(health.lastCrash) })}</span>
       <button
         type="button"
         className="btn small"

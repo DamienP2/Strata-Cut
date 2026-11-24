@@ -1,4 +1,4 @@
-# Strata Cut
+# Strata LiveCut
 
 Enregistre des flux vidéo en continu, en boucle (24 h par défaut, réglable par source : le plus ancien est effacé au fur et à mesure), et en extrait des passages à l'image près.
 

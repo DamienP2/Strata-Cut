@@ -102,7 +102,7 @@ fn common(data_dir: &Path, c: &RecorderConfig) -> Vec<String> {
         a.push("--cookies".into());
         a.push(f.to_string_lossy().into_owned());
     }
-    // YouTube needs a JavaScript runtime: Deno by default, else Node (installed with Strata Cut).
+    // YouTube needs a JavaScript runtime: Deno by default, else Node (installed with Strata LiveCut).
     if !on_path("deno") && on_path("node") {
         a.extend(["--js-runtimes".into(), "node".into()]);
     }

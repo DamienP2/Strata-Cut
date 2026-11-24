@@ -1,4 +1,4 @@
-//! Strata Cut server: records streams in loops, cuts clips at the frame.
+//! Strata LiveCut server: records streams in loops, cuts clips at the frame.
 use clap::{Args, Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::{Duration, Instant}};
 use tokio::sync::{watch, Notify};
@@ -175,7 +175,7 @@ async fn bind_retry(wanted: SocketAddr) -> anyhow::Result<tokio::net::TcpListene
     anyhow::bail!("{wanted} is in use")
 }
 
-/// Other Strata Cut servers running on the same data folder (same program, `run`).
+/// Other Strata LiveCut servers running on the same data folder (same program, `run`).
 fn others(data_dir: &std::path::Path) -> Vec<i32> {
     let me = std::process::id() as i32;
     let Ok(exe) = std::env::current_exe() else { return Vec::new() };
@@ -206,7 +206,7 @@ fn stop_others(data_dir: &std::path::Path) {
         return;
     }
     for &pid in &pids {
-        tracing::warn!("another Strata Cut (pid {pid}) was still running on {}: stopped", data_dir.display());
+        tracing::warn!("another Strata LiveCut (pid {pid}) was still running on {}: stopped", data_dir.display());
         // SAFETY: kill has no memory effects.
         unsafe { libc::kill(pid, libc::SIGTERM) };
     }
@@ -223,7 +223,7 @@ fn stop_others(data_dir: &std::path::Path) {
     }
 }
 
-/// Recorders' FFmpeg left by a Strata Cut that died without stopping them (a receiver goes on
+/// Recorders' FFmpeg left by a Strata LiveCut that died without stopping them (a receiver goes on
 /// writing an old run, a preview waits for a stream that no longer comes). Adopted by init,
 /// they are known by their command line.
 fn stop_orphan_ffmpeg() {
@@ -255,7 +255,7 @@ async fn until_true(mut rx: watch::Receiver<bool>) {
 
 pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Result<()> {
     let data_dir = args.data_dir.clone().unwrap_or_else(paths::user_data_dir);
-    // One Strata Cut per data folder: an older one still running (an update or a restart
+    // One Strata LiveCut per data folder: an older one still running (an update or a restart
     // that did not end it) would go on recording with its old list of recorders.
     stop_others(&data_dir);
     stop_orphan_ffmpeg();

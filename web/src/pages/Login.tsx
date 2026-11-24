@@ -9,7 +9,7 @@ import { ApiError, useApp } from '../store';
 import { Brand } from '../ui/Brand';
 import { friendlyError } from '../ui/serverError';
 
-const BRAND = 'Strata Cut';
+const BRAND = 'Strata LiveCut';
 
 /** The SSO error the server sent back in the URL (?sso_error=…&sso_detail=…), then cleans the URL. */
 function ssoError(): string | null {

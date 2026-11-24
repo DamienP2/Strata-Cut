@@ -121,7 +121,7 @@ export function Hardware() {
         <Card icon={<Cpu size={16} />} title={t('Blackmagic DeckLink cards')}>
           <div className="sc-space bad">
             <strong>{t('Blackmagic’s Desktop Video driver is not installed on the server.')}</strong>
-            <span>{!hw.driver ? t('Download Desktop Video for Linux from Blackmagic’s site on your computer, copy it to the server (scp … :~/) and run the install script again: it installs it, step by step. In a virtual machine, the card must first be passed through to it (PCI passthrough).') : t('This server was built without DeckLink support: install a release of Strata Cut.')}</span>
+            <span>{!hw.driver ? t('Download Desktop Video for Linux from Blackmagic’s site on your computer, copy it to the server (scp … :~/) and run the install script again: it installs it, step by step. In a virtual machine, the card must first be passed through to it (PCI passthrough).') : t('This server was built without DeckLink support: install a release of Strata LiveCut.')}</span>
           </div>
         </Card>
       )}

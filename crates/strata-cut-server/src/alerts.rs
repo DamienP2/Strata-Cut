@@ -296,7 +296,7 @@ pub fn start(data_dir: std::path::PathBuf, recorders: Arc<Manager>, streams: Arc
                     once: true,
                     event: "restart",
                     source: String::new(),
-                    text: say("Strata Cut a redémarré après un arrêt inattendu (voir Système › Santé)", "Strata Cut started again after an unexpected stop (see Système › Santé)"),
+                    text: say("Strata LiveCut a redémarré après un arrêt inattendu (voir Système › Santé)", "Strata LiveCut started again after an unexpected stop (see Système › Santé)"),
                     over: String::new(),
                 });
             }
@@ -478,7 +478,7 @@ fn email(a: &Alerts, server: &str, m: &Message) -> Result<(), String> {
     // Lines starting with a dot are doubled (the end of DATA is a lone dot).
     let body: String = body.split("\r\n").map(|l| if l.starts_with('.') { format!(".{l}") } else { l.to_string() }).collect::<Vec<_>>().join("\r\n");
     let msg = format!(
-        "From: Strata Cut <{}>\r\nTo: {}\r\nSubject: {}\r\nDate: {date}\r\nMessage-ID: {id}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{body}\r\n.\r\n",
+        "From: Strata LiveCut <{}>\r\nTo: {}\r\nSubject: {}\r\nDate: {date}\r\nMessage-ID: {id}\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{body}\r\n.\r\n",
         a.smtp_from,
         to.join(", "),
         encoded(&subject)
@@ -515,7 +515,7 @@ async fn test(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut a)
         event: "test",
         level: "info",
         source: String::new(),
-        text: if fr { "Message d’essai des alertes de Strata Cut".into() } else { "Strata Cut alerts: a test message".into() },
+        text: if fr { "Message d’essai des alertes de Strata LiveCut".into() } else { "Strata LiveCut alerts: a test message".into() },
     };
     let results = blocking(move || send(&a, &m)).await?;
     let mut out = serde_json::Map::new();

@@ -443,7 +443,7 @@ pub fn extract_program(bytes: &[u8]) -> Result<Vec<u8>, String> {
         }
         return Err(format!("the package has no {} program", crate::BIN));
     }
-    Err("this file is not a Strata Cut package".into())
+    Err("this file is not a Strata LiveCut package".into())
 }
 
 fn io_error(e: std::io::Error) -> String {
@@ -466,7 +466,7 @@ fn install_bytes(data: &Path, bytes: &[u8], allow_older: bool) -> Result<String,
     }
     let Some(version) = program_version(&new) else {
         let _ = std::fs::remove_file(&new);
-        return Err("this program is not a Strata Cut server for this machine".into());
+        return Err("this program is not a Strata LiveCut server for this machine".into());
     };
     if !allow_older && cmp_versions(&version, CURRENT) != Ordering::Greater {
         let _ = std::fs::remove_file(&new);

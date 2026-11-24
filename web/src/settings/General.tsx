@@ -104,7 +104,7 @@ export function General() {
                 label={
                   <>
                     {t('NTP servers')}
-                    {time && !time.managed && <InfoTip text={t('Set when Strata Cut is installed with the install script.')} />}
+                    {time && !time.managed && <InfoTip text={t('Set when Strata LiveCut is installed with the install script.')} />}
                   </>
                 }
               >

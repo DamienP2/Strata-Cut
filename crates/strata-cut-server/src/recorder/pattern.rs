@@ -170,7 +170,7 @@ pub fn args(data_dir: &Path, c: &RecorderConfig) -> Vec<String> {
         a.extend(["-flags", "+ildct+ilme", "-top", "1"].map(String::from));
     }
     a.extend(["-c:a", "aac", "-b:a", "192k", "-ar", "48000"].map(String::from));
-    a.extend(["-metadata".into(), format!("service_name={}", c.name.trim()), "-metadata".into(), "service_provider=Strata Cut".into()]);
+    a.extend(["-metadata".into(), format!("service_name={}", c.name.trim()), "-metadata".into(), "service_provider=Strata LiveCut".into()]);
     a.extend(["-f", "mpegts", "-muxdelay", "0", "pipe:1"].map(String::from));
     a
 }

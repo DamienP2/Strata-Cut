@@ -39,7 +39,7 @@ pub async fn embedded(uri: Uri, headers: HeaderMap) -> Response {
                 return (
                     StatusCode::SERVICE_UNAVAILABLE,
                     [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                    "<!doctype html><meta charset=utf-8><title>Strata Cut</title><body style=\"font:14px system-ui;background:#0b0c12;color:#e6e8f2;padding:40px\">Web app not built — run <code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code>",
+                    "<!doctype html><meta charset=utf-8><title>Strata LiveCut</title><body style=\"font:14px system-ui;background:#0b0c12;color:#e6e8f2;padding:40px\">Web app not built — run <code>cd web &amp;&amp; npm install &amp;&amp; npm run build</code>",
                 )
                     .into_response()
             }

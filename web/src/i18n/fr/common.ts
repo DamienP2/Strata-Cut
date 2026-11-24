@@ -45,7 +45,7 @@ export const common: Record<string, string> = {
   Theme: 'Thème',
   'Keyboard shortcuts': 'Raccourcis clavier',
   'Sign out': 'Se déconnecter',
-  'Strata Cut stopped unexpectedly on {date} and restarted.': 'Strata Cut s’est arrêté de façon inattendue le {date} puis a redémarré.',
+  'Strata LiveCut stopped unexpectedly on {date} and restarted.': 'Strata LiveCut s’est arrêté de façon inattendue le {date} puis a redémarré.',
 
   // Shortcuts
   'key|Shift': 'Maj',

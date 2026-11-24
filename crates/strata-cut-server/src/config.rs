@@ -2,7 +2,7 @@
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::{Path, PathBuf}};
 
-pub const BRAND: &str = "Strata Cut";
+pub const BRAND: &str = "Strata LiveCut";
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +145,10 @@ impl ServerConfig {
 
     pub fn normalize(&mut self) {
         self.name = self.name.trim().to_string();
+        // The name it had by default before it was renamed: the new one.
+        if self.name == "Strata Cut" {
+            self.name = BRAND.into();
+        }
         self.trusted_origins = self.trusted_origins.iter().map(|o| o.trim().trim_end_matches('/').to_string()).filter(|o| !o.is_empty()).collect();
         self.recordings_dir = self.recordings_dir.trim().to_string();
         self.clips_dir = self.clips_dir.trim().to_string();

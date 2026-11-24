@@ -131,7 +131,7 @@ pub fn physical(mount: &str) -> Value {
 }
 
 /// The disk holding `dir`, for System › Storage: total, used by other files,
-/// the system's reserve, and what Strata Cut may use (loops + clips).
+/// the system's reserve, and what Strata LiveCut may use (loops + clips).
 pub fn usage(dir: &Path, loops_here: u64, clips_here: u64) -> Value {
     let Some((total, free)) = crate::recorder::disk_space(dir) else { return Value::Null };
     let mount = mount_of(dir);

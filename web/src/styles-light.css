@@ -28,7 +28,7 @@
 :root[data-theme='light'] .modal.dialog.danger .dialog-icon { color: var(--t-red); }
 :root[data-theme='light'] .login-page { background: radial-gradient(ellipse at 30% 0%, #dfe3fb 0%, var(--bg) 60%); }
 
-/* Strata Cut — business screens */
+/* Strata LiveCut — business screens */
 :root[data-theme='light'] :is(.sc-thumb, .sc-viewer, .sc-strip) { --bg: #0b0c12; --panel: #12141d; --panel-2: #181b26; --panel-3: #1f2331; --line: #262a3a; --line-2: #323750; --text: #e6e8f2; --text-2: #a3a8bf; --text-3: #8a90ad; color-scheme: dark; }
 :root[data-theme='light'] .perf-bar { background: var(--panel-3); }
 :root[data-theme='light'] .sc-center { background: var(--bg); }

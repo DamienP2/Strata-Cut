@@ -141,7 +141,7 @@ export const system: Record<string, string> = {
   'no such group': 'Groupe introuvable.',
   '{used} used of {total}': '{used} utilisés sur {total}',
   'The loops once full: {s}': 'Les boucles une fois pleines\u00a0: {s}',
-  '{used} used of {total} available for Strata Cut ({p})': '{used} utilisés sur {total} disponibles pour Strata Cut ({p})',
+  '{used} used of {total} available for Strata LiveCut ({p})': '{used} utilisés sur {total} disponibles pour Strata LiveCut ({p})',
   Occupancy: 'Occupation',
   Recordings: 'Enregistrements',
   'The loops once full': 'Les boucles une fois pleines',

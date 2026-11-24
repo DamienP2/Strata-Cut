@@ -42,7 +42,7 @@ export function App() {
     if (user) void loadDisplayPrefs(user.id);
   }, [user]);
   useEffect(() => {
-    document.title = 'Strata Cut';
+    document.title = 'Strata LiveCut';
   }, []);
   if (!auth) return <div className="loading">{t('Connecting…')}</div>;
   if (!user) return <Login key={lang} />;
