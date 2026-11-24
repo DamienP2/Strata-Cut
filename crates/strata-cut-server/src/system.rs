@@ -49,7 +49,7 @@ pub fn interfaces() -> Vec<Value> {
     list.into_iter().map(|(name, ip)| json!({"name": name, "ip": ip})).collect()
 }
 
-/// `{version, os, arch, hostname, cpus, dataDir, bind, uptimeSecs, timezone, config?, interfaces}`.
+/// `{version, os, arch, hostname, cpus, bind, uptimeSecs, timezone}`, and for an admin `{dataDir, interfaces, config}`.
 pub fn info(s: &Shared, with_config: bool) -> Value {
     let cfg = s.config.load();
     let mut v = json!({
@@ -58,13 +58,14 @@ pub fn info(s: &Shared, with_config: bool) -> Value {
         "arch": std::env::consts::ARCH,
         "hostname": crate::perf::hostname(),
         "cpus": std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1),
-        "dataDir": s.data_dir.display().to_string(),
         "bind": s.bind.to_string(),
         "uptimeSecs": s.started_at.elapsed().as_secs(),
         "timezone": cfg.timezone,
-        "interfaces": interfaces(),
     });
+    // Where the server keeps its files and its network cards: for the admins only.
     if with_config {
+        v["dataDir"] = json!(s.data_dir.display().to_string());
+        v["interfaces"] = json!(interfaces());
         v["config"] = serde_json::to_value(masked(&cfg)).unwrap_or(Value::Null);
     }
     v

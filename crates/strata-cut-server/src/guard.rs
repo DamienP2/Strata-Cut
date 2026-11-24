@@ -78,6 +78,21 @@ pub fn plain_ip(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// An address of the server itself or of its network: loopback, private (RFC 1918, CGNAT, IPv6
+/// unique local), link-local (the cloud's metadata), unspecified, broadcast, multicast.
+pub fn inner_ip(ip: IpAddr) -> bool {
+    match plain_ip(ip) {
+        IpAddr::V4(v) => {
+            let [a, b, ..] = v.octets();
+            v.is_loopback() || v.is_private() || v.is_link_local() || v.is_unspecified() || v.is_broadcast() || v.is_multicast() || (a == 100 && (64..128).contains(&b)) || a == 0
+        }
+        IpAddr::V6(v) => {
+            let s0 = v.segments()[0];
+            v.is_loopback() || v.is_unspecified() || v.is_multicast() || (s0 & 0xfe00) == 0xfc00 || (s0 & 0xffc0) == 0xfe80
+        }
+    }
+}
+
 /// A request from the server itself: loopback peer, not another site, local `Host`/`Origin`.
 pub fn this_machine(peer: SocketAddr, headers: &HeaderMap) -> bool {
     if !plain_ip(peer.ip()).is_loopback() || headers.contains_key("x-forwarded-for") || headers.contains_key("forwarded") || headers.contains_key("x-forwarded-host") {

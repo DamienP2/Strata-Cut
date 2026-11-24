@@ -19,7 +19,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, OnceLock, Weak,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -85,6 +85,13 @@ pub struct Page {
     pub port: u16,
     crop: Mutex<Crop>,
     url: Mutex<String>,
+    /// The host and port of the address the admin gave the source: reachable even on the server's
+    /// network (that service alone, not the others of its machine).
+    home: Option<(String, u16)>,
+    /// That address (opened when the last one is no longer allowed).
+    given: String,
+    /// The hosts already looked at (reachable or not), for a minute.
+    hosts: Mutex<HashMap<String, (Instant, bool)>>,
     cdp: Mutex<Option<Arc<Cdp>>>,
     /// The page's pictures as they change (JPEG), for the direct views.
     frames: broadcast::Sender<Bytes>,
@@ -141,7 +148,8 @@ pub fn ensure(c: &RecorderConfig) -> Option<u16> {
     let f = Format::parse(&c.video_mode).filter(|f| !f.interlaced).unwrap_or(Format { width: 1920, height: 1080, interlaced: false, num: 25, den: 1 });
     let sound = c.audio_channels > 0;
     let kbps = ((if c.bitrate > 0.0 { c.bitrate } else { 6.0 }) * 1000.0) as u32;
-    let key = format!("{}x{}@{}/{}:{sound}:{kbps}:{}", f.width, f.height, f.num, f.den, c.cbr);
+    let home = host_of(&c.url).filter(|h| h.2).map(|(h, port, _)| (h, port));
+    let key = format!("{}x{}@{}/{}:{sound}:{kbps}:{}:{home:?}", f.width, f.height, f.num, f.den, c.cbr);
     let mut running = p.running.lock().unwrap();
     if let Some(page) = running.get(&c.id) {
         if page.key == key && !*page.stop.borrow() {
@@ -168,6 +176,9 @@ pub fn ensure(c: &RecorderConfig) -> Option<u16> {
         port,
         crop: Mutex::new(saved.crop.map(|k| clamp(k, f.width, f.height)).unwrap_or(full)),
         url: Mutex::new(saved.url),
+        home,
+        given: c.url.trim().to_string(),
+        hosts: Mutex::new(HashMap::new()),
         cdp: Mutex::new(None),
         frames: broadcast::channel(4).0,
         stop: watch::channel(false).0,
@@ -418,14 +429,16 @@ async fn run_once(pages: &Pages, page: &Arc<Page>, stop: &mut watch::Receiver<bo
     .map(String::from)
     .to_vec();
     args.push(format!("--window-size={w},{h}"));
+    // Its DevTools on the loopback, for this server alone: no page may talk to them (no origin
+    // allowed; this server's client sends none).
     args.push(format!("--remote-debugging-port={cdp_port}"));
-    args.push("--remote-allow-origins=*".into());
     args.push(format!("--user-data-dir={}", page.dir.join("profile").display()));
     // As root (a container), or where the system refused it its sandbox, Chrome runs without.
     if unsafe { libc::geteuid() } == 0 || NO_SANDBOX.load(Ordering::Relaxed) {
         args.push("--no-sandbox".into());
     }
-    args.push(if url.is_empty() { "about:blank".into() } else { url });
+    // Blank first: its address opened once its requests are watched (see `reachable`).
+    args.push("about:blank".into());
     // The lock a browser killed left on its profile.
     for f in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
         let _ = std::fs::remove_file(page.dir.join("profile").join(f));
@@ -457,6 +470,13 @@ async fn run_once(pages: &Pages, page: &Arc<Page>, stop: &mut watch::Receiver<bo
         }
     };
     *page.cdp.lock().unwrap() = Some(cdp.clone());
+    // The last address opened, else (none, or no longer allowed) the one the admin gave.
+    let url = if !url.is_empty() && reachable(page, &url).await.is_ok() { url } else { page.given.clone() };
+    if !url.is_empty() {
+        if let Err(e) = cdp.call("Page.navigate", json!({ "url": url }), true).await {
+            tracing::warn!("{}: its address does not open: {e}", page.name);
+        }
+    }
     // Filmed: the screen and the sound, raw; the frame kept here; encoded.
     let Some(audio_port) = free_port(true) else { return Some("no free local port".into()) };
     let film = film(pages, page, display, &socket, audio_port);
@@ -757,6 +777,8 @@ async fn connect(port: u16, page: Arc<Page>) -> Result<Arc<Cdp>, String> {
     if !found {
         return Err("its page does not answer".into());
     }
+    // Every request of the page watched: none to the server itself or its network.
+    cdp.call("Fetch.enable", json!({ "patterns": [{ "urlPattern": "*" }] }), true).await.map_err(|e| format!("its requests cannot be watched: {e}"))?;
     cdp.call("Target.setDiscoverTargets", json!({ "discover": true }), false).await?;
     if let Ok(r) = cdp.call("Runtime.evaluate", json!({ "expression": "location.href", "returnByValue": true }), true).await {
         if let Some(u) = r["result"]["value"].as_str().filter(|u| u.starts_with("http")) {
@@ -772,6 +794,21 @@ async fn event(page: &Arc<Page>, cdp: &Arc<Cdp>, method: &str, p: &Value) {
         // The page's address changed: kept (the source starts again on it).
         "Page.frameNavigated" if p["frame"]["parentId"].is_null() => moved(page, p["frame"]["url"].as_str().unwrap_or("")),
         "Page.navigatedWithinDocument" => moved(page, p["url"].as_str().unwrap_or("")),
+        // A request of the page: let through, or refused when it goes to the server's network.
+        "Fetch.requestPaused" => {
+            let (page, c) = (page.clone(), cdp.clone());
+            let id = p["requestId"].clone();
+            let url = p["request"]["url"].as_str().unwrap_or("").to_string();
+            tokio::spawn(async move {
+                let _ = match reachable(&page, &url).await {
+                    Ok(()) => c.call("Fetch.continueRequest", json!({ "requestId": id }), true).await,
+                    Err(why) => {
+                        tracing::warn!("{}: request refused ({why}): {}", page.name, crate::recorder::only_host(&url));
+                        c.call("Fetch.failRequest", json!({ "requestId": id, "errorReason": "AccessDenied" }), true).await
+                    }
+                };
+            });
+        }
         "Page.screencastFrame" => {
             if let Some(data) = p["data"].as_str().and_then(base64_decode) {
                 let _ = page.frames.send(Bytes::from(data));
@@ -803,6 +840,47 @@ async fn event(page: &Arc<Page>, cdp: &Arc<Cdp>, method: &str, p: &Value) {
         }
         _ => {}
     }
+}
+
+/// An address's host (lowercase, without brackets), its port, whether it is on the network (http,
+/// https, ws, wss).
+fn host_of(url: &str) -> Option<(String, u16, bool)> {
+    let uri: ureq::http::Uri = url.trim().parse().ok()?;
+    let scheme = uri.scheme_str()?.to_ascii_lowercase();
+    let port = match scheme.as_str() {
+        "http" | "ws" => 80,
+        "https" | "wss" => 443,
+        _ => return Some((String::new(), 0, false)),
+    };
+    let host = uri.host()?.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    Some((host, uri.port_u16().unwrap_or(port), true))
+}
+
+/// May the page reach this address? The internet and the host the admin gave the source, not the
+/// server itself nor its network (its other services, the cloud's metadata, the LAN). Pages' own
+/// contents (data:, blob:, about:) need no network; any other kind (file:, chrome:…) is refused.
+async fn reachable(page: &Page, url: &str) -> Result<(), String> {
+    let low = url.trim_start().to_ascii_lowercase();
+    if ["data:", "blob:", "about:"].iter().any(|k| low.starts_with(k)) {
+        return Ok(());
+    }
+    let Some((host, port, net)) = host_of(url) else { return Err("this address is not valid".into()) };
+    if !net {
+        return Err("only http:// and https:// addresses".into());
+    }
+    if page.home.as_ref().is_some_and(|(h, p)| *h == host && *p == port) {
+        return Ok(());
+    }
+    let host = if host.contains(':') { format!("[{host}]:{port}") } else { format!("{host}:{port}") };
+    if let Some((at, ok)) = page.hosts.lock().unwrap().get(&host) {
+        if at.elapsed() < Duration::from_secs(60) {
+            return if *ok { Ok(()) } else { Err("an address of the server or of its network".into()) };
+        }
+    }
+    let addrs: Vec<_> = tokio::net::lookup_host(host.as_str()).await.map_err(|_| format!("unknown address: {host}"))?.collect();
+    let ok = !addrs.is_empty() && !addrs.iter().any(|a| crate::guard::inner_ip(a.ip()));
+    page.hosts.lock().unwrap().insert(host, (Instant::now(), ok));
+    if ok { Ok(()) } else { Err("an address of the server or of its network".into()) }
 }
 
 fn moved(page: &Page, url: &str) {
@@ -922,9 +1000,10 @@ async fn go(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): 
     if !(low.starts_with("http://") || low.starts_with("https://")) || url.chars().any(char::is_whitespace) {
         return Err(bad("the address is http:// or https://"));
     }
+    reachable(&page, &url).await.map_err(bad)?;
     let cdp = page.cdp.lock().unwrap().clone().ok_or_else(|| bad("the page is starting: again in a moment"))?;
     cdp.call("Page.navigate", json!({ "url": url }), true).await.map_err(bad)?;
-    tracing::info!("{} opens {url} in {}", me.username, page.name);
+    tracing::info!("{} opens {} in {}", me.username, crate::recorder::only_host(&url), page.name);
     Ok(Json(json!({ "url": url })))
 }
 
