@@ -1,15 +1,14 @@
 /*
- * Streamer: the programme of a source — what its lives send. The source or its image (a fade of
- * 1 s between them, or at once), its PNG overlay (placed and sized on the picture itself), the
- * sound of its tracks; its pictures (image, overlay) in the settings' window. The picture
- * shows the programme as it goes out (the image and the overlay drawn here over the source, with
- * the same fades).
+ * Streamer: the programme of a source — what its lives send. The source or its image, its PNG
+ * overlay, passed together at once or by a fade (made ready in `StreamerPass`), the sound of its
+ * tracks; its pictures (image, overlay) in the settings' window. The window on air shows the
+ * programme as it goes out (the image and the overlay drawn here over the source, with the same
+ * fades).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Headphones, RotateCcw, Settings, Volume2, VolumeX, Wand2, X } from "lucide-react";
+import { Headphones, RotateCcw, Volume2, VolumeX, Wand2, X } from "lucide-react";
 import { t, tc, tn } from "../i18n";
 import { api, can, useApp, useChanged } from "../store";
-import { Switch } from "../settings/ui";
 import type { Recorder } from "../types";
 import { DefaultSlate, Gallery, pictureUrl } from "./StreamerSlate";
 import { trackLabel } from "../audioLabel";
@@ -22,6 +21,8 @@ export interface Program {
   image: string | null;
   imageOn: boolean;
   fadeOn: boolean;
+  /** The fade's length, s. */
+  fadeSecs: number;
   overlay: string | null;
   overlayOn: boolean;
   /** The overlay's top left corner (shares of the picture) and width (% of it). */
@@ -41,8 +42,6 @@ interface ProgramState {
   kinds?: string[];
 }
 
-/** The fade between the source and the image (as the server's). */
-const FADE_S = 1;
 const CHANNELS: Program["channels"][] = ["lr", "l", "r", "mono"];
 const CHANNEL_LABEL: Record<Program["channels"], string> = { lr: "L+R", l: "L", r: "R", mono: "Mono" };
 
@@ -82,137 +81,41 @@ export function useProgram(recId: string) {
       return { ...s, program };
     });
   };
-  const take = (image: boolean) => {
-    if (!state || state.program.imageOn === image) return;
-    setLastFade(state.program.fadeOn ? FADE_S : 0);
-    setState({ ...state, program: { ...state.program, imageOn: image } });
-    api("POST", `/api/program/${recId}/take`, { image }).catch(fail);
-  };
-  const overlayOn = (on: boolean) => {
+  /** What was made ready goes on air (the source or the image, the overlay), by the transition chosen. */
+  const pass = (next: Next) => {
     if (!state) return;
-    setState({ ...state, program: { ...state.program, overlayOn: on } });
-    api("POST", `/api/program/${recId}/overlay`, { on }).catch(fail);
+    const p = state.program;
+    setLastFade(p.fadeOn ? p.fadeSecs : 0);
+    const o = next.overlay;
+    setState({ ...state, program: { ...p, imageOn: next.image, overlayOn: o.on && !!p.overlay, x: o.x, y: o.y, size: o.size } });
+    api("POST", `/api/program/${recId}/take`, { image: next.image, overlay: o }).catch(fail);
   };
-  return { state, set, take, overlayOn, lastFade };
+  return { state, set, pass, lastFade };
 }
 export type ProgramApi = ReturnType<typeof useProgram>;
 
-/**
- * Over the source's picture: the image and the overlay, as they go out. On air and for whom may
- * change it, the overlay is moved by dragging it and sized by its corner.
- */
-export function ProgramLayer({ rec, prog, editable }: { rec: Recorder; prog: ProgramApi; editable: boolean }) {
-  const box = useRef<HTMLDivElement>(null);
-  const ovl = useRef<HTMLImageElement>(null);
-  // While dragged: where it is (not sent until released).
-  const [drag, setDrag] = useState<{ x: number; y: number; size: number } | null>(null);
+/** What is made ready to go on air: the source or the image, the overlay (on or not, where). */
+export interface Next {
+  image: boolean;
+  overlay: { on: boolean; x: number; y: number; size: number };
+}
+
+/** Over the source's picture: the image and the overlay, as they go out (with their fades). */
+export function ProgramLayer({ rec, prog }: { rec: Recorder; prog: ProgramApi }) {
   if (!prog.state) return null;
   const p = prog.state.program;
-  const at = drag ?? { x: p.x, y: p.y, size: p.size };
-  const live = editable && p.overlayOn && !!p.overlay;
-  // The overlay's height, a share of the picture's (its own proportions).
-  const hShare = (size: number) => {
-    const img = ovl.current;
-    if (!img || !img.naturalWidth) return 0;
-    return ((size / 100) * img.naturalHeight) / img.naturalWidth / (9 / 16);
-  };
-  const clamp = (v: { x: number; y: number; size: number }) => {
-    const size = Math.min(100, Math.max(2, v.size));
-    return { size, x: Math.min(Math.max(0, v.x), 1 - size / 100), y: Math.min(Math.max(0, v.y), Math.max(0, 1 - hShare(size))) };
-  };
-  const start = (e: React.PointerEvent, resize: boolean) => {
-    const r = box.current?.getBoundingClientRect();
-    if (!r || !live) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const from = { px: e.clientX, py: e.clientY, ...at };
-    let last = at;
-    const move = (m: PointerEvent) => {
-      const dx = (m.clientX - from.px) / r.width;
-      const dy = (m.clientY - from.py) / r.height;
-      last = clamp(resize ? { x: from.x, y: from.y, size: from.size + dx * 100 } : { x: from.x + dx, y: from.y + dy, size: from.size });
-      setDrag(last);
-    };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      setDrag(null);
-      prog.set(last);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-  };
+  const fade = `opacity ${prog.lastFade}s linear`;
   return (
-    <div ref={box} className="pg-layer">
-      <div className="pg-image" style={{ opacity: p.imageOn ? 1 : 0, transition: `opacity ${prog.lastFade}s linear` }}>
+    <div className="pg-layer">
+      <div className="pg-image" style={{ opacity: p.imageOn ? 1 : 0, transition: fade }}>
         {p.image ? <img src={pictureUrl(p.image)} alt="" /> : <DefaultSlate name={rec.name} />}
       </div>
       {p.overlay && (
-        <div
-          className={`pg-ovl ${live ? "edit" : ""}`}
-          style={{ left: `${at.x * 100}%`, top: `${at.y * 100}%`, width: `${at.size}%`, opacity: p.overlayOn ? p.opacity / 100 : 0 }}
-          onPointerDown={(e) => start(e, false)}
-        >
-          <img ref={ovl} src={pictureUrl(p.overlay)} alt="" draggable={false} />
-          {live && <span className="pg-handle" onPointerDown={(e) => start(e, true)} />}
+        <div className="pg-ovl" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%`, width: `${p.size}%`, opacity: p.overlayOn ? p.opacity / 100 : 0, transition: fade }}>
+          <img src={pictureUrl(p.overlay)} alt="" draggable={false} />
         </div>
       )}
     </div>
-  );
-}
-
-/** The two inputs, the fade, the overlay; the lives of the source. */
-export function Antenne({ rec, prog, onSettings }: { rec: Recorder; prog: ProgramApi; onSettings: () => void }) {
-  const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    const i = window.setInterval(() => setTick((n) => n + 1), 2000);
-    return () => window.clearInterval(i);
-  }, []);
-  if (!prog.state) return <section className="pg-box pg-antenne" />;
-  const p = prog.state.program;
-  const input = (image: boolean) => (
-    <button type="button" className={`pg-input ${p.imageOn === image ? "air" : ""}`} disabled={!run} onClick={() => prog.take(image)}>
-      <span className="pg-input-pic">
-        {image ? (
-          p.image ? (
-            <img src={pictureUrl(p.image)} alt="" />
-          ) : (
-            <DefaultSlate name={rec.name} />
-          )
-        ) : (
-          <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${tick}`} alt="" onError={(e) => (e.currentTarget.style.visibility = "hidden")} />
-        )}
-      </span>
-      <span className="pg-input-name">
-        {p.imageOn === image && <i />}
-        {image ? t("Image") : t("Source")}
-      </span>
-    </button>
-  );
-  return (
-    <section className="pg-box pg-antenne">
-      <header>
-        <span className="label">{t("On air")}</span>
-        <button type="button" className="btn small" onClick={onSettings}>
-          <Settings size={13} /> {t("Settings")}
-        </button>
-      </header>
-      <div className="pg-antenne-body">
-        <div className="pg-inputs">
-          {input(false)}
-          {input(true)}
-        </div>
-        <label className="pg-row">
-          <span>{t("Fade")}</span>
-          <Switch checked={p.fadeOn} disabled={!run} onChange={(fadeOn) => prog.set({ fadeOn })} />
-        </label>
-        <label className="pg-row" data-tip={!p.overlay ? t("Choose an overlay in the settings") : undefined}>
-          <span>{t("Overlay")}</span>
-          <Switch checked={p.overlayOn && !!p.overlay} disabled={!run || !p.overlay} onChange={(on) => prog.overlayOn(on)} />
-        </label>
-      </div>
-    </section>
   );
 }
 
@@ -505,12 +408,12 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
   );
 }
 
-type Tab = "image" | "overlay";
+export type Tab = "image" | "overlay";
 
 /** The source's pictures: its image, its overlay. */
-export function SettingsModal({ rec, prog, onClose }: { rec: Recorder; prog: ProgramApi; onClose: () => void }) {
+export function SettingsModal({ rec, prog, onClose, initial = "image" }: { rec: Recorder; prog: ProgramApi; onClose: () => void; initial?: Tab }) {
   const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
-  const [tab, setTab] = useState<Tab>("image");
+  const [tab, setTab] = useState<Tab>(initial);
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", key);

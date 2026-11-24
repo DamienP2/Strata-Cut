@@ -285,4 +285,13 @@ export const streaming: Record<string, string> = {
   'Stop the {n} lives of “{source}”?': 'Arrêter les {n} diffusions de « {source} » ?',
   'Stop recording “{name}”?': 'Arrêter l\'enregistrement de « {name} » ?',
   'What it recorded stays in its loop.': 'Ce qui est déjà enregistré reste dans la boucle.',
+  Cut: 'Coupe',
+  Pass: 'Passer',
+  Space: 'Espace',
+  'Overlay removed': 'Habillage retiré',
+  'Overlay moved': 'Habillage déplacé',
+  'Overlay settings': 'Réglages de l\'habillage',
+  'by a fade of {s}': 'en fondu {s}',
+  'by a cut': 'en coupe',
+  'on air for {t}': 'à l\'antenne depuis {t}',
 };

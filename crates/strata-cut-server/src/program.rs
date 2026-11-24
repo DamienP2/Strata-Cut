@@ -1,5 +1,6 @@
-//! Streamer: the programme of a source — what its lives send. The source, or an image passed at
-//! once or by a fade (1 s); a PNG overlay placed anywhere over both; the sound of the tracks
+//! Streamer: the programme of a source — what its lives send. The source, or an image; a PNG
+//! overlay placed anywhere over both; passed together (« Passer ») at once or by a fade (its length
+//! chosen), an overlay moved coming over its old place by the same fade; the sound of the tracks
 //! chosen, at their level, on the channels chosen (none under the image); the source gone, its
 //! last picture (what goes out never stops). Its settings are the source's, shared by all its
 //! lives (`program.json`).
@@ -62,8 +63,10 @@ pub struct Program {
     pub image: Option<String>,
     /// The image is on air (rather than the source).
     pub image_on: bool,
-    /// The image and the source pass by a fade (1 s), else at once.
+    /// What is passed (the source or the image, the overlay) passes by a fade, else at once.
     pub fade_on: bool,
+    /// The fade's length, s.
+    pub fade_secs: f64,
     /// The overlay (a PNG of the Streamer's overlays), and whether it is on air.
     pub overlay: Option<String>,
     pub overlay_on: bool,
@@ -87,6 +90,7 @@ impl Default for Program {
             image: None,
             image_on: false,
             fade_on: true,
+            fade_secs: 1.0,
             overlay: None,
             overlay_on: false,
             x: 0.79,
@@ -106,10 +110,11 @@ impl Program {
             return Err("the channels are lr, l, r or mono".into());
         }
         let ok = |v: f64| v.is_finite();
-        if ![self.x, self.y, self.size, self.opacity, self.master].into_iter().all(ok) || self.tracks.iter().any(|t| !ok(t.gain)) {
+        if ![self.x, self.y, self.size, self.opacity, self.master, self.fade_secs].into_iter().all(ok) || self.tracks.iter().any(|t| !ok(t.gain)) {
             return Err("a value is not a number".into());
         }
         self.master = self.master.clamp(-40.0, 12.0);
+        self.fade_secs = self.fade_secs.clamp(0.2, 5.0);
         self.x = self.x.clamp(0.0, 1.0);
         self.y = self.y.clamp(0.0, 1.0);
         self.size = self.size.clamp(2.0, 100.0);
@@ -130,7 +135,7 @@ impl Program {
         if self.overlay_on && self.overlay.is_some() { self.opacity / 100.0 } else { 0.0 }
     }
 
-    fn overlay_look(&self) -> (Option<&String>, u64, u64, u64) {
+    pub(crate) fn overlay_look(&self) -> (Option<&String>, u64, u64, u64) {
         (self.overlay.as_ref(), (self.x * 10_000.0) as u64, (self.y * 10_000.0) as u64, (self.size * 100.0) as u64)
     }
 }
@@ -204,8 +209,8 @@ pub(crate) fn plain(sh: &Shape, opaque: bool) -> Vec<u8> {
 /// A change for a running programme, and how it is shown.
 pub(crate) struct Change {
     pub program: Program,
-    /// The image passed: by a fade of this many seconds (0: cut).
-    pub image_fade: f64,
+    /// What was passed (the image, the overlay): by a fade of this many seconds (0: cut).
+    pub fade: f64,
 }
 
 /// A programme being made.
@@ -300,7 +305,7 @@ impl Programs {
     }
 
     /// Saves a programme, and gives it to its mixer if it runs.
-    fn put(&self, source: &str, p: Program, image_fade: f64) -> Result<(), String> {
+    fn put(&self, source: &str, p: Program, fade: f64) -> Result<(), String> {
         let all = {
             let mut all = self.all.lock().unwrap();
             all.insert(source.to_string(), p.clone());
@@ -308,7 +313,7 @@ impl Programs {
         };
         crate::paths::write_json(&path(&self.data_dir), &all, false).map_err(|e| e.to_string())?;
         if let Some(r) = self.running.lock().unwrap().get(source) {
-            let _ = r.tx.send(Change { program: p, image_fade });
+            let _ = r.tx.send(Change { program: p, fade });
         }
         self.events.send(Audience::All, json!({"type": "changed", "what": "program"}));
         Ok(())
@@ -364,7 +369,7 @@ impl Programs {
         let (sh, name) = (Shape::of(&rec), rec.config().name);
         r.at_stage("making its pictures");
         let mut p = self.get(&source);
-        let pics = Arc::new(Mutex::new(Pics { image: Arc::new(self.image(&ffmpeg, &p, &sh, &name).await), overlay: Arc::new(self.overlay(&ffmpeg, &p, &sh).await) }));
+        let pics = Arc::new(Mutex::new(Pics { image: Arc::new(self.image(&ffmpeg, &p, &sh, &name).await), overlay: Arc::new(self.overlay(&ffmpeg, &p, &sh).await), overlay_was: Arc::new(Vec::new()) }));
         // The delay a picture is played after its coming: a source in segments (HLS, the web) comes
         // a segment at a time.
         let delay = if crate::engine::in_segments(&rec) { 10 } else { 1 };
@@ -432,8 +437,10 @@ impl Programs {
                         pics.lock().unwrap().image = Arc::new(img);
                     }
                     if c.program.overlay_look() != p.overlay_look() {
-                        let ovl = self.overlay(&ffmpeg, &c.program, &sh).await;
-                        pics.lock().unwrap().overlay = Arc::new(ovl);
+                        let ovl = Arc::new(self.overlay(&ffmpeg, &c.program, &sh).await);
+                        // The one on air kept: the new one comes over it by the fade.
+                        let mut pics = pics.lock().unwrap();
+                        pics.overlay_was = std::mem::replace(&mut pics.overlay, ovl);
                     }
                     p = c.program.clone();
                     let _ = changes.send(c);
@@ -506,7 +513,7 @@ async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
     Ok(Json(json!({ "program": programs.get(&source), "tracks": langs, "kinds": kinds, "running": programs.is_running(&source) })))
 }
 
-/// The settings (not what is on air: CUT, AUTO and the overlay's button say that).
+/// The settings (not what is on air, nor where the overlay is: « Passer » says that).
 async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, Json(mut p): Json<Program>) -> ApiResult<Json<Value>> {
     require(me.can("stream.run"))?;
     s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
@@ -515,6 +522,7 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(so
     let now = programs.get(&source);
     p.image_on = now.image_on;
     p.overlay_on = now.overlay_on;
+    (p.x, p.y, p.size) = (now.x, now.y, now.size);
     programs.put(&source, p.clone(), 0.0).map_err(bad)?;
     Ok(Json(json!(p)))
 }
@@ -523,21 +531,34 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(so
 struct Take {
     /// The image on air (else the source).
     image: bool,
+    /// The overlay as it was made ready: on air or not, where, how big.
+    overlay: Option<OverlayAt>,
 }
 
-/// The length of the fade between the source and the image, s.
-const FADE_SECS: f64 = 1.0;
+#[derive(Deserialize)]
+struct OverlayAt {
+    on: bool,
+    x: f64,
+    y: f64,
+    size: f64,
+}
 
 async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, Json(t): Json<Take>) -> ApiResult<Json<Value>> {
     require(me.can("stream.run"))?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let programs = &s.streams.programs;
-    let mut p = programs.get(&source);
-    if p.image_on != t.image {
-        p.image_on = t.image;
-        let secs = if p.fade_on { FADE_SECS } else { 0.0 };
+    let was = programs.get(&source);
+    let mut p = was.clone();
+    p.image_on = t.image;
+    if let Some(o) = t.overlay {
+        p.overlay_on = o.on && p.overlay.is_some();
+        (p.x, p.y, p.size) = (o.x, o.y, o.size);
+        p.normalize().map_err(bad)?;
+    }
+    if p != was {
+        let secs = if p.fade_on { p.fade_secs } else { 0.0 };
         programs.put(&source, p.clone(), secs).map_err(bad)?;
-        tracing::info!("{} puts {} on air for {}", me.username, if t.image { "the image" } else { "the source" }, rec.config().name);
+        tracing::info!("{} passes {}{} on air for {}", me.username, if t.image { "the image" } else { "the source" }, if p.overlay_on { " and the overlay" } else { "" }, rec.config().name);
     }
     Ok(Json(json!(p)))
 }
@@ -568,7 +589,8 @@ async fn overlay_on(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPa
     let programs = &s.streams.programs;
     let mut p = programs.get(&source);
     p.overlay_on = b.on;
-    programs.put(&source, p.clone(), 0.0).map_err(bad)?;
+    let secs = if p.fade_on { p.fade_secs } else { 0.0 };
+    programs.put(&source, p.clone(), secs).map_err(bad)?;
     Ok(Json(json!(p)))
 }
 

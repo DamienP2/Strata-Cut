@@ -31,8 +31,6 @@ pub const RATE: usize = 48_000;
 pub const TRACKS: usize = 32;
 /// What goes out never passes -1 dBFS.
 const LIMIT: f32 = 0.891;
-/// The overlay's fade when it is put on or taken off (s).
-const OVERLAY_FADE: f64 = 0.3;
 /// Frames over which the fewest waiting is looked at (a source a little quicker than our clock).
 const LOOK: u32 = 250;
 
@@ -248,6 +246,8 @@ impl Inputs {
 pub struct Pics {
     pub image: Arc<Vec<u8>>,
     pub overlay: Arc<Vec<u8>>,
+    /// The overlay as it was before it moved (or changed): the new one comes over it by a fade.
+    pub overlay_was: Arc<Vec<u8>>,
 }
 
 /// Where the mixer sends what it makes: the encoder's two inputs, each written by its own thread
@@ -323,6 +323,7 @@ impl Mixer {
         let mut ever = false;
         let mut image = Ramp::at(if self.program.image_on { 1.0 } else { 0.0 });
         let mut overlay = Ramp::at(self.program.overlay_alpha());
+        let mut swap = Ramp::at(1.0);
         let mut levels = Levels::of(&self.program);
         let mut limiter = Limiter::default();
         let mut sound = vec![Vec::new(); TRACKS];
@@ -336,10 +337,15 @@ impl Mixer {
             while let Ok(c) = self.changes.try_recv() {
                 let next = c.program;
                 if next.image_on != self.program.image_on {
-                    image.go(if next.image_on { 1.0 } else { 0.0 }, c.image_fade, now);
+                    image.go(if next.image_on { 1.0 } else { 0.0 }, c.fade, now);
+                }
+                // Moved (or another) while on air before and after: the new one over the old one.
+                if next.overlay_look() != self.program.overlay_look() && overlay.value(now) > 0.0 && next.overlay_alpha() > 0.0 {
+                    swap = Ramp::at(0.0);
+                    swap.go(1.0, c.fade, now);
                 }
                 if next.overlay_alpha() != self.program.overlay_alpha() {
-                    overlay.go(next.overlay_alpha(), if next.overlay_on != self.program.overlay_on { OVERLAY_FADE } else { 0.0 }, now);
+                    overlay.go(next.overlay_alpha(), if next.overlay_on != self.program.overlay_on { c.fade } else { 0.0 }, now);
                 }
                 self.program = next;
             }
@@ -361,9 +367,12 @@ impl Mixer {
             let mut out = last.clone();
             let k = image.value(now);
             blend(&mut out, &pics.image[..yuv], k);
-            let a = overlay.value(now);
-            if a > 0.0 {
-                overlay_on(&mut out, &pics.overlay, &sh, a);
+            let (a, s) = (overlay.value(now), swap.value(now));
+            if a > 0.0 && s < 1.0 {
+                overlay_on(&mut out, &pics.overlay_was, &sh, a * (1.0 - s));
+            }
+            if a * s > 0.0 {
+                overlay_on(&mut out, &pics.overlay, &sh, a * s);
             }
             drop(pics);
             // The sound: none under the image (it fades with it).

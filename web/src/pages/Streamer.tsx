@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useShallow } from 'zustand/react/shallow';
-import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Square } from 'lucide-react';
+import { AlertTriangle, Check, Play, Plug, Radio, RadioTower, Settings, Square } from 'lucide-react';
 import { useDisplayPref } from '../displayPrefs';
 import { api, can, serverNow, useApp } from '../store';
 import { lang, locale, t, tc, tn } from '../i18n';
@@ -25,7 +25,8 @@ import { explainGuard } from '../ui/guard';
 import { confirmDialog } from '../ui/dialogs';
 import { SourceGroups } from '../ui/SourceGroups';
 import { usePageTools } from '../ui/PageTools';
-import { Antenne, Mixer, ProgramLayer, SettingsModal, useProgram } from './StreamerProgram';
+import { Mixer, ProgramLayer, SettingsModal, useProgram, type Tab } from './StreamerProgram';
+import { AirPills, Bank, Passage, ReadyWindow, useNext } from './StreamerPass';
 
 /** A message of the server, translated: whole, or its known beginning and what follows (FFmpeg's words). */
 function said(m: string): string {
@@ -65,21 +66,50 @@ export function Streamer({ source }: { source?: string }) {
           ) : null;
         }}
       />
-      {rec ? <Center key={rec.id} rec={rec} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
+      {rec ? <Center key={rec.id} rec={rec} streams={streams.filter((s) => s.source === rec.id)} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
       <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} streams={streams} failed={all.filter((s) => s.state === 'failed')} />}</aside>
     </section>
   );
 }
 
 /** The programme of the source: the picture as it goes out, what is on air, the sound. */
-function Center({ rec }: { rec: Recorder }) {
+function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   const { st, timezone } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone })));
   const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const prog = useProgram(rec.id);
   const video = useRef<HTMLVideoElement>(null);
   const audio = useAudioOut(video, 'streamer');
   const [wall, setWall] = useState<number | null>(null);
-  const [settings, setSettings] = useState(false);
+  const [settings, setSettings] = useState<Tab | null>(null);
+  const [next, setNext] = useNext(prog);
+  // Each « Passer » (its ring turns while the fade goes).
+  const [passing, setPassing] = useState(0);
+  const pass = () => {
+    const p = prog.state?.program;
+    if (!p || !next || !run) return;
+    const was = p.imageOn;
+    prog.pass(next);
+    setPassing((n) => n + 1);
+    // What was on air comes back on the left: a second « Passer » goes back.
+    setNext({ ...next, image: was });
+  };
+  const passRef = useRef(pass);
+  passRef.current = pass;
+  // Space: « Passer » (not while writing, nor while piloting a page).
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(el.tagName))) return;
+      if (document.querySelector('.modal-back')) return;
+      e.preventDefault();
+      passRef.current();
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, []);
+  // On air since the first live of the source that is live.
+  const since = streams.reduce<number | null>((a, s) => (s.state === 'live' && s.liveSince && (!a || s.liveSince < a) ? s.liveSince : a), null);
   const player = useRef<LoopPlayer | null>(null);
   // The moment the picture shows (server ms): the meters show the sound of that moment.
   // The timestamp of the frame shown (the source's, ms): the meters show its sound.
@@ -154,25 +184,42 @@ function Center({ rec }: { rec: Recorder }) {
   const fps = fpsOf(m?.fpsNum, m?.fpsDen);
   return (
     <div className="sc-center pg-center">
-      <div className="pg-top">
-        <div className={`pg-picture ${page.bar ? 'with-bar' : ''}`}>
-          {page.bar}
-          <div className="pg-viewer">
+      {page.bar && <div className="ps-bar">{page.bar}</div>}
+      <div className="ps-duo">
+        <div className="ps-col">
+          {prog.state && next && (
+            <>
+              <ReadyWindow rec={rec} prog={prog} next={next} setNext={setNext} video={video} received={received} editable={run} />
+              <Bank rec={rec} prog={prog} next={next} setNext={setNext} editable={run} onOverlaySettings={() => setSettings('overlay')} />
+            </>
+          )}
+        </div>
+        {prog.state && next ? <Passage prog={prog} next={next} onPass={pass} editable={run} passing={passing} /> : <div />}
+        <div className="ps-col">
+          <div className="ps-win air">
+            <span className="ps-tally" />
             <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
             {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
-            {received && page.mode === 'view' && <ProgramLayer rec={rec} prog={prog} editable={run} />}
+            {received && page.mode === 'view' && <ProgramLayer rec={rec} prog={prog} />}
             {page.over}
           </div>
           {page.below ?? (
-            <div className="pg-meta">
-              <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
-            </div>
+            <>
+              <div className="ps-under">
+                <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
+                {since && <span className="ps-since">{t('on air for {t}', { t: clockOf(serverNow() - since) })}</span>}
+                <span className="spacer" />
+                <button type="button" className="icon-btn ghost" data-tip={t('Settings')} aria-label={t('Settings')} onClick={() => setSettings('image')}>
+                  <Settings size={15} />
+                </button>
+              </div>
+              {prog.state && <AirPills prog={prog} />}
+            </>
           )}
         </div>
-        <Antenne rec={rec} prog={prog} onSettings={() => setSettings(true)} />
       </div>
       <Mixer rec={rec} prog={prog} shown={() => shown.current} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, solo, setSolo, heard }} />
-      {settings && createPortal(<SettingsModal rec={rec} prog={prog} onClose={() => setSettings(false)} />, document.body)}
+      {settings && createPortal(<SettingsModal rec={rec} prog={prog} initial={settings} onClose={() => setSettings(null)} />, document.body)}
     </div>
   );
 }
