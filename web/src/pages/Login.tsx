@@ -26,6 +26,8 @@ function ssoError(): string | null {
       return t('None of your directory groups gives access to Strata.');
     case 'disabled':
       return t('This account is disabled.');
+    case 'domain':
+      return t('This account is not in a domain allowed to sign in.');
     case 'expired':
       return t('Signing in took too long: try again.');
     default:

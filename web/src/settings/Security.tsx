@@ -1,5 +1,5 @@
 /* Système › Accès › Sécurité: sign-in through the company directory (OpenID Connect). */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CircleCheck, Copy, KeyRound, PlugZap, Plus, X } from 'lucide-react';
 import { t, tc } from '../i18n';
 import { api, ROLES, useApp, type Role } from '../store';
@@ -10,7 +10,7 @@ import { errorText } from '../ui/serverError';
 import { Card, Field, SaveBar, Switch } from './ui';
 import { useServerConfig, type SsoConfig, type SsoProvider } from './serverConfig';
 
-const DEFAULT_SSO: SsoConfig = { enabled: false, provider: 'entra', issuer: '', clientId: '', clientSecret: '', groupsClaim: 'groups', groups: [], defaultRole: null, localAccounts: 'adminOnly' };
+const DEFAULT_SSO: SsoConfig = { enabled: false, provider: 'entra', issuer: '', clientId: '', clientSecret: '', groupsClaim: 'groups', groups: [], defaultRole: null, localAccounts: 'adminOnly', domains: [] };
 
 const PROVIDERS: { value: SsoProvider; label: string }[] = [
   { value: 'entra', label: 'Microsoft Entra' },
@@ -100,6 +100,9 @@ export function Security() {
                 <Field label={t('Groups claim')}>
                   <input value={sso.groupsClaim} spellCheck={false} onChange={(e) => set({ groupsClaim: e.target.value })} />
                 </Field>
+                <Field label={sso.provider === 'google' ? t('Allowed domains (required)') : t('Allowed domains')}>
+                  <DomainsInput value={sso.domains ?? []} onChange={(domains) => set({ domains })} />
+                </Field>
               </div>
               <Field label={t('Roles by group')} group>
                 <div className="sso-groups">
@@ -168,4 +171,12 @@ export function Security() {
       <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onDiscard={discard} />
     </>
   );
+}
+
+/** Domains as typed (« a.com, b.org »), kept as a list when the field is left. */
+function DomainsInput({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(value.join(', '));
+  useEffect(() => setText(value.join(', ')), [value.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  const commit = () => onChange(text.split(/[\s,;]+/).map((d) => d.replace(/^@/, '').toLowerCase()).filter(Boolean));
+  return <input value={text} placeholder="example.com" spellCheck={false} onChange={(e) => setText(e.target.value)} onBlur={commit} />;
 }

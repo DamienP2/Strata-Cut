@@ -2,7 +2,6 @@
 use clap::{Args, Parser, Subcommand};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::{Duration, Instant}};
 use tokio::sync::{watch, Notify};
-use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 mod alerts;
@@ -278,6 +277,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     // The capture cards are searched once now (then only when asked, in Système › Matériel).
     tokio::spawn(recorder::decklink::search_at_start(data_dir.clone()));
     let clips = clips::Clips::start(&data_dir, &first, events.clone(), recorders.clone());
+    clips.adopt(&auth.users());
     let programs = program::Programs::start(&data_dir, recorders.clone(), events.clone());
     let streams = streams::Streams::start(&data_dir, recorders.clone(), programs, events.clone());
     // The lives under way before the restart start again.
@@ -317,7 +317,6 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
             .layer(axum::middleware::from_fn(web::compress))
             .layer(axum::middleware::from_fn_with_state(shared.clone(), guard::csrf))
             .layer(axum::middleware::from_fn(guard::every_answer))
-            .layer(CorsLayer::permissive())
             .with_state(shared.clone());
         let (cycle, stop) = (shared.clone(), until_true(stop_rx.clone()));
         axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())

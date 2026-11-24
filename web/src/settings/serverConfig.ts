@@ -20,6 +20,8 @@ export interface SsoConfig {
   groups: { group: string; role: Role }[];
   defaultRole: Role | null;
   localAccounts: 'none' | 'adminOnly' | 'all';
+  /** The e-mail domains allowed to sign in (empty: any; Google needs them). */
+  domains: string[];
 }
 
 export interface ServerConfig {

@@ -114,13 +114,9 @@ pub struct Share {
 }
 
 impl Clip {
-    /// Made by this account (an older clip: by its name).
+    /// Made by this account (an older clip, with no owner: given one at start, see `adopt`).
     fn mine(&self, me: &crate::auth::User) -> bool {
-        if self.owner.is_empty() {
-            self.created_by == me.name() || self.created_by == me.username
-        } else {
-            self.owner == me.id
-        }
+        !self.owner.is_empty() && self.owner == me.id
     }
 
     /// Shared with this account (with everyone, or with a group it is in).
@@ -261,16 +257,38 @@ impl Clips {
         out
     }
 
-    pub fn jobs_json(&self) -> Value {
-        serde_json::to_value(&*self.jobs.lock().unwrap()).unwrap_or_default()
+    /// The extractions this account asked for (an admin: all of them).
+    pub fn jobs_json(&self, me: &crate::auth::User) -> Value {
+        let jobs = self.jobs.lock().unwrap();
+        let mine: Vec<&Job> = jobs.iter().filter(|j| me.is_admin() || j.by_id == me.id).collect();
+        serde_json::to_value(mine).unwrap_or_default()
     }
 
     fn jobs_changed(&self) {
-        self.events.send(Audience::All, json!({"type": "jobs", "jobs": self.jobs_json()}));
+        self.events.send(Audience::Jobs, json!({"type": "jobs"}));
     }
 
     fn clips_changed(&self) {
         self.events.send(Audience::All, json!({"type": "changed", "what": "clips"}));
+    }
+
+    /// The clips made before their maker's account was kept, given it once: the account of that
+    /// user name, else the only one of that display name (none, or several: they stay the
+    /// admins'). A name taken later by another account then gives it nothing.
+    pub fn adopt(&self, users: &[crate::auth::User]) {
+        let mut changed = 0;
+        for c in self.clips.lock().unwrap().iter_mut().filter(|c| c.owner.is_empty() && !c.created_by.is_empty()) {
+            let by_login = users.iter().find(|u| u.username == c.created_by);
+            let named: Vec<_> = users.iter().filter(|u| u.name() == c.created_by).collect();
+            if let Some(u) = by_login.or(if named.len() == 1 { Some(named[0]) } else { None }) {
+                c.owner = u.id.clone();
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            tracing::info!("{changed} older clips given their maker's account");
+            self.save();
+        }
     }
 
     fn save(&self) {
@@ -765,6 +783,7 @@ fn file_name(name: &str, ext: &str) -> String {
 }
 
 async fn download(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, req: Request) -> ApiResult<Response> {
+    require(me.can("clips.view"))?;
     let clip = seen(&s, &me, &id)?;
     // `?inline=1`: played in the page (the clips' player), not saved.
     let inline = req.uri().query().is_some_and(|q| q.split('&').any(|p| p == "inline=1"));
@@ -782,6 +801,7 @@ async fn download(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath
 }
 
 async fn thumb(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
+    require(me.can("clips.view"))?;
     seen(&s, &me, &id)?;
     let data = tokio::fs::read(s.clips.thumb_path(&id)).await.map_err(|_| not_found("image"))?;
     let mut r = Response::new(axum::body::Body::from(data));
@@ -823,9 +843,9 @@ mod tests {
         assert!(c.visible(&bob, &["g".into()]) && !c.visible(&bob, &["h".into()]));
         c.share = Share { all: true, groups: vec![] };
         assert!(c.visible(&bob, &[]) && !c.mine(&bob));
-        // A clip made before the accounts were kept: by its maker's name.
+        // A clip made before the accounts were kept: nobody's until `adopt` gives it its maker.
         let old = Clip { owner: String::new(), share: Share::default(), ..c };
-        assert!(old.mine(&ana) && !old.mine(&bob));
+        assert!(!old.mine(&ana) && !old.mine(&bob));
     }
 
     #[test]

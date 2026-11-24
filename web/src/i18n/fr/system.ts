@@ -53,6 +53,8 @@ export const system: Record<string, string> = {
   'Client ID': 'ID client',
   Secret: 'Secret',
   'Groups claim': 'Claim des groupes',
+  'Allowed domains': 'Domaines autorisés',
+  'Allowed domains (required)': 'Domaines autorisés (obligatoire)',
   'Roles by group': 'Rôles par groupe',
   Group: 'Groupe',
   group: 'groupe',

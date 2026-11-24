@@ -32,6 +32,7 @@ pub fn reaches(a: &Audience, u: &User) -> bool {
         Audience::All => true,
         Audience::Admins => u.is_admin(),
         Audience::NotAdmins => !u.is_admin(),
+        Audience::Jobs => true,
     }
 }
 
@@ -40,7 +41,7 @@ fn hello(s: &Shared, me: &User) -> Value {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let mut v = json!({"type": "hello", "user": me.public(), "serverName": cfg.name, "serverTime": now, "timezone": cfg.timezone});
     if let Value::Object(m) = &mut v {
-        m.extend(s.app_hello(me.is_admin()));
+        m.extend(s.app_hello(me));
     }
     v
 }
@@ -58,7 +59,8 @@ async fn run(s: Shared, me: User, token: String, mut socket: WebSocket) {
         tokio::select! {
             ev = events.recv() => match ev {
                 Ok(ev) => {
-                    if reaches(&ev.audience, &me) && socket.send(Message::Text(ev.json.to_string().into())).await.is_err() {
+                    let text = if ev.audience == Audience::Jobs { json!({"type": "jobs", "jobs": s.clips.jobs_json(&me)}).to_string() } else { ev.json.to_string() };
+                    if reaches(&ev.audience, &me) && socket.send(Message::Text(text.into())).await.is_err() {
                         break;
                     }
                 }

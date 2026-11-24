@@ -1052,8 +1052,12 @@ async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
     Ok(Json(json!({"ok": true})))
 }
 
+/// Tests at the same time, at most (each one encodes a few seconds).
+static TESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
 async fn test(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(o): Json<Overrides>) -> ApiResult<Json<Value>> {
     require(me.can("stream.run"))?;
+    let _one = TESTS.try_acquire().map_err(|_| bad("other tests are under way: again in a moment"))?;
     s.streams.test(&id, &o).await.map(Json).map_err(bad)
 }
 

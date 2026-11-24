@@ -237,6 +237,7 @@ export const streaming: Record<string, string> = {
   'only http:// and https:// addresses': 'Seulement des adresses http:// ou https://',
   'its requests cannot be watched': 'Le navigateur ne peut pas être surveillé.',
   'the page is starting: again in a moment': 'La page démarre : réessayez dans un instant',
+  'other tests are under way: again in a moment': 'D’autres tests sont en cours : réessayez dans un instant.',
   'the page is not open: start the source': 'La page n’est pas ouverte : démarrez la source',
   'this source is not a web page': 'Cette source n’est pas une page web',
   'choose the format of the page': 'Choisissez le format de la page',

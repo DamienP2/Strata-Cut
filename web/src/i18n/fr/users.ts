@@ -21,6 +21,7 @@ export const users: Record<string, string> = {
   'The passwords do not match.': 'Les mots de passe ne correspondent pas.',
   'None of your directory groups gives access to Strata.': 'Aucun de vos groupes de l’annuaire ne donne accès à Strata.',
   'This account is disabled.': 'Ce compte est désactivé.',
+  'This account is not in a domain allowed to sign in.': 'Ce compte n’est pas dans un domaine autorisé à se connecter.',
   'Signing in took too long: try again.': 'La connexion a pris trop de temps : réessayez.',
   'The directory refused the sign-in: {detail}': 'L’annuaire a refusé la connexion : {detail}',
   'An account already exists': 'Un compte existe déjà',

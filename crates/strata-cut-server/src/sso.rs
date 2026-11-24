@@ -70,6 +70,10 @@ pub struct SsoConfig {
     pub default_role: Option<Role>,
     #[serde(default)]
     pub local_accounts: LocalAccounts,
+    /// The e-mail domains allowed to sign in (empty: any). Google needs them: any Google account
+    /// in the world would sign in otherwise.
+    #[serde(default)]
+    pub domains: Vec<String>,
 }
 
 fn default_provider() -> String {
@@ -130,6 +134,15 @@ impl SsoConfig {
             LocalAccounts::AdminOnly => role == Role::Admin,
             LocalAccounts::All => true,
         }
+    }
+
+    /// Is this identity's guaranteed address in an allowed domain? (No list: yes, but for Google.)
+    pub fn domain_allowed(&self, id: &Identity) -> bool {
+        let domains: Vec<String> = self.domains.iter().map(|d| d.trim().trim_start_matches('@').to_lowercase()).filter(|d| !d.is_empty()).collect();
+        if domains.is_empty() {
+            return self.provider != "google";
+        }
+        id.address.as_deref().and_then(|a| a.rsplit_once('@')).is_some_and(|(_, d)| domains.contains(&d.to_lowercase()))
     }
 
     /// The highest role given by the user's groups, else the default role.
@@ -490,6 +503,10 @@ async fn callback(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<C
         Ok(Err(e)) => return fail("failed", &e),
         Err(e) => return fail("failed", &e.to_string()),
     };
+    if !cfg.domain_allowed(&id) {
+        tracing::warn!("sign-in refused with {}: {} is not in an allowed domain", cfg.button_name(), id.login);
+        return fail("domain", "");
+    }
     let role = cfg.role_for(&id.groups);
     let user = match sign_in_account(&s.auth, &id, role) {
         Ok(u) => u,
@@ -592,6 +609,14 @@ mod tests {
         assert_eq!(map_role(&table, &g(&["viewers", "IT-Admins", "cutters"])), Some(Role::Admin));
         assert_eq!(map_role(&table, &g(&["other"])), None);
         let mut cfg = SsoConfig { groups: table, ..Default::default() };
+        let who = |address: Option<&str>| Identity { key: "k".into(), login: "x".into(), address: address.map(String::from), name: String::new(), groups: Vec::new() };
+        assert!(cfg.domain_allowed(&who(Some("a@anything.example"))), "no list, not Google: any");
+        let google = SsoConfig { provider: "google".into(), ..Default::default() };
+        assert!(!google.domain_allowed(&who(Some("a@gmail.com"))), "Google needs its domains");
+        let ours = SsoConfig { provider: "google".into(), domains: vec!["@Example.org".into()], ..Default::default() };
+        assert!(ours.domain_allowed(&who(Some("a@example.ORG"))));
+        assert!(!ours.domain_allowed(&who(Some("a@example.org.evil.com"))));
+        assert!(!ours.domain_allowed(&who(None)), "no verified address");
         assert_eq!(cfg.role_for(&g(&["other"])), None, "refused");
         cfg.default_role = Some(Role::Viewer);
         assert_eq!(cfg.role_for(&g(&["other"])), Some(Role::Viewer));

@@ -32,11 +32,11 @@ impl AppState {
     }
 
     /// The app's lists, added to the WebSocket `hello`: `recorders`, `status`, `jobs`.
-    pub fn app_hello(&self, admin: bool) -> serde_json::Map<String, Value> {
+    pub fn app_hello(&self, me: &crate::auth::User) -> serde_json::Map<String, Value> {
         let mut m = serde_json::Map::new();
-        m.insert("recorders".into(), self.recorders.list_json(admin));
+        m.insert("recorders".into(), self.recorders.list_json(me.is_admin()));
         m.insert("status".into(), self.recorders.status_json());
-        m.insert("jobs".into(), self.clips.jobs_json());
+        m.insert("jobs".into(), self.clips.jobs_json(me));
         m
     }
 }
@@ -48,6 +48,8 @@ pub enum Audience {
     Admins,
     /// Every account but the admins.
     NotAdmins,
+    /// Each account its own extractions (an admin: all): the list is made for each.
+    Jobs,
 }
 
 #[derive(Clone)]

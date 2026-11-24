@@ -628,20 +628,23 @@ struct LoginBody {
 async fn login(State(s): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAddr>, headers: HeaderMap, Json(b): Json<LoginBody>) -> ApiResult<Response> {
     let ip = guard::client_ip(peer, &headers);
     let name = b.username.trim().to_string();
-    if let Err(wait) = s.auth.logins.check(ip, &name) {
+    if let Err(wait) = s.auth.logins.begin(ip, &name) {
         return Err((StatusCode::TOO_MANY_REQUESTS, format!("too many tries: wait {wait} s")));
+    }
+    // An account that signs in through the SSO: said before its password is looked at (the
+    // answer never tells whether a password was right).
+    let cfg = s.config.load();
+    let sso = &cfg.security.sso;
+    if let Some(u) = s.auth.find_name(&name) {
+        if !sso.local_allowed(u.role) && !guard::this_machine(peer, &headers) {
+            return Err((StatusCode::FORBIDDEN, format!("sign in with {}", sso.button_name())));
+        }
     }
     let user = s.auth.verify(&name, &b.password).await.filter(|u| !u.disabled);
     let Some(user) = user else {
-        s.auth.logins.failed(ip, &name);
         return Err((StatusCode::UNAUTHORIZED, "wrong user name or password".into()));
     };
     s.auth.logins.succeeded(ip, &name);
-    let cfg = s.config.load();
-    let sso = &cfg.security.sso;
-    if !sso.local_allowed(user.role) && !guard::this_machine(peer, &headers) {
-        return Err((StatusCode::FORBIDDEN, format!("sign in with {}", sso.button_name())));
-    }
     tracing::info!("{} signed in from {ip}", user.username);
     Ok(signed_in(&s, &user, &headers))
 }

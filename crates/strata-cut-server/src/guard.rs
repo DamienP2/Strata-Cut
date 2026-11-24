@@ -48,11 +48,13 @@ fn is_trusted(origin: &str, trusted: &[String]) -> bool {
 }
 
 /// Does this request need the CSRF check? Changes (not GET/HEAD/OPTIONS) and WebSocket
-/// upgrades carried by the cookie alone (no `Authorization`).
+/// upgrades carried by the cookie (no `Authorization: Bearer`).
 pub fn needs_check(method: &Method, headers: &HeaderMap) -> bool {
     let upgrade = header(headers, "upgrade").is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
     let changes = !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
-    (changes || upgrade) && !headers.contains_key("authorization")
+    // A token (`Bearer`) is never sent by a browser on its own: only then no check.
+    let bearer = header(headers, "authorization").is_some_and(|v| v.starts_with("Bearer "));
+    (changes || upgrade) && !bearer
 }
 
 /// Refuses state-changing requests sent by another site with only the cookie.
@@ -122,18 +124,30 @@ pub fn client_ip(peer: SocketAddr, headers: &HeaderMap) -> IpAddr {
     forwarded.and_then(|v| v.trim().parse().ok()).unwrap_or(ip)
 }
 
+/// The pages' policy: everything from this server (its scripts, its sockets), pictures and media
+/// also from the page's own blobs (the player), styles inline (React's), no frame around it.
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
 /// Headers on every answer.
 pub async fn every_answer(req: Request, next: Next) -> Response {
     let mut res = next.run(req).await;
     let h = res.headers_mut();
     h.insert("x-content-type-options", axum::http::HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", axum::http::HeaderValue::from_static("same-origin"));
+    // Never shown inside another site's frame; only its own scripts (an answer with its own
+    // policy, an uploaded logo, keeps it).
+    h.insert("x-frame-options", axum::http::HeaderValue::from_static("DENY"));
+    if !h.contains_key("content-security-policy") {
+        h.insert("content-security-policy", axum::http::HeaderValue::from_static(CSP));
+    }
     res
 }
 
 /// Free tries per (address + name), and per address.
 pub const FREE_PER_NAME: u32 = 5;
 pub const FREE_PER_ADDRESS: u32 = 20;
+/// Free tries per name, from all addresses together.
+pub const FREE_PER_ACCOUNT: u32 = 30;
 const MAX_WAIT: Duration = Duration::from_secs(300);
 const FORGET_AFTER: Duration = Duration::from_secs(15 * 60);
 
@@ -161,39 +175,46 @@ pub struct Logins {
 }
 
 impl Logins {
-    fn keys(ip: IpAddr, name: &str) -> [(String, u32); 2] {
-        [(format!("{ip}|{}", name.to_lowercase()), FREE_PER_NAME), (ip.to_string(), FREE_PER_ADDRESS)]
+    /// The counts a try goes into: (address + name), the address (an IPv6 one by its /64: one
+    /// machine has them all), the name from anywhere.
+    fn keys(ip: IpAddr, name: &str) -> [(String, u32); 3] {
+        let net = match ip {
+            IpAddr::V6(v) => {
+                let s = v.segments();
+                format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            }
+            ip => ip.to_string(),
+        };
+        let name = name.to_lowercase();
+        [(format!("{net}|{name}"), FREE_PER_NAME), (net, FREE_PER_ADDRESS), (format!("*|{name}"), FREE_PER_ACCOUNT)]
     }
 
-    /// Ok, or the number of seconds to wait.
-    pub fn check(&self, ip: IpAddr, name: &str) -> Result<(), u64> {
+    /// A try begins: counted at once (tries sent together all count), or the seconds to wait.
+    pub fn begin(&self, ip: IpAddr, name: &str) -> Result<(), u64> {
         let now = Instant::now();
         let mut map = self.tries.lock().unwrap();
         map.retain(|_, t| now.duration_since(t.last) < FORGET_AFTER);
-        let wait = Self::keys(ip, name).iter().filter_map(|(k, free)| map.get(k).and_then(|t| wait_for(t.failures, *free, now.duration_since(t.last)))).max();
-        match wait {
-            Some(w) => Err(w.as_secs_f64().ceil().max(1.0) as u64),
-            None => Ok(()),
+        let keys = Self::keys(ip, name);
+        if let Some(w) = keys.iter().filter_map(|(k, free)| map.get(k).and_then(|t| wait_for(t.failures, *free, now.duration_since(t.last)))).max() {
+            return Err(w.as_secs_f64().ceil().max(1.0) as u64);
         }
-    }
-
-    pub fn failed(&self, ip: IpAddr, name: &str) {
-        let now = Instant::now();
-        let mut map = self.tries.lock().unwrap();
-        for (k, _) in Self::keys(ip, name) {
+        for (k, _) in keys {
             let t = map.entry(k).or_insert(Tries { failures: 0, last: now });
-            if now.duration_since(t.last) >= FORGET_AFTER {
-                t.failures = 0;
-            }
             t.failures += 1;
             t.last = now;
         }
+        Ok(())
     }
 
-    /// A success resets the (address + name) count.
+    /// A success: its try given back (to the address), the name's counts cleared.
     pub fn succeeded(&self, ip: IpAddr, name: &str) {
-        let [(k, _), _] = Self::keys(ip, name);
-        self.tries.lock().unwrap().remove(&k);
+        let [(named, _), (net, _), (account, _)] = Self::keys(ip, name);
+        let mut map = self.tries.lock().unwrap();
+        map.remove(&named);
+        map.remove(&account);
+        if let Some(t) = map.get_mut(&net) {
+            t.failures = t.failures.saturating_sub(1);
+        }
     }
 }
 
@@ -274,12 +295,17 @@ mod tests {
         let l = Logins::default();
         let ip: IpAddr = "10.0.0.1".parse().unwrap();
         for _ in 0..5 {
-            assert!(l.check(ip, "bob").is_ok());
-            l.failed(ip, "bob");
+            assert!(l.begin(ip, "bob").is_ok());
         }
-        assert_eq!(l.check(ip, "Bob"), Err(2));
-        assert!(l.check(ip, "alice").is_ok(), "other name, same address");
+        assert_eq!(l.begin(ip, "Bob"), Err(2), "tries sent together all count");
+        assert!(l.begin(ip, "alice").is_ok(), "other name, same address");
         l.succeeded(ip, "bob");
-        assert!(l.check(ip, "bob").is_ok());
+        assert!(l.begin(ip, "bob").is_ok());
+        // An IPv6 machine by its /64.
+        let (a, b): (IpAddr, IpAddr) = ("2001:db8:1:2::1".parse().unwrap(), "2001:db8:1:2:ffff::9".parse().unwrap());
+        for _ in 0..5 {
+            assert!(l.begin(a, "carol").is_ok());
+        }
+        assert!(l.begin(b, "carol").is_err(), "another address of the same /64");
     }
 }
