@@ -207,7 +207,12 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
             <>
               <div className="ps-under">
                 <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
-                {since && <span className="ps-since">{t('on air for {t}', { t: clockOf(serverNow() - since) })}</span>}
+                {since && (
+                  <span className="ps-since" data-tip={t('On air since')}>
+                    <i />
+                    {clockOf(serverNow() - since)}
+                  </span>
+                )}
                 <span className="spacer" />
                 <button type="button" className="icon-btn ghost" data-tip={t('Settings')} aria-label={t('Settings')} onClick={() => setSettings('image')}>
                   <Settings size={15} />

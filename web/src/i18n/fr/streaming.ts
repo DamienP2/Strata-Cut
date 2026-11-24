@@ -293,5 +293,5 @@ export const streaming: Record<string, string> = {
   'Overlay settings': 'Réglages de l\'habillage',
   'by a fade of {s}': 'en fondu {s}',
   'by a cut': 'en coupe',
-  'on air for {t}': 'à l\'antenne depuis {t}',
+  'On air since': 'À l\'antenne depuis',
 };
