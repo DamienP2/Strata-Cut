@@ -534,5 +534,7 @@ export const business: Record<string, string> = {
   'About {size} for {free} free on the disk of the clips.': 'Environ {size} pour {free} libres sur le disque des extraits.',
   'Extract anyway': 'Extraire quand même',
   'Format of the clip': 'Format de l\'extrait',
+  'MP4 light': 'MP4 léger',
+  'TS copy': 'TS copie',
   'More than the free space of the clips': 'Plus que la place libre des extraits',
 };

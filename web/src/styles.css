@@ -973,17 +973,16 @@ a.btn { color: inherit; }
 .sc-kind-b.video.on svg { color: var(--accent); }
 .sc-kind-b.audio.on svg { color: var(--mask, #2dd4bf); }
 .sc-kind-b.image.on svg { color: #f472b6; }
-/* Extraction: the clip's format, and its weight. */
-.sc-xwrap.two { display: inline-flex; flex-direction: column; flex: none; --xk: var(--accent); }
+/* Extraction: one button as high as the others: the clip's format (a click: the formats), then Extract and its weight. */
+.sc-xwrap.two { display: inline-flex; flex: none; height: 36px; --xk: var(--accent); }
 .sc-xwrap.two.k-audio { --xk: var(--mask, #2dd4bf); }
 .sc-xwrap.two.k-image { --xk: #f472b6; }
-.cf { position: relative; display: block; }
-.cf-btn { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; height: 19px; padding: 0 8px; border: 1px solid var(--xk, var(--accent)); border-bottom: 0; border-radius: 9px 9px 0 0; background: color-mix(in srgb, var(--xk, var(--accent)) 16%, transparent); color: color-mix(in srgb, var(--xk, var(--accent)) 55%, #fff); font: 500 10.5px Inter, sans-serif; white-space: nowrap; cursor: pointer; }
-.cf-btn span { overflow: hidden; text-overflow: ellipsis; }
-.sc-xwrap.two .cf { width: 0; min-width: 100%; }
-.sc-xwrap.two .sc-xbtn { height: 30px; min-width: 136px; padding: 0 10px !important; border-radius: 0 0 9px 9px; justify-content: flex-start; }
-.sc-xwrap.two .sc-xbtn.busy { border-top: 0; }
-.sc-xw { margin-left: auto; padding-left: 10px; font: 700 12px var(--mono); white-space: nowrap; }
+.cf { position: relative; display: flex; }
+.sc-xwrap.two .cf { position: static; }
+.cf-btn { display: flex; align-items: center; gap: 5px; height: 100%; padding: 0 8px 0 10px; border: 1px solid var(--xk, var(--accent)); border-right: 0; border-radius: 8px 0 0 8px; background: color-mix(in srgb, var(--xk, var(--accent)) 16%, transparent); color: color-mix(in srgb, var(--xk, var(--accent)) 55%, #fff); font: 600 12px Inter, sans-serif; white-space: nowrap; cursor: pointer; }
+.cf-btn:hover, .cf-btn[aria-expanded='true'] { background: color-mix(in srgb, var(--xk, var(--accent)) 26%, transparent); }
+.sc-xwrap.two .sc-xbtn { height: 100%; width: auto; min-width: 0; padding: 0 12px 0 10px !important; gap: 7px; display: inline-flex; align-items: center; border-radius: 0 8px 8px 0; }
+.sc-xw { padding-left: 4px; font: 700 12px var(--mono); white-space: nowrap; opacity: 0.85; }
 .sc-xwrap.two.over .sc-xbtn:not(.busy), .sc-xwrap.two.over .sc-xbtn:not(.busy):hover:not(:disabled) { background: var(--warn); color: #0b0c12; }
 .sc-xwrap.two.over .cf-btn { border-color: var(--warn); }
 .cf-menu { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30; width: 400px; padding: 6px; border-radius: 12px; background: var(--panel-2); border: 1px solid var(--line-2); box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; gap: 2px; }
@@ -1005,6 +1004,9 @@ a.btn { color: inherit; }
   .sc-mtag { padding-right: 4px; }
   .sc-mtag-x { display: none; }
   .sc-clipdur { font-size: 13px; }
+  .sc-clipbar .ctl { width: 36px; }
+  /* The scissors say it (and its tip): the format and the weight keep their room. */
+  .sc-xwrap.two .sc-xkind { display: none; }
 }
 @container centre (max-width: 800px) {
   .sc-clipbar { flex-wrap: wrap; row-gap: 8px; }
