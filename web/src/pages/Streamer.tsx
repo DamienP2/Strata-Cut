@@ -299,7 +299,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
                     <div className="st-card-foot">
                       <span>{t('{v} sent', { v: volume(s.bytes, locale(), lang() === 'fr') })}</span>
                       {run && (
-                        <button type="button" className="btn small st-stop-btn" onClick={() => void stop(d)}>
+                        <button type="button" className="btn small stop-btn" onClick={() => void stop(d)}>
                           <Square size={9} /> {t('Stop')}
                         </button>
                       )}

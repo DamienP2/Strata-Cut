@@ -93,7 +93,7 @@ const DEFAULT_MBPS = 8;
 export const loopNeed = (mbps: number, hours: number) => ((mbps > 0 ? mbps : DEFAULT_MBPS) + 1.5) * 1e6 / 8 * 3600 * hours * 1.05;
 /** Loop lengths on the slider (hours), and the ones a button gives at once. */
 const LOOP_STEPS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 18, 20, 24, 30, 36, 48, 60, 72, 96, 120, 144, 168];
-const LOOP_PRESETS = [6, 12, 24];
+const LOOP_PRESETS = [3, 6, 12, 24];
 
 const stepOf = (h: number) => LOOP_STEPS.reduce((best, v, i) => (Math.abs(v - h) < Math.abs(LOOP_STEPS[best] - h) ? i : best), 0);
 
@@ -375,8 +375,8 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
           </button>
           <div className="spacer" />
           {rec.enabled ? (
-            <button type="button" className="btn small" onClick={() => void setRecording('slots')}>
-              <Square size={11} /> {t('Stop')}
+            <button type="button" className="btn small stop-btn" onClick={() => void setRecording('slots')}>
+              <Square size={10} /> {t('Stop')}
             </button>
           ) : (
             <button type="button" className="btn small sc-cal-start" onClick={() => void setRecording('continuous')}>

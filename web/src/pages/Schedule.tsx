@@ -195,8 +195,8 @@ function SlotPanel({ slots, recorders, names, timezone, admin, only, setOnly, on
                     )}
                     {admin && (
                       <span className="sc-slot-acts" onClick={(e) => e.stopPropagation()}>
-                        <button className="icon-btn ghost" data-tip={t('Stop')} aria-label={t('Stop')} onClick={() => void stopContinuous(r)}>
-                          <Square size={12} />
+                        <button className="stop-btn icon" data-tip={t('Stop')} aria-label={t('Stop')} onClick={() => void stopContinuous(r)}>
+                          <Square size={10} />
                         </button>
                       </span>
                     )}
@@ -679,7 +679,7 @@ function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
       </span>
       {admin &&
         (rec.enabled ? (
-          <button type="button" className="sc-head-rec stop" disabled={busy} data-tip={t('Stop recording all the time')} onClick={() => void setMode('slots')}>
+          <button type="button" className="sc-head-rec stop-btn" disabled={busy} data-tip={t('Stop recording all the time')} onClick={() => void setMode('slots')}>
             <Square size={9} /> {t('Stop')}
           </button>
         ) : (
