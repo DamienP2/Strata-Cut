@@ -273,11 +273,18 @@ fn encoder_args(sh: &Shape, video: u16, audio: u16, out: u16) -> Vec<String> {
     let (w, h, fps, k) = (sh.w, sh.h, sh.rate.fps(), sh.kbps);
     let rate = format!("{}/{}", sh.rate.num, sh.rate.den);
     let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error"]);
+    // Raw inputs, all known: not probed (probing one, FFmpeg reads nothing of the other, while
+    // the mixer, the first one full, sends nothing more to either: neither would ever come).
+    let raw = ["-probesize", "32", "-analyzeduration", "0", "-fpsprobesize", "0"];
+    a.extend(s(&raw));
     a.extend(s(&["-thread_queue_size", "64", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", &format!("{w}x{h}"), "-framerate", &rate, "-i"]));
     a.push(format!("tcp://127.0.0.1:{video}"));
+    a.extend(s(&raw));
     a.extend(s(&["-thread_queue_size", "256", "-f", "f32le", "-ar", "48000", "-ac", "2", "-i"]));
     a.push(format!("tcp://127.0.0.1:{audio}"));
-    a.extend(s(&["-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p"]));
+    // Above 30 a second (50, 60), twice the pictures: a quicker preset keeps up.
+    let preset = if fps > 30 { "superfast" } else { "veryfast" };
+    a.extend(s(&["-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", preset, "-profile:v", "high", "-pix_fmt", "yuv420p"]));
     a.extend(s(&["-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string(), "-sc_threshold", "0"]));
     a.extend(s(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-f", "mpegts"]));
     a.push(format!("udp://127.0.0.1:{out}?pkt_size=1316"));
