@@ -295,4 +295,5 @@ export const streaming: Record<string, string> = {
   Rate: 'Débit',
   'Variable (VBR)': 'Variable (VBR)',
   'Constant (CBR)': 'Constant (CBR)',
+  'Audio bitrate': 'Débit audio',
 };

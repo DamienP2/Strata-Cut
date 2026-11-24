@@ -58,6 +58,9 @@ pub struct Destination {
     pub height: u32,
     pub video_kbps: u32,
     pub audio_kbps: u32,
+    /// Encoded again: a variable rate (VBR: the quality kept, the bitrate a ceiling), else
+    /// constant (CBR, what platforms and SRT receivers ask).
+    pub vbr: bool,
     /// What the operator may change in the Streamer: the server's address, the video bitrate.
     pub expose_url: bool,
     pub expose_bitrate: bool,
@@ -93,6 +96,9 @@ impl Destination {
         }
         if self.encode == "h264" && !(300..=50_000).contains(&self.video_kbps) {
             return Err("the video bitrate is 0.3 to 50 mb/s".into());
+        }
+        if self.audio_kbps != 0 && !(64..=320).contains(&self.audio_kbps) {
+            return Err("the audio bitrate is 64 to 320 kb/s".into());
         }
         Ok(())
     }
@@ -193,7 +199,8 @@ fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
         let k = if d.video_kbps > 0 { d.video_kbps } else { 6000 };
         let scale = if d.height > 0 { format!(",scale=-2:{}", d.height) } else { String::new() };
         a.extend(s(&["-vf", &format!("yadif=deint=interlaced{scale},format=yuv420p"), "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high"]));
-        a.extend(s(&["-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-force_key_frames", "expr:gte(t,n_forced*2)"]));
+        a.extend(crate::recorder::rate_args(k, !d.vbr));
+        a.extend(s(&["-force_key_frames", "expr:gte(t,n_forced*2)"]));
     } else {
         a.extend(s(&["-c:v", "copy"]));
     }
@@ -203,6 +210,10 @@ fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
     } else {
         let ak = if d.audio_kbps > 0 { d.audio_kbps } else { 160 };
         a.extend(s(&["-c:a", "aac", "-b:a", &format!("{ak}k"), "-ar", "48000", "-ac", "2"]));
+        // SRT encoded again in CBR: the MPEG-TS padded to its rate too.
+        if d.srt() && (d.encode == "h264" || must) {
+            a.extend(crate::recorder::muxrate_args(if d.video_kbps > 0 { d.video_kbps } else { 6000 }, ak, !d.vbr));
+        }
         a.extend(s(&["-f", if d.srt() { "mpegts" } else { "flv" }]));
     }
     // A server that stops taking what is sent (10 s): FFmpeg ends and the link is made again,

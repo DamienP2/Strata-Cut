@@ -285,8 +285,12 @@ fn encoder_args(sh: &Shape, video: u16, audio: u16, out: u16) -> Vec<String> {
     // Above 30 a second (50, 60), twice the pictures: a quicker preset keeps up.
     let preset = if fps > 30 { "superfast" } else { "veryfast" };
     a.extend(s(&["-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", preset, "-profile:v", "high", "-pix_fmt", "yuv420p"]));
-    a.extend(s(&["-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string(), "-sc_threshold", "0"]));
-    a.extend(s(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2", "-f", "mpegts"]));
+    // Constant (CBR): what the lives that copy it send (platforms and SRT receivers ask for it).
+    a.extend(crate::recorder::rate_args(k, true));
+    a.extend(s(&["-g", &(fps * 2).to_string(), "-sc_threshold", "0"]));
+    a.extend(s(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]));
+    a.extend(crate::recorder::muxrate_args(k, 192, true));
+    a.extend(s(&["-f", "mpegts"]));
     a.push(format!("udp://127.0.0.1:{out}?pkt_size=1316"));
     a
 }

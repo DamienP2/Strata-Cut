@@ -252,10 +252,18 @@ function DestModal({ dest, onClose }: { dest: Destination; onClose: () => void }
                 <Field label={t('Picture')}>
                   <Dropdown value={String(d.height)} options={HEIGHTS.map((h) => ({ value: String(h), label: h ? `${h}p` : t('As the source') }))} onChange={(v) => set({ height: Number(v) })} />
                 </Field>
+                <Field label={t('Rate')} group>
+                  <Segmented value={d.vbr ? 'vbr' : 'cbr'} options={[{ value: 'cbr', label: t('Constant (CBR)') }, { value: 'vbr', label: t('Variable (VBR)') }]} onChange={(v) => set({ vbr: v === 'vbr' })} />
+                </Field>
                 <Field label={t('Video bitrate')}>
                   <NumberField value={(d.videoKbps ?? 6000) / 1000} min={0.3} max={50} step={0.5} precision={1} suffix={fr ? 'Mb/s' : 'Mb/s'} onChange={(v) => set({ videoKbps: Math.round(v * 1000) })} />
                 </Field>
               </>
+            )}
+            {!(srt && d.encode === 'copy') && (
+              <Field label={t('Audio bitrate')} group>
+                <Segmented value={String(d.audioKbps || 160)} options={[128, 160, 192, 256].map((k) => ({ value: String(k), label: `${k} kb/s` }))} onChange={(v) => set({ audioKbps: Number(v) })} />
+              </Field>
             )}
             <div className="set-field span2">
               <div className="io-expose">

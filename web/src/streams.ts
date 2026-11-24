@@ -24,6 +24,8 @@ export interface Destination {
   height: number;
   videoKbps?: number | null;
   audioKbps?: number;
+  /** Encoded again: a variable rate, else constant (CBR). */
+  vbr?: boolean;
   exposeUrl: boolean;
   exposeBitrate: boolean;
   /** Sends the clean source, rather than its programme (image, overlay, sound). */
