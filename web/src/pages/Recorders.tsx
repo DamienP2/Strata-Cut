@@ -257,6 +257,7 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
 
   // REC: records all the time; Stop: only during its slots (as in Programmation).
   const setRecording = async (mode: 'continuous' | 'slots') => {
+    if (mode === 'slots' && !(await confirmDialog({ title: t('Stop recording “{name}”?', { name: rec.name }), message: t('What it recorded stays in its loop.'), confirm: t('Stop'), danger: true }))) return;
     try {
       await api('POST', `/api/recorders/${rec.id}/recording`, { mode });
     } catch (e) {

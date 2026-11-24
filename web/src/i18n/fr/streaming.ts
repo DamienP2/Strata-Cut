@@ -280,4 +280,9 @@ export const streaming: Record<string, string> = {
   'the source does not answer: waiting for it': 'La source ne répond pas : en attente',
   'no free local port for the stream: trying again': 'Aucun port local libre : nouvel essai',
   'no free local port for the stream': 'Aucun port local libre pour la diffusion',
+  'Stop the live to “{name}”?': 'Arrêter la diffusion vers « {name} » ?',
+  'Stop the live of “{source}”?': 'Arrêter la diffusion de « {source} » ?',
+  'Stop the {n} lives of “{source}”?': 'Arrêter les {n} diffusions de « {source} » ?',
+  'Stop recording “{name}”?': 'Arrêter l\'enregistrement de « {name} » ?',
+  'What it recorded stays in its loop.': 'Ce qui est déjà enregistré reste dans la boucle.',
 };

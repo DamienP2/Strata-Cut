@@ -22,6 +22,7 @@ import { clockOf, mbps, useDestinations, useStreams, volume, type Destination, t
 import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
 import { explainGuard } from '../ui/guard';
+import { confirmDialog } from '../ui/dialogs';
 import { SourceGroups } from '../ui/SourceGroups';
 import { usePageTools } from '../ui/PageTools';
 import { Antenne, Mixer, ProgramLayer, SettingsModal, useProgram } from './StreamerProgram';
@@ -184,6 +185,9 @@ interface Draft {
   test?: { busy: boolean; ok?: boolean; text?: string };
 }
 
+/** How long a trouble or a test's answer stays on a card. */
+const SAID_MS = 8000;
+
 function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Destination[] | null; streams: StreamInfo[]; failed: StreamInfo[] }) {
   const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const { recorders, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast })));
@@ -215,6 +219,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
     return true;
   };
   const stop = async (d: Destination) => {
+    if (!(await confirmDialog({ title: t('Stop the live to “{name}”?', { name: d.name }), confirm: t('Stop'), danger: true }))) return;
     try {
       await api('DELETE', `/api/streams/${d.id}`);
     } catch (e) {
@@ -224,6 +229,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
   // This source's lives: how many, their bitrate, all stopped at once.
   const mine = streams.filter((s) => s.source === rec.id);
   const stopAll = async () => {
+    if (!(await confirmDialog({ title: tn(mine.length, 'Stop the live of “{source}”?', 'Stop the {n} lives of “{source}”?', { source: rec.name }), confirm: t('Stop all'), danger: true }))) return;
     try {
       await api('POST', '/api/streams/stop', { source: rec.id });
     } catch (e) {
@@ -239,12 +245,26 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
   };
   const test = async (d: Destination) => {
     setDraft(d, { test: { busy: true } });
+    let shown: Draft['test'];
     try {
       const r = await api<{ ms: number; keyChecked: boolean }>('POST', `/api/destinations/${d.id}/test`, overrides(d));
-      setDraft(d, { test: { busy: false, ok: true, text: r.keyChecked ? t('Test passed · {ms} ms: ready', { ms: r.ms }) : t('The server answers ({ms} ms): give the key of this live', { ms: r.ms }) } });
+      shown = { busy: false, ok: true, text: r.keyChecked ? t('Test passed · {ms} ms: ready', { ms: r.ms }) : t('The server answers ({ms} ms): give the key of this live', { ms: r.ms }) };
     } catch (e) {
-      setDraft(d, { test: { busy: false, ok: false, text: t('Test failed: {why}', { why: t((e as Error).message) }) } });
+      shown = { busy: false, ok: false, text: t('Test failed: {why}', { why: t((e as Error).message) }) };
     }
+    setDraft(d, { test: shown });
+    // Read, then gone (unless another test said something since).
+    window.setTimeout(() => setDrafts((x) => (x[d.id]?.test === shown ? { ...x, [d.id]: { ...x[d.id], test: undefined } } : x)), SAID_MS);
+  };
+  // A trouble said on a card a few seconds, from when it first shows (none while connecting: the
+  // chip says it).
+  const firstSeen = useRef(new Map<string, number>());
+  const fresh = (key: string, text: string) => {
+    if (!text) return '';
+    const k = `${key}\n${text}`;
+    const at = firstSeen.current.get(k) ?? Date.now();
+    firstSeen.current.set(k, at);
+    return Date.now() - at < SAID_MS ? text : '';
   };
   return (
     <section className="st-dests-panel">
@@ -273,7 +293,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
             const on = !!s && !busy;
             const x = draft(d);
             // Started from here and refused by the destination: why (no new try by itself).
-            const refused = !s ? failed.find((f) => f.destination === d.id && f.source === rec.id) : undefined;
+            const refused = !s ? failed.find((f) => f.destination === d.id && f.source === rec.id && serverNow() - f.started < SAID_MS) : undefined;
             const live = on && s?.state === 'live';
             const state = on && s ? (live ? clockOf(s.liveSince ? serverNow() - s.liveSince : 0) : s.state === 'connecting' ? t('Connecting…') : t('Reconnecting')) : busy && s ? t('Busy · {source}', { source: nameOf(s.source) }) : tc('dest', 'Ready');
             // Its server cut the link: the live stops at this moment unless it takes it again.
@@ -300,11 +320,14 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
                       <Spark values={s.history} />
                       <b>{mbps(s.kbps, locale())}</b>
                     </div>
-                    {(s.message || s.note) && left === null && (
-                      <div className={`st-note ${s.message ? 'bad' : ''}`}>
-                        {s.message ? <AlertTriangle size={11} /> : null} {said(s.message || s.note)}
-                      </div>
-                    )}
+                    {(() => {
+                      const bad = s.state === 'connecting' ? '' : fresh(d.id, s.message);
+                      return (bad || s.note) && left === null ? (
+                        <div className={`st-note ${bad ? 'bad' : ''}`}>
+                          {bad ? <AlertTriangle size={11} /> : null} {said(bad || s.note)}
+                        </div>
+                      ) : null;
+                    })()}
                     <div className="st-card-foot">
                       <span>{t('{v} sent', { v: volume(s.bytes, locale(), lang() === 'fr') })}</span>
                       {run && (
@@ -360,8 +383,8 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
           </span>
           <span className="spacer" />
           {run && (
-            <button type="button" className="btn" onClick={() => void stopAll()}>
-              {t('Stop all')}
+            <button type="button" className="btn small stop-btn" onClick={() => void stopAll()}>
+              <Square size={9} /> {t('Stop all')}
             </button>
           )}
         </footer>

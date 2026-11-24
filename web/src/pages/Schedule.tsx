@@ -123,6 +123,7 @@ function SlotPanel({ slots, recorders, names, timezone, admin, only, setOnly, on
   const continuous = recorders.filter((r) => r.enabled && mine(r.id));
   const count = (id: string) => slots.filter((s) => s.next && s.recorder === id).length + (recorders.find((r) => r.id === id)?.enabled ? 1 : 0);
   const stopContinuous = async (r: Recorder) => {
+    if (!(await confirmDialog({ title: t('Stop recording “{name}”?', { name: r.name }), message: t('What it recorded stays in its loop.'), confirm: t('Stop'), danger: true }))) return;
     try {
       await api('POST', `/api/recorders/${r.id}/recording`, { mode: 'slots' });
     } catch (e) {
@@ -636,6 +637,7 @@ function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
   const toast = useApp((s) => s.toast);
   const [busy, setBusy] = useState(false);
   const setMode = async (mode: 'continuous' | 'slots') => {
+    if (mode === 'slots' && !(await confirmDialog({ title: t('Stop recording “{name}”?', { name: rec.name }), message: t('What it recorded stays in its loop.'), confirm: t('Stop'), danger: true }))) return;
     setBusy(true);
     try {
       await api('POST', `/api/recorders/${rec.id}/recording`, { mode });
