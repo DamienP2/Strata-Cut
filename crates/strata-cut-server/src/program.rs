@@ -222,6 +222,8 @@ pub struct Runner {
     pictured: Arc<AtomicBool>,
     /// Its encoder's runs: one started again begins its timestamps again, the lives connect again.
     pub(crate) epoch: AtomicU64,
+    /// Where its making is (said to the lives while they wait for it).
+    pub(crate) stage: Mutex<&'static str>,
     /// It is no longer made (it could not be): the lives take another.
     ended: AtomicBool,
 }
@@ -238,6 +240,13 @@ impl Runner {
     /// The source's picture is in it.
     pub fn pictured(&self) -> bool {
         self.pictured.load(Ordering::Relaxed)
+    }
+    /// Where its making is.
+    pub fn stage(&self) -> &'static str {
+        *self.stage.lock().unwrap()
+    }
+    pub(crate) fn at_stage(&self, s: &'static str) {
+        *self.stage.lock().unwrap() = s;
     }
     /// The run of its encoder.
     pub fn epoch(&self) -> u64 {
@@ -313,7 +322,7 @@ impl Programs {
             return r.clone();
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        let r = Arc::new(Runner { taps: Mutex::new(Vec::new()), last_packet: AtomicI64::new(0), users: AtomicUsize::new(1), failed: Mutex::new(String::new()), pictured: Default::default(), epoch: AtomicU64::new(0), ended: AtomicBool::new(false), tx, stop: watch::channel(false).0 });
+        let r = Arc::new(Runner { taps: Mutex::new(Vec::new()), last_packet: AtomicI64::new(0), users: AtomicUsize::new(1), failed: Mutex::new(String::new()), pictured: Default::default(), epoch: AtomicU64::new(0), stage: Mutex::new("waiting for the source's description"), ended: AtomicBool::new(false), tx, stop: watch::channel(false).0 });
         running.insert(source.to_string(), r.clone());
         let (me, source, runner) = (self.clone(), source.to_string(), r.clone());
         tokio::spawn(async move { me.run(source, runner, rx).await });
@@ -353,6 +362,7 @@ impl Programs {
         }
         let Some(rec) = self.recorders.get(&source) else { return };
         let (sh, name) = (Shape::of(&rec), rec.config().name);
+        r.at_stage("making its pictures");
         let mut p = self.get(&source);
         let pics = Arc::new(Mutex::new(Pics { image: Arc::new(self.image(&ffmpeg, &p, &sh, &name).await), overlay: Arc::new(self.overlay(&ffmpeg, &p, &sh).await) }));
         // The delay a picture is played after its coming: a source in segments (HLS, the web) comes
@@ -379,7 +389,30 @@ impl Programs {
         rec.taps.lock().unwrap().push((key, watch.port));
         let _untap = Untap(rec.clone(), key);
         tokio::spawn(crate::engine::encode(ffmpeg.clone(), r.clone(), sh, sink, r.stop.subscribe()));
-        tokio::spawn(crate::engine::decode(self.recorders.clone(), source.clone(), sh, inputs, watch, r.clone(), r.stop.subscribe()));
+        tokio::spawn(crate::engine::decode(self.recorders.clone(), source.clone(), sh, inputs.clone(), watch, r.clone(), r.stop.subscribe()));
+        // Its first picture of the source: said in the journal; none after a while: said, with
+        // where the making is.
+        {
+            let (r, name, mut stop) = (r.clone(), name.clone(), r.stop.subscribe());
+            tokio::spawn(async move {
+                let since = Instant::now();
+                let mut warned = false;
+                loop {
+                    if r.pictured() {
+                        tracing::info!("programme of {name}: the source's first picture ({:.1} s)", since.elapsed().as_secs_f64());
+                        return;
+                    }
+                    if !warned && since.elapsed() > Duration::from_secs(40) {
+                        warned = true;
+                        tracing::warn!("programme of {name}: no picture of the source after 40 s ({}; {} pictures decoded; the programme {})", r.stage(), inputs.came(), if r.flowing() { "comes out" } else { "does not come out" });
+                    }
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                        _ = stop.changed() => return,
+                    }
+                }
+            });
+        }
         tracing::info!("programme of {name}: made ({}x{}, {}/{} fps, {} kb/s)", sh.w, sh.h, sh.rate.num, sh.rate.den, sh.kbps);
         loop {
             tokio::select! {

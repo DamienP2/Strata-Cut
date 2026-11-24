@@ -566,17 +566,27 @@ impl Streams {
             // server that receives a stream without a picture may refuse it, or show black).
             if r.flowing() && r.pictured() {
                 self.set(s, |st| {
-                    if st.message == "waiting for the source" || st.message == "the programme is being made" {
+                    if st.message == "waiting for the source" || st.message.starts_with("the programme is being made") || st.message.starts_with("waiting for the source's first picture") {
                         st.message.clear();
                     }
                 });
                 return true;
             }
-            // The source is here: what is waited for now is the programme (said, with why it failed).
+            // The source is here: what is waited for now is the programme (said, with why it failed,
+            // else where its making is).
             if !said || since.elapsed() > Duration::from_secs(5) {
                 said = true;
                 let why = r.why();
-                self.set(s, |st| st.message = if why.is_empty() { "the programme is being made".into() } else { format!("the programme does not start: {why}") });
+                let now = if !why.is_empty() {
+                    format!("the programme does not start: {why}")
+                } else if r.flowing() {
+                    format!("waiting for the source's first picture: {}", r.stage())
+                } else if r.epoch() == 0 {
+                    format!("the programme is being made: {}", r.stage())
+                } else {
+                    "the programme is being made: its encoder gives nothing yet".to_string()
+                };
+                self.set(s, |st| st.message = now);
             }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(300)) => {}

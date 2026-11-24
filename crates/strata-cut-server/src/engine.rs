@@ -94,8 +94,11 @@ pub async fn decode(recorders: Arc<Manager>, source: String, sh: Shape, inputs: 
         if *stop.borrow() {
             return;
         }
+        r.at_stage("waiting for the source");
         if let Some(rec) = recorders.get(&source).filter(|r| r.flowing()) {
+            r.at_stage("reading the source's tracks");
             let picks = wait_picks(&watch, &rec, sh.tracks).await;
+            r.at_stage("the decoder reads the source");
             tracing::debug!("programme of {}: the decoder starts with {picks:?}", rec.config().name);
             let Some(why) = decode_once(&recorders.ffmpeg, &rec, &sh, &picks, &inputs, &mut stop).await else { return };
             // Its port taken meanwhile by another: again at once, nothing to say.

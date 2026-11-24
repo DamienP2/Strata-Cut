@@ -28,7 +28,7 @@ import { Antenne, Mixer, ProgramLayer, SettingsModal, useProgram } from './Strea
 /** A message of the server, translated: whole, or its known beginning and what follows (FFmpeg's words). */
 function said(m: string): string {
   const k = m.indexOf(': ');
-  return k > 0 && t(m) === m ? `${t(m.slice(0, k))} : ${m.slice(k + 2)}` : t(m);
+  return k > 0 && t(m) === m ? `${t(m.slice(0, k))} : ${said(m.slice(k + 2))}` : t(m);
 }
 
 export function Streamer({ source }: { source?: string }) {

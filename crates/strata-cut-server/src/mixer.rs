@@ -70,6 +70,8 @@ pub struct Inputs {
     /// Pictures waiting at most: beyond, the decoder waits for room.
     most: usize,
     q: Mutex<Queues>,
+    /// Pictures given by the decoder (all its runs).
+    came: std::sync::atomic::AtomicU64,
 }
 
 #[derive(Default)]
@@ -114,12 +116,18 @@ impl Inputs {
             look: LOOK,
             ..Default::default()
         };
-        Inputs { rate, delay: fps * delay as usize, most: 2 * fps, q: Mutex::new(q) }
+        Inputs { rate, delay: fps * delay as usize, most: 2 * fps, q: Mutex::new(q), came: Default::default() }
     }
 
     /// The next picture (YUV 4:2:0 at the programme's size).
     pub fn picture(&self, f: Vec<u8>) {
         self.q.lock().unwrap().pictures.push_back(f);
+        self.came.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Pictures given by the decoder so far.
+    pub fn came(&self) -> u64 {
+        self.came.load(Ordering::Relaxed)
     }
 
     /// Enough pictures wait: the decoder waits for room (what comes waits before it, compressed).
