@@ -17,6 +17,8 @@ import type { Clip, Job, Recorder } from '../types';
 import { trackLabel } from '../audioLabel';
 import { Transport, useTransportKeys, type TransportActs } from '../ui/Transport';
 import { usePageTools } from '../ui/PageTools';
+import { ClipFormat, DEFAULT_FORMAT, FORMATS, sizeText, useClipsFree, type ClipKind } from '../ui/ClipFormat';
+import { confirmDialog } from '../ui/dialogs';
 
 /** A marked frame: its run, its source time and its server time. */
 interface Mark {
@@ -550,12 +552,26 @@ function Editor({ rec }: { rec: Recorder }) {
 
   const frames = mIn && mOut && mIn.run === mOut.run && mOut.t >= mIn.t ? Math.round((mOut.t - mIn.t) * fps) + 1 : 0;
   const canCut = can.extract(user) && (kind === 'image' ? !!pos && !hole && !!pos.run : frames > 0);
+  // The clip's format (the last chosen for each kind) and its weight, by the source's measured bitrate.
+  const [formats, setFormats] = useDisplayPref<Record<ClipKind, string>>('extract.formats', DEFAULT_FORMAT);
+  const format = formats[kind] ?? DEFAULT_FORMAT[kind];
+  const free = useClipsFree();
+  const recSt = useApp((s) => s.status[rec.id]);
+  const basis = { seconds: kind === 'image' ? 0 : frames / fps, bps: recSt?.bitrate || recSt?.measured || (rec.bitrate || 8) * 1e6, media: run?.media ?? recSt?.media ?? null };
+  /** False: more than the free space, and not cut after all. */
+  const fits = async () => {
+    const f = FORMATS.find((x) => x.id === format && x.kind === kind);
+    const est = f ? f.size(basis) : [0];
+    if (free === null || est[est.length - 1] <= free) return true;
+    return confirmDialog({ title: t('This clip may not fit'), message: t('About {size} for {free} free on the disk of the clips.', { size: sizeText(est).replace('≈ ', ''), free: sizeText([free]).replace('≈ ', '') }), confirm: t('Extract anyway'), danger: true });
+  };
   const cut = async () => {
+    if (!(await fits())) return;
     // The picture under the playhead: no in or out needed (they stay).
     if (kind === 'image') {
       if (!pos || hole || !pos.run) return;
       try {
-        await api('POST', '/api/clips', { recorder: rec.id, run: pos.run, t: pos.t, frames: 1, kind, name: name.trim() || `${rec.name} ${timecode(pos.wall, fps, timezone)}` });
+        await api('POST', '/api/clips', { recorder: rec.id, run: pos.run, t: pos.t, frames: 1, kind, format, name: name.trim() || `${rec.name} ${timecode(pos.wall, fps, timezone)}` });
         setName('');
       } catch (e) {
         toast(t((e as Error).message), 'error');
@@ -565,7 +581,7 @@ function Editor({ rec }: { rec: Recorder }) {
     if (!mIn || !mOut) return;
     if (mIn.run !== mOut.run) return toast(t('The in and out points must be in the same recording'), 'error');
     try {
-      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
+      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, format, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
       // Extraction started: the marks are cleared for the next clip.
       setIn(null);
       setOut(null);
@@ -693,6 +709,7 @@ function Editor({ rec }: { rec: Recorder }) {
           <button className="ctl sc-preview" data-tip={t('Preview the clip: from IN to OUT')} disabled={kind === 'image' || frames === 0} onClick={previewClip}>
             <PlayCircle size={18} />
           </button>
+          {can.extract(user) && <ClipFormat kind={kind} value={format} onChange={(id) => setFormats((f) => ({ ...f, [kind]: id }))} basis={basis} free={free} />}
           {can.extract(user) && <ExtractButton jobs={myJobs} recId={rec.id} canCut={canCut} onCut={() => void cut()} kind={kind} />}
         </div>
       </div>

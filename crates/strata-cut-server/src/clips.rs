@@ -80,6 +80,29 @@ impl Kind {
     }
 }
 
+/// The formats a clip is made in: its kind, its name, its file's extension (the first of a kind:
+/// what is made when none is said).
+pub const FORMATS: [(Kind, &str, &str); 10] = [
+    (Kind::Video, "master", "mp4"),
+    (Kind::Video, "web", "mp4"),
+    (Kind::Video, "light", "mp4"),
+    (Kind::Video, "prores", "mov"),
+    (Kind::Video, "copy", "ts"),
+    (Kind::Audio, "m4a", "m4a"),
+    (Kind::Audio, "mp3", "mp3"),
+    (Kind::Audio, "wav", "wav"),
+    (Kind::Image, "jpg", "jpg"),
+    (Kind::Image, "png", "png"),
+];
+
+/// A request's format (its name, its extension): the one asked for, if the kind has it.
+fn format_of(kind: Kind, asked: &str) -> Option<(&'static str, &'static str)> {
+    let mut of_kind = FORMATS.iter().filter(|f| f.0 == kind);
+    let first = of_kind.clone().next()?;
+    let f = if asked.is_empty() { first } else { of_kind.find(|f| f.1 == asked)? };
+    Some((f.1, f.2))
+}
+
 /// A clip shared: with everyone, or with groups of users.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -152,6 +175,9 @@ pub struct ClipRequest {
     pub name: String,
     #[serde(default)]
     pub kind: Kind,
+    /// Its format (`FORMATS`; none: the kind's first).
+    #[serde(default)]
+    pub format: String,
     /// Video: the source's subtitles (DVB, teletext) burnt into the picture (an MP4 cannot hold
     /// them as they are).
     #[serde(default)]
@@ -299,6 +325,9 @@ impl Clips {
         if req.frames == 0 {
             return Err("the clip has no frame".into());
         }
+        if format_of(req.kind, &req.format).is_none() {
+            return Err("this format is not one of this kind of clip".into());
+        }
         let name = req.name.trim().to_string();
         // A queue that stays short: each waiting job holds its recording back from the loop's trim.
         {
@@ -374,8 +403,9 @@ impl Clips {
         if kind == Kind::Audio && media.audio_tracks == 0 {
             return Err("this recording has no sound".into());
         }
-        let part = dir.join(format!("{}.part.{}", job.id, kind.ext()));
-        let out = dir.join(format!("{}.{}", job.id, kind.ext()));
+        let (fmt, ext) = format_of(kind, &job.req.format).ok_or("this format is not one of this kind of clip")?;
+        let part = dir.join(format!("{}.part.{ext}", job.id));
+        let out = dir.join(format!("{}.{ext}", job.id));
         // The recorder's times go on past the 33-bit wrap; the files' start again from 0 at it.
         let base = (seg_t0 / crate::recorder::PTS_WRAP).floor() * crate::recorder::PTS_WRAP;
         let start = job.req.t - base - 0.5 / fps;
@@ -389,35 +419,88 @@ impl Clips {
         }
         args.extend(["-i".into(), input]);
         let sound = format!("{},atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS", crate::recorder::AUDIO_SYNC, start + dur);
-        match kind {
-            Kind::Video => {
+        // The picture made smaller, deinterlaced (web, light), or kept as it is.
+        let fit = |h: u32| format!("{}scale=-2:'min({h},ih)',format=yuv420p", if media.interlaced { "yadif," } else { "" });
+        match (kind, fmt) {
+            // The recording as it is, from the key picture before IN: no encoding (its own times).
+            (Kind::Video, "copy") => {
+                let from = (job.req.t - seg_t0 - 0.5 / fps).max(0.0);
+                args = ["-hide_banner", "-nostdin", "-v", "error", "-progress", "pipe:1"].map(String::from).to_vec();
+                args.extend(["-ss".into(), format!("{from:.6}"), "-i".into(), format!("concat:{}", segs.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join("|"))]);
+                args.extend(["-t".into(), format!("{dur:.6}")]);
+                args.extend(["-map", "0:v:0", "-map", "0:a?", "-map", "0:s?", "-c", "copy", "-muxdelay", "0", "-f", "mpegts", "-y"].map(String::from));
+            }
+            (Kind::Video, _) => {
+                let scale = match fmt {
+                    "web" => format!(",{}", fit(1080)),
+                    "light" => format!(",{}", fit(720)),
+                    _ => String::new(),
+                };
                 if burn {
                     // The subtitles over the picture, on the source's timeline, then cut.
                     let (w, h) = (media.width.max(2), media.height.max(2));
-                    args.extend(["-filter_complex".into(), format!("[0:s:0]scale={w}:{h}[s];[0:v:0][s]overlay=eof_action=pass,trim=start={start:.6},setpts=PTS-STARTPTS[v]"), "-map".into(), "[v]".into(), "-map".into(), "0:a?".into()]);
+                    args.extend(["-filter_complex".into(), format!("[0:s:0]scale={w}:{h}[s];[0:v:0][s]overlay=eof_action=pass,trim=start={start:.6},setpts=PTS-STARTPTS{scale}[v]"), "-map".into(), "[v]".into(), "-map".into(), "0:a?".into()]);
                 } else {
                     args.extend(["-map", "0:v:0", "-map", "0:a?"].map(String::from));
-                    args.extend(["-vf".into(), format!("trim=start={start:.6},setpts=PTS-STARTPTS")]);
+                    args.extend(["-vf".into(), format!("trim=start={start:.6},setpts=PTS-STARTPTS{scale}")]);
                 }
                 args.extend(["-af".into(), sound]);
                 args.extend(["-frames:v".into(), job.req.frames.to_string()]);
-                args.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "16", "-profile:v", "high", "-pix_fmt", "yuv420p"].map(String::from));
-                if media.interlaced {
-                    args.extend(["-flags", "+ildct+ilme"].map(String::from));
+                match fmt {
+                    "web" => args.extend(["-c:v", "libx264", "-preset", "fast", "-b:v", "6000k", "-maxrate", "6000k", "-bufsize", "12000k", "-profile:v", "high", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart"].map(String::from)),
+                    "light" => args.extend(["-c:v", "libx264", "-preset", "fast", "-b:v", "2500k", "-maxrate", "2500k", "-bufsize", "5000k", "-profile:v", "high", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"].map(String::from)),
+                    // For editing: ProRes 422, the sound as it is (PCM).
+                    "prores" => {
+                        args.extend(["-c:v", "prores_ks", "-profile:v", "2", "-pix_fmt", "yuv422p10le"].map(String::from));
+                        if media.interlaced {
+                            args.extend(["-flags", "+ildct+ilme"].map(String::from));
+                        }
+                        args.extend(["-c:a", "pcm_s16le"].map(String::from));
+                    }
+                    _ => {
+                        args.extend(["-c:v", "libx264", "-preset", "fast", "-crf", "16", "-profile:v", "high", "-pix_fmt", "yuv420p"].map(String::from));
+                        if media.interlaced {
+                            args.extend(["-flags", "+ildct+ilme"].map(String::from));
+                        }
+                        args.extend(["-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart"].map(String::from));
+                    }
                 }
-                args.extend(["-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "-y"].map(String::from));
+                args.push("-y".into());
+            }
+            // The first track (the one heard), in MP3.
+            (Kind::Audio, "mp3") => {
+                args.extend(["-map", "0:a:0", "-vn", "-af"].map(String::from));
+                args.push(sound);
+                args.extend(["-c:a", "libmp3lame", "-b:a", "192k", "-y"].map(String::from));
+            }
+            // Every track, side by side in one WAV (a WAV holds one stream).
+            (Kind::Audio, "wav") => {
+                let n = media.audio_tracks.max(1) as usize;
+                if n > 1 {
+                    let mut g: Vec<String> = (0..n).map(|k| format!("[0:a:{k}]{sound}[a{k}]")).collect();
+                    g.push(format!("{}amerge=inputs={n}[a]", (0..n).map(|k| format!("[a{k}]")).collect::<String>()));
+                    args.extend(["-filter_complex".into(), g.join(";"), "-map".into(), "[a]".into()]);
+                } else {
+                    args.extend(["-map", "0:a:0", "-af"].map(String::from));
+                    args.push(sound);
+                }
+                args.extend(["-vn", "-c:a", "pcm_s16le", "-y"].map(String::from));
             }
             // Every sound track, as they are recorded.
-            Kind::Audio => {
+            (Kind::Audio, _) => {
                 args.extend(["-map", "0:a", "-vn", "-af"].map(String::from));
                 args.push(sound);
                 args.extend(["-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "-y"].map(String::from));
             }
             // The picture under the playhead, whole (an interlaced one deinterlaced).
-            Kind::Image => {
+            (Kind::Image, _) => {
                 args.extend(["-map", "0:v:0", "-an", "-vf"].map(String::from));
                 args.push(format!("trim=start={start:.6},setpts=PTS-STARTPTS{}", if media.interlaced { ",yadif" } else { "" }));
-                args.extend(["-frames:v", "1", "-q:v", "2", "-update", "1", "-y"].map(String::from));
+                args.extend(["-frames:v", "1"].map(String::from));
+                if fmt == "jpg" {
+                    args.extend(["-q:v", "2"].map(String::from));
+                }
+                args.extend(["-update", "1", "-y"].map(String::from));
             }
         }
         args.push(part.to_string_lossy().into_owned());
@@ -489,10 +572,17 @@ impl Clips {
             frames: job.req.frames,
             fps_num,
             fps_den,
-            format: match kind {
-                Kind::Video => "H.264 · AAC".into(),
-                Kind::Audio => format!("AAC · {} × 2.0", media.audio_tracks.max(1)),
-                Kind::Image => format!("JPEG · {}×{}", media.width, media.height),
+            format: match fmt {
+                "web" => "H.264 1080p · 6 Mb/s · AAC".into(),
+                "light" => "H.264 720p · 2,5 Mb/s · AAC".into(),
+                "prores" => "ProRes 422 · PCM".into(),
+                "copy" => "MPEG-TS · copie".into(),
+                "m4a" => format!("AAC · {} × 2.0", media.audio_tracks.max(1)),
+                "mp3" => "MP3 · 192 kb/s".into(),
+                "wav" => format!("WAV · {} canaux", media.audio_tracks.max(1) * 2),
+                "jpg" => format!("JPEG · {}×{}", media.width, media.height),
+                "png" => format!("PNG · {}×{}", media.width, media.height),
+                _ => "H.264 · AAC".into(),
             },
             size,
             created_at: now_ms(),
@@ -559,6 +649,14 @@ pub fn routes() -> Router<Shared> {
         .route("/api/clips/{id}/download", get(download))
         .route("/api/clips/{id}/thumb.jpg", get(thumb))
         .route("/api/jobs/{id}", delete(cancel))
+        .route("/api/clips/space", get(space))
+}
+
+/// The free space where clips are made (the Extraction says when one would not fit).
+async fn space(State(s): State<Shared>, CurrentUser(_me): CurrentUser) -> Json<Value> {
+    let dir = s.clips.dir();
+    let free = crate::api::blocking(move || crate::recorder::disk_space(&dir).map(|(_, f)| f)).await.ok().flatten();
+    Json(json!({ "free": free }))
 }
 
 /// The clips this account sees: its own, those shared with it (an admin: all), each with who
@@ -660,10 +758,10 @@ async fn cancel(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// "Plateau 1 / 14:32" → "Plateau 1 - 14-32.mp4" (no path characters), with the clip's kind.
-fn file_name(name: &str, kind: Kind) -> String {
+/// "Plateau 1 / 14:32" → "Plateau 1 - 14-32.mp4" (no path characters), with the file's extension.
+fn file_name(name: &str, ext: &str) -> String {
     let clean: String = name.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '-' } else { c }).collect();
-    format!("{}.{}", clean.trim(), kind.ext())
+    format!("{}.{ext}", clean.trim())
 }
 
 async fn download(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, req: Request) -> ApiResult<Response> {
@@ -674,7 +772,7 @@ async fn download(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath
     if inline {
         return Ok(res);
     }
-    let name = file_name(&clip.name, clip.kind);
+    let name = file_name(&clip.name, clip.file.extension().and_then(|e| e.to_str()).unwrap_or_else(|| clip.kind.ext()));
     let ascii: String = name.chars().map(|c| if c.is_ascii() && c != '"' { c } else { '_' }).collect();
     let encoded: String = name.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect();
     if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{ascii}\"; filename*=UTF-8''{encoded}")) {
@@ -732,7 +830,10 @@ mod tests {
 
     #[test]
     fn file_names() {
-        assert_eq!(super::file_name("Plateau 1 / 14:32", super::Kind::Video), "Plateau 1 - 14-32.mp4");
-        assert_eq!(super::file_name("Son", super::Kind::Audio), "Son.m4a");
+        assert_eq!(super::file_name("Plateau 1 / 14:32", "mp4"), "Plateau 1 - 14-32.mp4");
+        assert_eq!(super::file_name("Son", "m4a"), "Son.m4a");
+        assert_eq!(super::format_of(super::Kind::Video, ""), Some(("master", "mp4")));
+        assert_eq!(super::format_of(super::Kind::Video, "prores"), Some(("prores", "mov")));
+        assert_eq!(super::format_of(super::Kind::Audio, "prores"), None);
     }
 }
