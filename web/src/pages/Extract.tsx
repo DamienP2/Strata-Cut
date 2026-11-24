@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { ArrowLeftToLine, ArrowRightToLine, AudioLines, CalendarPlus, Camera, Captions, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, FastForward, Film, History, Pause, Play, PlayCircle, RadioTower, Rewind, RotateCcw, Scissors, StepBack, StepForward, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, Film, History, Play, PlayCircle, RadioTower, RotateCcw, Scissors, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { SourceGroups } from '../ui/SourceGroups';
 import { t, locale } from '../i18n';
@@ -16,6 +16,7 @@ import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
 import { GrainCache } from '../audio';
 import type { Clip, Job, Recorder } from '../types';
 import { trackLabel } from '../audioLabel';
+import { Transport, useTransportKeys, type TransportActs } from '../ui/Transport';
 
 /** A marked frame: its run, its source time and its server time. */
 interface Mark {
@@ -154,11 +155,9 @@ function Editor({ rec }: { rec: Recorder }) {
   /** What the clip holds: the picture with its sound, the sound alone, the picture under the playhead. */
   const [kind, setKind] = useDisplayPref<'video' | 'audio' | 'image'>('extract.kind', 'video');
   // The source's subtitles burnt into a video clip (when it has some).
-  const [burnSubs, setBurnSubs] = useDisplayPref<boolean>('extract.subtitles', false);
   const [clips, setClips] = useState<Clip[]>([]);
   const [guide, setGuide] = useState<Programme[]>([]);
   const fps = fpsOf(run?.media?.fpsNum, run?.media?.fpsDen);
-  const hasSubs = (run?.media?.subtitles?.length ?? 0) > 0;
   // The sound track heard (the player keeps it from a recording to the next).
   const [audioTrack, setAudioTrack] = useState(0);
   // A live only while the source records; stopped, its last recorded frame.
@@ -489,44 +488,61 @@ function Editor({ rec }: { rec: Recorder }) {
     void p()?.goLive(serverNow());
   };
 
-  // J K L, arrows, I O, space.
-  const speed = useRef(0);
+  // The controls and their keys (`ui/Transport`); the speed played at (negative: backwards).
+  const [rate, setRate] = useState(1);
+  const acts: TransportActs = {
+    toggle: () => {
+      setRate(1);
+      togglePlay();
+    },
+    normal: () => {
+      setLive(false);
+      setRate(1);
+      p()?.play(1);
+    },
+    jump: (sec) => {
+      const pl = p();
+      if (!pl) return;
+      setLive(false);
+      const ahead = !pl.video.paused;
+      pl.live = false;
+      void pl.seekT(pl.t + sec, ahead);
+    },
+    step: (n) => {
+      setRate(1);
+      step(n);
+    },
+    fast: (r) => {
+      const pl = p();
+      if (!pl) return;
+      setLive(false);
+      setRate(r);
+      if (r > 0) pl.play(r);
+      else {
+        pl.playReverse(-r);
+        setPlaying(true);
+      }
+    },
+    toIn: mIn ? () => seekWall(mIn.wall) : undefined,
+    toOut: mOut ? () => seekWall(mOut.wall) : undefined,
+    mute: () => audio.setMuted(!audio.muted),
+  };
+  useTransportKeys(acts, { rate, playing });
+  // The page's own keys: I O (the points, and going to them), the live, clearing, extracting.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
-      if (el.closest('input, textarea, [contenteditable="true"], .modal-back') || e.ctrlKey || e.metaKey || e.altKey) return;
-      const pl = p();
-      if (!pl) return;
+      if (el.closest('input, textarea, select, [contenteditable="true"], .modal-back') || e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      let done = true;
-      if (k === 'arrowleft') step(e.shiftKey ? -Math.round(fps) : -1);
-      else if (k === 'arrowright') step(e.shiftKey ? Math.round(fps) : 1);
-      else if (k === 'i' && e.shiftKey) mIn && seekWall(mIn.wall);
+      if (k === 'i' && e.shiftKey) mIn && seekWall(mIn.wall);
       else if (k === 'o' && e.shiftKey) mOut && seekWall(mOut.wall);
-      else if (k === 'm') audio.setMuted(!audio.muted);
       else if (k === 'l' && e.shiftKey) goLive();
       else if (k === 'backspace') clearMarks();
       else if (k === 'enter') canCut && void cut();
       else if (k === 'i') markIn();
       else if (k === 'o') markOut();
-      else if (k === ' ' || k === 'k') {
-        speed.current = 0;
-        if (k === ' ') togglePlay();
-        else {
-          setLive(false);
-          pl.pause();
-        }
-      } else if (k === 'l') {
-        speed.current = speed.current > 0 ? Math.min(speed.current * 2, 8) : 1;
-        setLive(false);
-        pl.play(speed.current);
-      } else if (k === 'j') {
-        speed.current = speed.current < 0 ? Math.max(speed.current * 2, -8) : -1;
-        setLive(false);
-        pl.playReverse(-speed.current);
-        setPlaying(true);
-      } else done = false;
-      if (done) e.preventDefault();
+      else return;
+      e.preventDefault();
     };
     addEventListener('keydown', onKey);
     return () => removeEventListener('keydown', onKey);
@@ -549,7 +565,7 @@ function Editor({ rec }: { rec: Recorder }) {
     if (!mIn || !mOut) return;
     if (mIn.run !== mOut.run) return toast(t('The in and out points must be in the same recording'), 'error');
     try {
-      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, subtitles: kind === 'video' && hasSubs && burnSubs, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
+      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
       // Extraction started: the marks are cleared for the next clip.
       setIn(null);
       setOut(null);
@@ -614,29 +630,7 @@ function Editor({ rec }: { rec: Recorder }) {
         </div>
         <div className="sc-transport">
           <div className="sc-tc-big">{pos ? timecode(pos.wall, fps, timezone) : '--:--:--:--'}</div>
-          <div className="sc-ctrls">
-            <button className="ctl" data-tip={t('Go to the in point')} data-keys="⇧ I" disabled={!mIn} onClick={() => mIn && seekWall(mIn.wall)}>
-              <ArrowLeftToLine size={18} />
-            </button>
-            <button className="ctl" data-tip={t('Previous frame')} data-keys="←" onClick={() => step(-1)}>
-              <StepBack size={18} />
-            </button>
-            <button className="ctl" data-tip={t('Play backwards')} data-keys="J" onClick={() => { setLive(false); p()?.playReverse(); setPlaying(true); }}>
-              <Rewind size={18} />
-            </button>
-            <button className="ctl play" data-tip={playing ? t('Pause') : t('Play')} data-keys="K" onClick={togglePlay}>
-              {playing ? <Pause size={18} /> : <Play size={18} />}
-            </button>
-            <button className="ctl" data-tip={t('Play faster')} data-keys="L" onClick={() => { setLive(false); p()?.play(2); }}>
-              <FastForward size={18} />
-            </button>
-            <button className="ctl" data-tip={t('Next frame')} data-keys="→" onClick={() => step(1)}>
-              <StepForward size={18} />
-            </button>
-            <button className="ctl" data-tip={t('Go to the out point')} data-keys="⇧ O" disabled={!mOut} onClick={() => mOut && seekWall(mOut.wall)}>
-              <ArrowRightToLine size={18} />
-            </button>
-          </div>
+          <Transport acts={acts} rate={rate} playing={playing} hasIn={!!mIn} hasOut={!!mOut} />
           <div className="sc-sep" />
           <button className="ctl wide" data-tip={t('Set the in point here')} data-keys="I" onClick={markIn} disabled={!pos}>
             <MarkInIcon />
@@ -684,11 +678,6 @@ function Editor({ rec }: { rec: Recorder }) {
           </div>
           <MarkTag kind="in" mark={mIn} fps={fps} timezone={timezone} onType={(s) => typed(s, setIn)} onClear={() => setIn(null)} onMark={markIn} />
           <MarkTag kind="out" mark={mOut} fps={fps} timezone={timezone} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} onMark={markOut} />
-          {kind === 'video' && hasSubs && (
-            <button type="button" className={`sc-subs ${burnSubs ? 'on' : ''}`} aria-pressed={burnSubs} data-tip={t('Burn the subtitles into the picture')} onClick={() => setBurnSubs(!burnSubs)}>
-              <Captions size={14} />
-            </button>
-          )}
           <span className="sc-clipdur">{kind === 'image' ? (pos ? timecode(pos.wall, fps, timezone) : '--:--:--:--') : duration(frames, fps)}</span>
           <input className="sc-clipname" value={name} placeholder={mIn ? `${rec.name} ${timecode(mIn.wall, fps, timezone)}` : t('Name of the clip')} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
           <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>

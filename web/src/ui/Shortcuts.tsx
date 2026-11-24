@@ -10,8 +10,10 @@ import { t, tc } from '../i18n';
 export interface Shortcut {
   /** English label, translated where shown. */
   label: string;
-  /** Each key: a letter, or Shift, Space, Left, Right, ?. */
+  /** Each key: a letter, or Shift, Space, Left, Right, Up, Down, ?. */
   keys: string[];
+  /** Other keys that do the same. */
+  or?: string[][];
 }
 
 export interface ShortcutGroup {
@@ -24,12 +26,14 @@ export const SHORTCUTS: ShortcutGroup[] = [
   {
     title: 'Extraction',
     items: [
-      { label: 'Play / pause', keys: ['Space'] },
-      { label: 'Play backwards', keys: ['J'] },
-      { label: 'Pause', keys: ['K'] },
-      { label: 'Play forwards', keys: ['L'] },
-      { label: 'Previous frame', keys: ['Left'] },
-      { label: 'Next frame', keys: ['Right'] },
+      { label: 'Play / pause (back to normal speed)', keys: ['K'], or: [['Space']] },
+      { label: '10 s on', keys: ['L'], or: [['Right'], ['Up']] },
+      { label: '10 s back', keys: ['J'], or: [['Left'], ['Down']] },
+      { label: 'Fast forwards: ×1.5, ×2, ×4', keys: ['F'] },
+      { label: 'Fast backwards: ×1.5, ×2, ×4', keys: ['R'] },
+      { label: 'Previous frame', keys: ['Shift', 'Left'] },
+      { label: 'Next frame', keys: ['Shift', 'Right'] },
+      { label: 'Sound off / on', keys: ['M'] },
       { label: 'Set the in point', keys: ['I'] },
       { label: 'Set the out point', keys: ['O'] },
       { label: 'Go to the in point', keys: ['Shift', 'I'] },
@@ -86,7 +90,14 @@ export function ShortcutList() {
           {g.items.map((s) => (
             <div key={s.label} className="shortcut-row">
               <span>{t(s.label)}</span>
-              <Keys keys={s.keys} />
+              <span className="shortcut-alts">
+                {[s.keys, ...(s.or ?? [])].map((k, i) => (
+                  <Fragment key={i}>
+                    {i > 0 && <span className="shortcut-plus">{t('or')}</span>}
+                    <Keys keys={k} />
+                  </Fragment>
+                ))}
+              </span>
             </div>
           ))}
         </section>

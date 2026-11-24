@@ -447,6 +447,7 @@ button.ux1-pill { cursor: pointer; font-family: inherit; }
 .shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; border-top: 1px solid var(--line); color: var(--text); }
 .shortcut-keys { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .shortcut-keys kbd { min-width: 22px; text-align: center; font-size: 11px; line-height: 18px; padding: 0 6px; color: var(--text); }
+.shortcut-alts { display: inline-flex; align-items: center; gap: 6px; }
 .shortcut-plus { color: var(--text-3); font-size: var(--fs-11); }
 
 /* Champs dans les grilles de réglages */
@@ -684,6 +685,8 @@ a.btn { color: inherit; }
 .ctl.primary { width: 56px; background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .ctl.primary:hover:not(:disabled) { background: var(--accent-2); }
 .sc-transport .sc-ctrls { gap: 4px; }
+.ctl.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-2); }
+.ctl-rate { position: absolute; top: -7px; right: -6px; padding: 0 4px; height: 15px; line-height: 15px; border-radius: 8px; background: var(--accent); color: var(--on-accent); font: 700 10px var(--mono); pointer-events: none; }
 .sc-transport .sc-sep { height: 26px; }
 .sc-clipbar { flex: none; display: flex; align-items: center; gap: 10px; margin: 0 16px 12px; padding: 8px 10px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
 .sc-clipbar-l { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
@@ -1019,8 +1022,13 @@ a.btn { color: inherit; }
 /* Extraction: the clip's preview, in a window. */
 .sc-preview-modal header .sc-kind-tag { margin-right: 4px; }
 .sc-clip-sound.solid { background: radial-gradient(circle at 50% 50%, #0d2a2a, #05070a 70%); }
-.sc-preview-bar { position: relative; height: 8px; border-radius: 4px; background: var(--panel-3); cursor: pointer; overflow: hidden; }
-.sc-preview-bar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 4px; }
+/* The clip's playhead: its track (IN to OUT), what was played, the head dragged. */
+.sc-scrub { position: relative; height: 22px; cursor: pointer; touch-action: none; }
+.sc-scrub::before { content: ''; position: absolute; left: 0; right: 0; top: 8px; height: 6px; border-radius: 3px; background: var(--panel-3); box-shadow: inset 0 0 0 1px var(--line); }
+.sc-scrub-done { position: absolute; left: 0; top: 8px; height: 6px; border-radius: 3px; background: var(--accent); pointer-events: none; }
+.sc-scrub-head { position: absolute; top: 1px; width: 4px; height: 20px; margin-left: -2px; border-radius: 2px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.5); pointer-events: none; }
+.sc-scrub:hover .sc-scrub-head { width: 6px; margin-left: -3px; }
+.sc-clip-time { font: 12px var(--mono); white-space: nowrap; }
 .sys-tabs { margin: 0 0 18px; }
 /* Système › YouTube. */
 .sc-yt-note { font-size: 13px; margin: 0 0 4px; display: flex; align-items: center; gap: 6px; }
@@ -1257,9 +1265,6 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .bad-text { color: var(--live); font-weight: 600; }
 
 /* Extraction: the source's subtitles burnt into the clip (on / off). */
-.sc-subs { flex: none; display: grid; place-items: center; width: 34px; height: 30px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text-3); cursor: pointer; }
-.sc-subs:hover { color: var(--text); }
-.sc-subs.on { color: var(--accent-2); border-color: var(--accent); background: var(--accent-soft); }
 
 /* Extraction: the sound track heard. */
 .sc-track { flex: none; height: 30px; min-height: 0; padding: 0 6px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel-3); color: var(--text); font: 600 12px var(--mono); cursor: pointer; }
@@ -1401,14 +1406,19 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .st-card.live .st-graph .io-spark { color: color-mix(in srgb, var(--live) 70%, var(--text)); }
 .st-graph b { position: absolute; top: 5px; left: 6px; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--panel) 80%, transparent); font: 700 12.5px var(--mono); color: var(--text); }
 .st-card-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; font: 11.5px var(--mono); color: var(--text-3); }
-.st-stop-btn { border-color: color-mix(in srgb, var(--live) 45%, var(--line)); }
-.st-stop-btn:hover:not(:disabled) { background: var(--live-soft); }
-.st-stop-btn svg { color: var(--live); fill: var(--live); }
+.st-stop-btn { height: 28px; padding: 0 12px; gap: 6px; border-radius: 7px; border: 1px solid var(--live); background: var(--live-btn); color: #fff; font: 600 12px Inter, sans-serif; }
+.st-stop-btn:hover:not(:disabled) { background: var(--live); border-color: var(--live); }
+.st-stop-btn svg { color: #fff; fill: #fff; }
+/* A setting of the live (the bitrate): a slider, its value beside. */
+.st-slider { display: flex; flex-direction: column; gap: 6px; }
+.st-slider-head { display: flex; align-items: baseline; justify-content: space-between; font-size: 11.5px; color: var(--text-3); }
+.st-slider-head b { font: 700 13px var(--mono); color: var(--text); }
+.st-slider input[type='range'] { width: 100%; accent-color: var(--accent); cursor: pointer; margin: 0; }
 .st-countdown { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px 10px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); font-size: 12px; color: var(--warn); overflow: hidden; }
 .st-countdown span { display: inline-flex; align-items: center; gap: 6px; }
 .st-countdown b { font: 700 12.5px var(--mono); color: var(--text); white-space: nowrap; }
 .st-countdown i { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--warn); transition: width 1s linear; }
-.st-test { flex: none !important; width: 36px; padding: 0; justify-content: center; }
+.st-test { flex: none !important; width: 38px; padding: 0; justify-content: center; border: 1px solid var(--line-2) !important; background: var(--panel-3) !important; }
 .st-card-act { display: flex; gap: 8px; }
 .st-card-act .btn { flex: 1; justify-content: center; }
 .st-input { height: 30px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel-3); color: var(--text); font: 12.5px Inter, sans-serif; }

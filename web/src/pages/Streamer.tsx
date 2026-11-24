@@ -17,7 +17,6 @@ import { navigate } from '../router';
 import { LoopPlayer } from '../player';
 import { fpsOf, timecode } from '../tc';
 import { Empty } from '../ui/Empty';
-import { NumberField } from '../ui/fields';
 import { useAudioOut } from '../ui/AudioUi';
 import { clockOf, mbps, useDestinations, useStreams, volume, type Destination, type StreamInfo } from '../streams';
 import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
@@ -316,9 +315,12 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
                     {d.keyLive && <input className="st-input" type="password" value={x.key} autoComplete="off" spellCheck={false} placeholder={t('Stream key of this live')} onChange={(e) => setDraft(d, { key: e.target.value, test: undefined })} />}
                     {d.exposeUrl && <input className="st-input" value={x.url} spellCheck={false} placeholder={t('Server address')} onChange={(e) => setDraft(d, { url: e.target.value, test: undefined })} />}
                     {d.exposeBitrate && (
-                      <label className="st-field">
-                        <span>{t('Video bitrate')}</span>
-                        <NumberField value={x.videoKbps / 1000} min={0.3} max={50} step={0.5} precision={1} suffix="Mb/s" onChange={(v) => setDraft(d, { videoKbps: Math.round(v * 1000) })} />
+                      <label className="st-slider">
+                        <span className="st-slider-head">
+                          {t('Video bitrate')}
+                          <b>{mbps(x.videoKbps, locale())}</b>
+                        </span>
+                        <input type="range" min={0.5} max={25} step={0.5} value={x.videoKbps / 1000} onChange={(e) => setDraft(d, { videoKbps: Math.round(Number(e.target.value) * 1000) })} />
                       </label>
                     )}
                     {x.test?.text && (

@@ -59,6 +59,14 @@ export const common: Record<string, string> = {
   'Set the in point': 'Point d’entrée',
   'Set the out point': 'Point de sortie',
   'Go to the in point': 'Aller au point d’entrée',
+  'Play / pause (back to normal speed)': 'Lecture / pause (retour à la vitesse normale)',
+  '10 s on': 'Avancer de 10 s',
+  '10 s back': 'Reculer de 10 s',
+  'Fast forwards: ×1.5, ×2, ×4': 'Avance rapide : ×1,5, ×2, ×4',
+  'Fast backwards: ×1.5, ×2, ×4': 'Retour rapide : ×1,5, ×2, ×4',
+  'Sound off / on': 'Couper / remettre le son',
+  or: 'ou',
+  Playhead: 'Tête de lecture',
   'Go to the out point': 'Aller au point de sortie',
 
   // Fields, save bar
