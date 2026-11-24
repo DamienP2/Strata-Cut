@@ -392,8 +392,10 @@ impl Programs {
         tokio::spawn(crate::engine::decode(self.recorders.clone(), source.clone(), sh, inputs.clone(), watch, r.clone(), r.stop.subscribe()));
         // Its first picture of the source: said in the journal; none after a while: said, with
         // where the making is.
+        // Still none after a minute while the source comes: made again (the lives take the new
+        // one), as stopping and starting the live again does.
         {
-            let (r, name, mut stop) = (r.clone(), name.clone(), r.stop.subscribe());
+            let (r, name, mut stop, rec) = (r.clone(), name.clone(), r.stop.subscribe(), rec.clone());
             tokio::spawn(async move {
                 let since = Instant::now();
                 let mut warned = false;
@@ -405,6 +407,12 @@ impl Programs {
                     if !warned && since.elapsed() > Duration::from_secs(40) {
                         warned = true;
                         tracing::warn!("programme of {name}: no picture of the source after 40 s ({}; {} pictures decoded; the programme {})", r.stage(), inputs.came(), if r.flowing() { "comes out" } else { "does not come out" });
+                    }
+                    let comes = rec.state() == crate::recorder::State::Recording && now_ms() - rec.last_packet.load(Ordering::Relaxed) < 15_000;
+                    if since.elapsed() > Duration::from_secs(60) && comes {
+                        tracing::warn!("programme of {name}: no picture of the source after 60 s while it comes ({}; {} pictures decoded): made again", r.stage(), inputs.came());
+                        let _ = r.stop.send(true);
+                        return;
                     }
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_millis(500)) => {}
