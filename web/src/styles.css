@@ -980,7 +980,8 @@ a.btn { color: inherit; }
 .cf { position: relative; display: flex; }
 .sc-xwrap.two .cf { position: static; }
 .cf-btn { display: flex; align-items: center; gap: 5px; height: 100%; padding: 0 8px 0 10px; border: 1px solid var(--xk, var(--accent)); border-right: 0; border-radius: 8px 0 0 8px; background: color-mix(in srgb, var(--xk, var(--accent)) 16%, transparent); color: color-mix(in srgb, var(--xk, var(--accent)) 55%, #fff); font: 600 12px Inter, sans-serif; white-space: nowrap; cursor: pointer; }
-.cf-btn:hover, .cf-btn[aria-expanded='true'] { background: color-mix(in srgb, var(--xk, var(--accent)) 26%, transparent); }
+.cf-btn:disabled { opacity: 0.35; cursor: default; }
+.cf-btn:hover:not(:disabled), .cf-btn[aria-expanded='true'] { background: color-mix(in srgb, var(--xk, var(--accent)) 26%, transparent); }
 .sc-xwrap.two .sc-xbtn { height: 100%; width: auto; min-width: 0; padding: 0 12px 0 10px !important; gap: 7px; display: inline-flex; align-items: center; border-radius: 0 8px 8px 0; }
 .sc-xw { padding-left: 4px; font: 700 12px var(--mono); white-space: nowrap; opacity: 0.85; }
 .sc-xwrap.two.over .sc-xbtn:not(.busy), .sc-xwrap.two.over .sc-xbtn:not(.busy):hover:not(:disabled) { background: var(--warn); color: #0b0c12; }

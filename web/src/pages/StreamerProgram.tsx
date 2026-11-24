@@ -425,7 +425,7 @@ export function PicturesModal({ rec, prog, use, onClose, onPlace }: { rec: Recor
             <Gallery use="image" source={rec.id} chosen={p.image} onChoose={(image) => prog.set({ image })} fallback={{ name: t("Default"), pic: <DefaultSlate name={rec.name} /> }} disabled={!run} />
           ) : (
             <>
-              <Gallery use="overlay" source={rec.id} chosen={p.overlay} onChoose={(overlay) => prog.set({ overlay, ...(overlay ? {} : { overlayOn: false }) })} fallback={{ name: tc("overlay", "None"), pic: null }} disabled={!run} />
+              <Gallery use="overlay" source={rec.id} chosen={p.overlay} onChoose={(overlay) => prog.set({ overlay, ...(overlay === p.overlay ? {} : { overlayOn: false }) })} fallback={{ name: tc("overlay", "None"), pic: null }} disabled={!run} />
               {p.overlay && (
                 <div className="pg-ovl-set">
                   <label>

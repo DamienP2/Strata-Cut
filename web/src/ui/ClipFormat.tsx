@@ -88,9 +88,13 @@ export function weightOf(kind: ClipKind, value: string, basis: Basis, free: numb
   return { text: kind === 'image' || basis.seconds > 0 ? sizeText(est) : '', over: free !== null && est[est.length - 1] > free };
 }
 
-/** The extraction button's left part: the chosen format, a click opens the formats (each with its weight). */
-export function ClipFormat({ kind, value, onChange, basis }: { kind: ClipKind; value: string; onChange: (id: string) => void; basis: Basis }) {
+/** The extraction button's left part: the chosen format, a click opens the formats (each with its weight); as the button, only when there is something to extract. */
+export function ClipFormat({ kind, value, onChange, basis, disabled }: { kind: ClipKind; value: string; onChange: (id: string) => void; basis: Basis; disabled?: boolean }) {
   const [open, setOpen] = useState(false);
+  // Nothing to extract: closed.
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
   const box = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -102,7 +106,7 @@ export function ClipFormat({ kind, value, onChange, basis }: { kind: ClipKind; v
   const cur = list.find((f) => f.id === value) ?? list[0];
   return (
     <span className="cf" ref={box}>
-      <button type="button" className="cf-btn" aria-haspopup="listbox" aria-expanded={open} data-tip={open ? undefined : t(cur.name)} onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="cf-btn" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} data-tip={open ? undefined : t(cur.name)} onClick={() => setOpen((o) => !o)}>
         <span>{t(cur.short)}</span>
         <ChevronDown size={11} />
       </button>

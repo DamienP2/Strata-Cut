@@ -714,7 +714,7 @@ function Editor({ rec }: { rec: Recorder }) {
               canCut={canCut}
               onCut={() => void cut()}
               kind={kind}
-              top={<ClipFormat kind={kind} value={format} onChange={(id) => setFormats((f) => ({ ...f, [kind]: id }))} basis={basis} />}
+              top={<ClipFormat kind={kind} value={format} onChange={(id) => setFormats((f) => ({ ...f, [kind]: id }))} basis={basis} disabled={!canCut} />}
               weight={weightOf(kind, format, basis, free)}
             />
           )}

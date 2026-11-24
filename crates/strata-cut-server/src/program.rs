@@ -614,10 +614,16 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(so
     let programs = &s.streams.programs;
     let now = programs.get(&source);
     p.image_on = now.image_on;
-    p.overlay_on = now.overlay_on;
+    p.overlay_on = kept_on(&now, &p);
     (p.x, p.y, p.size) = (now.x, now.y, now.size);
     programs.put(&source, p.clone(), 0.0).map_err(bad)?;
     Ok(Json(json!(p)))
+}
+
+/// The overlay stays on air only while it is the same: another one chosen (or none) is not on
+/// air until « Passer » puts it there.
+fn kept_on(now: &Program, next: &Program) -> bool {
+    now.overlay_on && next.overlay.is_some() && next.overlay == now.overlay
 }
 
 #[derive(Deserialize)]
@@ -745,6 +751,15 @@ mod tests {
         p.channels = "l".into();
         p.size = f64::NAN;
         assert!(p.normalize().is_err());
+    }
+
+    #[test]
+    fn another_overlay_is_not_on_air() {
+        let now = Program { overlay: Some("a".into()), overlay_on: true, ..Program::default() };
+        assert!(kept_on(&now, &Program { overlay: Some("a".into()), ..now.clone() }));
+        assert!(!kept_on(&now, &Program { overlay: Some("b".into()), ..now.clone() }));
+        assert!(!kept_on(&now, &Program { overlay: None, ..now.clone() }));
+        assert!(!kept_on(&Program { overlay_on: false, ..now.clone() }, &now));
     }
 
     #[test]
