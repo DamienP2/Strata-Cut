@@ -370,7 +370,7 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
   const n = prog.state?.tracks.length ?? 0;
   const { lv: levels, recent } = useLevels(rec.id, n, shown);
   const toast = useApp((s) => s.toast);
-  if (!prog.state) return <section className="pg-box pg-mixer" />;
+  if (!prog.state) return <section className="pg-mixer" />;
   const { program: p, tracks } = prog.state;
   const all = () => Array.from({ length: Math.max(tracks.length, p.tracks.length) }, (_, i) => trackOf(p, i));
   const setTrack = (k: number, x: Partial<Track>) => {
@@ -414,10 +414,8 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
   });
   outPeak = outPeak <= -90 ? -90 : outPeak + p.master;
   return (
-    <section className="pg-box pg-mixer">
+    <section className="pg-mixer" aria-label={t("Sound")}>
       <header>
-        <span>{t("Sound")}</span>
-        <span className="spacer" />
         <span className="segmented">
           {CHANNELS.map((c) => (
             <button key={c} type="button" className={p.channels === c ? "on" : ""} disabled={!run || n === 0} onClick={() => prog.set({ channels: c })}>

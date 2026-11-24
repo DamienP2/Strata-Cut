@@ -48,6 +48,21 @@ const zoomMax = (loopHours: number) => Math.max(3_600_000, loopHours * 3_600_000
 const toSlider = (span: number, max: number) => Math.round((1000 * Math.log(max / span)) / Math.log(max / ZOOM_MIN));
 const fromSlider = (v: number, max: number) => max * Math.pow(ZOOM_MIN / max, v / 1000);
 /** "10 s", "1 min", "2 h 30". */
+/** Where the playhead was left on a source (server ms), and whether it followed the live. */
+interface Left {
+  wall: number;
+  live: boolean;
+}
+/** Where it was left on this source in this tab (none: never, or not kept). */
+function leftAt(recId: string): Left | null {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(`extract.at.${recId}`) ?? 'null') as Left | null;
+    return v && Number.isFinite(v.wall) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 function spanLabel(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s} s`;
@@ -230,13 +245,17 @@ function Editor({ rec }: { rec: Recorder }) {
     begun.current = rec.id;
     was.current = state === 'recording';
     parked.current = null;
-    const at = Number(new URLSearchParams(location.search).get('at'));
+    // Where it was left (the page loaded again, or come back to): there again, paused; the live
+    // if it was live.
+    const left = leftAt(rec.id);
+    const asked = Number(new URLSearchParams(location.search).get('at'));
+    const at = asked > 0 ? asked : left && !left.live ? left.wall : 0;
     if (at > 0) {
       setLive(false);
       void pl.seekWall(at).then(() => {
         if (pl.run) return;
         // That moment is no longer in the loop.
-        toast(t('This moment is no longer in the loop'), 'error');
+        if (asked > 0) toast(t('This moment is no longer in the loop'), 'error');
         if (state === 'recording') {
           setLive(true);
           void pl.goLive(serverNow());
@@ -251,6 +270,24 @@ function Editor({ rec }: { rec: Recorder }) {
       if (state !== 'off') parked.current = newestRef.current;
     }
   }, [rec.id, state, goLast, toast]);
+  // Where the playhead is, kept for the page loaded again (this tab only).
+  const here = useRef<Left | null>(null);
+  if (pos) here.current = { wall: pos.wall, live };
+  useEffect(() => {
+    const save = () => {
+      try {
+        if (here.current) sessionStorage.setItem(`extract.at.${rec.id}`, JSON.stringify(here.current));
+      } catch {
+        /* not kept: the page starts at the live */
+      }
+    };
+    addEventListener('pagehide', save);
+    return () => {
+      save();
+      removeEventListener('pagehide', save);
+      here.current = null;
+    };
+  }, [rec.id]);
   // The source stops while it is followed live: on its last frame; when it records again, back to
   // the live by itself if the playhead was left there.
   useEffect(() => {

@@ -188,6 +188,14 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
   const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const { recorders, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast })));
   const [starting, setStarting] = useState(false);
+  // A countdown shown: drawn again every second.
+  const counting = streams.some((s) => s.stopAt);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!counting) return;
+    const i = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(i);
+  }, [counting]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const draft = (d: Destination): Draft => drafts[d.id] ?? { key: '', url: d.url ?? '', videoKbps: d.videoKbps ?? 6000 };
   const setDraft = (d: Destination, p: Partial<Draft>) => setDrafts((x) => ({ ...x, [d.id]: { ...draft(d), ...p } }));
@@ -257,37 +265,50 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
             const x = draft(d);
             // Started from here and refused by the destination: why (no new try by itself).
             const refused = !s ? failed.find((f) => f.destination === d.id && f.source === rec.id) : undefined;
-            const state = on && s ? (s.state === 'live' ? clockOf(s.liveSince ? serverNow() - s.liveSince : 0) : s.state === 'connecting' ? t('Connecting…') : t('Reconnecting')) : busy && s ? t('Busy · {source}', { source: nameOf(s.source) }) : tc('dest', 'Ready');
+            const live = on && s?.state === 'live';
+            const state = on && s ? (live ? clockOf(s.liveSince ? serverNow() - s.liveSince : 0) : s.state === 'connecting' ? t('Connecting…') : t('Reconnecting')) : busy && s ? t('Busy · {source}', { source: nameOf(s.source) }) : tc('dest', 'Ready');
+            // Its server cut the link: the live stops at this moment unless it takes it again.
+            const left = on && s?.stopAt ? Math.max(0, Math.ceil((s.stopAt - serverNow()) / 1000)) : null;
             return (
-              <div key={d.id} className={`st-card ${on ? 'on' : ''} ${busy ? 'busy' : ''}`}>
+              <div key={d.id} className={`st-card ${live ? 'live' : on ? 'wait' : busy ? 'busy' : 'ready'}`}>
                 <div className="st-card-head">
                   <ProtoTag p={d.protocol} />
                   <strong data-tip={`${d.host} · ${encodingOf(d)}`}>{d.name}</strong>
-                  <span className={`st-state ${on && s?.state === 'live' ? 'live' : ''} ${on && s?.state !== 'live' ? 'warn' : ''}`}>{state}</span>
+                  <span className="st-chip">{state}</span>
                 </div>
+                {left !== null && (
+                  <div className="st-countdown" role="timer">
+                    <span>
+                      <AlertTriangle size={12} /> {t('The destination no longer answers')}
+                    </span>
+                    <b>{t('Stops in {n} s', { n: left })}</b>
+                    <i style={{ width: `${(left / 30) * 100}%` }} />
+                  </div>
+                )}
                 {on && s && (
                   <>
-                    <Spark values={s.history} />
-                    <div className="st-card-nums">
+                    <div className="st-graph">
+                      <Spark values={s.history} />
                       <b>{mbps(s.kbps, locale())}</b>
-                      <span>{volume(s.bytes, locale(), lang() === 'fr')}</span>
-                      <span className="spacer" />
-                      {run && (
-                        <button type="button" className="btn small st-stop-btn" onClick={() => void stop(d)}>
-                          <Square size={10} /> {t('Stop')}
-                        </button>
-                      )}
                     </div>
-                    {(s.message || s.note) && (
+                    {(s.message || s.note) && left === null && (
                       <div className={`st-note ${s.message ? 'bad' : ''}`}>
                         {s.message ? <AlertTriangle size={11} /> : null} {said(s.message || s.note)}
                       </div>
                     )}
+                    <div className="st-card-foot">
+                      <span>{t('{v} sent', { v: volume(s.bytes, locale(), lang() === 'fr') })}</span>
+                      {run && (
+                        <button type="button" className="btn small st-stop-btn" onClick={() => void stop(d)}>
+                          <Square size={9} /> {t('Stop')}
+                        </button>
+                      )}
+                    </div>
                   </>
                 )}
                 {refused && (
                   <div className="st-note bad">
-                    <AlertTriangle size={11} /> {t('Could not start: {why}', { why: said(refused.message) })}
+                    <AlertTriangle size={11} /> {refused.message.startsWith("the destination's server cut the link") ? said(refused.message) : t('Could not start: {why}', { why: said(refused.message) })}
                   </div>
                 )}
                 {run && !on && !busy && (
@@ -306,8 +327,8 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
                       </span>
                     )}
                     <div className="st-card-act">
-                      <button type="button" className="btn ghost" disabled={x.test?.busy} onClick={() => void test(d)}>
-                        <Plug size={12} className={x.test?.busy ? 'spin' : undefined} /> {x.test?.busy ? t('Testing…') : t('Test')}
+                      <button type="button" className="btn ghost st-test" disabled={x.test?.busy} data-tip={t('Test')} onClick={() => void test(d)}>
+                        <Plug size={13} className={x.test?.busy ? 'spin' : undefined} />
                       </button>
                       <button type="button" className="btn primary" disabled={starting || (d.keyLive && !x.key.trim())} onClick={() => void start(d)}>
                         <Play size={12} /> {t('Go live')}

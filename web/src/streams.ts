@@ -43,6 +43,8 @@ export interface StreamInfo {
   kbps: number;
   /** kb/s, one a second, the last 10 minutes. */
   history: number[];
+  /** Its destination's server cut the link: when the live stops unless it takes it again (server ms). */
+  stopAt?: number | null;
 }
 
 export const MASKED = '••••••••';

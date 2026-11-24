@@ -260,7 +260,14 @@ struct Stats {
     bytes: u64,
     kbps: f64,
     history: VecDeque<f32>,
+    /// Since when the destination's server no longer takes it, once it was live (server ms):
+    /// `DOWN_LIMIT` later, the live is stopped.
+    down_since: Option<i64>,
 }
+
+/// A live whose destination's server cut the link this long (ms) is stopped: a person sees why,
+/// and starts it again when that server is back.
+const DOWN_LIMIT: i64 = 30_000;
 
 pub struct Streams {
     data_dir: PathBuf,
@@ -405,13 +412,14 @@ impl Streams {
                         "message": st.message, "note": st.note, "liveSince": st.live_since,
                         "duration": st.live_since.map(|t| now - t), "bytes": st.bytes, "kbps": st.kbps.round(),
                         "history": st.history.iter().map(|k| k.round()).collect::<Vec<_>>(),
+                        "stopAt": st.down_since.map(|t| t + DOWN_LIMIT),
                     })
                 })
                 .chain({
                     let mut f = self.failed.lock().unwrap();
                     f.retain(|_, x| now - x.at < 600_000);
                     f.iter()
-                        .map(|(dest, x)| json!({ "destination": dest, "source": x.source, "started": x.at, "state": "failed", "message": x.message, "note": "", "liveSince": null, "duration": null, "bytes": 0, "kbps": 0, "history": [] }))
+                        .map(|(dest, x)| json!({ "destination": dest, "source": x.source, "started": x.at, "state": "failed", "message": x.message, "note": "", "liveSince": null, "duration": null, "bytes": 0, "kbps": 0, "history": [], "stopAt": null }))
                         .collect::<Vec<_>>()
                 })
                 .collect(),
@@ -696,6 +704,7 @@ impl Streams {
             }
             let progress = child.stdout.take().map(|o| tokio::io::BufReader::new(o).lines());
             let started = std::time::Instant::now();
+            let epoch = runner.epoch();
             let ended = self.follow(&s, &mut child, progress, &mut stop, &runner).await;
             ever_live |= s.stats.lock().unwrap().live_since.is_some();
             runner.taps.lock().unwrap().retain(|t| t.0 != key);
@@ -722,6 +731,16 @@ impl Streams {
             // as a person does not stop it.
             if !ever_live {
                 tracing::debug!("streaming to {}: FFmpeg said:\n{}", d.name, hide(&text, &d));
+            }
+            // Live, and the destination's server cut the link (not the programme made again on
+            // this side): `DOWN_LIMIT` without it taking the stream again, the live is stopped.
+            if ever_live && runner.epoch() == epoch {
+                let now = now_ms();
+                let since = self.set(&s, |st| *st.down_since.get_or_insert(now));
+                if now - since >= DOWN_LIMIT {
+                    self.give_up(&s, &d, "the destination's server cut the link for 30 s: the live was stopped".into());
+                    break;
+                }
             }
             if started.elapsed() > Duration::from_secs(60) {
                 failures = 0;
@@ -769,6 +788,11 @@ impl Streams {
                         let _ = child.kill().await;
                         return false;
                     }
+                    // Its server has not taken it again in time: no more trying.
+                    if s.stats.lock().unwrap().down_since.is_some_and(|t| now_ms() - t >= DOWN_LIMIT) {
+                        let _ = child.kill().await;
+                        return false;
+                    }
                 }
                 line = async { match progress.as_mut() { Some(p) => p.next_line().await, None => std::future::pending().await } } => {
                     let Ok(Some(line)) = line else { progress = None; continue };
@@ -789,6 +813,10 @@ impl Streams {
                                 }
                                 if size > 0 {
                                     st.state = "live";
+                                    // Taken again for a while (not a link that falls again at once).
+                                    if st.live_since.is_some_and(|t| now_ms() - t >= 5_000) {
+                                        st.down_since = None;
+                                    }
                                     // Live, but without the source's picture: why, on its card.
                                     st.message = if runner.pictured() {
                                         String::new()

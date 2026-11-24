@@ -145,6 +145,7 @@ class Follower {
       return;
     }
     if (el.playbackRate !== video.playbackRate) el.playbackRate = video.playbackRate;
+    if (el.muted !== video.muted) el.muted = video.muted;
     if (Math.abs(el.currentTime - video.currentTime) > 0.06) el.currentTime = video.currentTime;
     if (el.paused) void el.play().catch(() => {});
   }
@@ -296,10 +297,41 @@ export class LoopPlayer {
     for (const e of ['play', 'pause', 'seeked', 'ratechange']) this.video.removeEventListener(e, this.follow);
     this.followers.forEach((f) => f.destroy());
     this.followers.clear();
+    if (this.unmuteLater) {
+      removeEventListener('pointerdown', this.unmuteLater, true);
+      removeEventListener('keydown', this.unmuteLater, true);
+    }
     this.video.pause();
     this.video.removeAttribute('src');
     this.video.load();
   }
+
+  /**
+   * Plays. A page just loaded (reloaded) cannot play sound before a click or a key (the browser's
+   * rule): it plays silent then, its sound back at the first click or key on the page.
+   */
+  private async start() {
+    try {
+      await this.video.play();
+    } catch (e) {
+      if ((e as DOMException)?.name !== 'NotAllowedError' || this.alive.dead) return;
+      this.video.muted = true;
+      if (!this.unmuteLater) {
+        const back = () => {
+          this.video.muted = false;
+          this.follow();
+          removeEventListener('pointerdown', back, true);
+          removeEventListener('keydown', back, true);
+          this.unmuteLater = null;
+        };
+        this.unmuteLater = back;
+        addEventListener('pointerdown', back, true);
+        addEventListener('keydown', back, true);
+      }
+      await this.video.play().catch(() => {});
+    }
+  }
+  private unmuteLater: (() => void) | null = null;
 
   /** The other tracks on the video's time. */
   private follow = () => {
@@ -583,7 +615,7 @@ export class LoopPlayer {
         this.note(`refresh jump: behind ${behind.toFixed(2)} delay ${delay} stalled ${stalled} edge ${edge.toFixed(2)} → ${(edge - delay).toFixed(2)}`);
         this.seekedAt = this.now();
         this.video.currentTime = edge - delay - this.base;
-        void this.video.play().catch(() => {});
+        void this.start();
       }
     }
   }
@@ -682,7 +714,7 @@ export class LoopPlayer {
     if (this.live) this.note(`seek ${t.toFixed(2)} play=${play}`);
     if (play) {
       void this.fill(t, 12);
-      await this.video.play().catch(() => {});
+      await this.start();
     }
   }
 
@@ -695,7 +727,7 @@ export class LoopPlayer {
     this.stopReverse();
     this.live = false;
     this.video.playbackRate = rate;
-    void this.video.play().catch(() => {});
+    void this.start();
   }
 
   /** Stops playing (live included) without moving. */
