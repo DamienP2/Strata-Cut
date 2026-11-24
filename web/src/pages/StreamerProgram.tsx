@@ -21,7 +21,6 @@ export interface Track {
 export interface Program {
   image: string | null;
   imageOn: boolean;
-  fadeOn: boolean;
   /** The image's AUTO, s. */
   fadeSecs: number;
   /** The overlay's AUTO, s. */

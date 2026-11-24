@@ -390,12 +390,15 @@ impl Receiver {
                         if a.data.is_null() || ch == 0 || n == 0 || stride < n * 4 {
                             return None;
                         }
-                        // Planar (a channel after the other) → interleaved.
-                        let planes: Vec<&[f32]> = (0..ch).map(|c| std::slice::from_raw_parts(a.data.cast::<u8>().add(c * stride).cast::<f32>(), n)).collect();
+                        // Planar (a channel after the other) → interleaved. Read as bytes: a
+                        // channel's stride need not keep its floats aligned.
+                        let bytes = std::slice::from_raw_parts(a.data.cast::<u8>(), (ch - 1) * stride + n * 4);
                         let mut out = Vec::with_capacity(n * ch * 4);
                         for i in 0..n {
-                            for p in &planes {
-                                out.extend_from_slice(&p[i].clamp(-1.0, 1.0).to_le_bytes());
+                            for c in 0..ch {
+                                let o = c * stride + i * 4;
+                                let v = f32::from_ne_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]);
+                                out.extend_from_slice(&v.clamp(-1.0, 1.0).to_le_bytes());
                             }
                         }
                         Some(Got::Audio(out, a.sample_rate.max(1) as u32, ch as u32, (a.timestamp != TIMESTAMP_UNDEFINED).then_some(a.timestamp)))
@@ -469,7 +472,7 @@ pub fn open(c: &RecorderConfig) -> Result<Recording, String> {
 /// FFmpeg's command line (without the program) encoding a source: the pictures (`video`) and the
 /// sound (`audio`, 32-bit float) into an MPEG-TS written in `out`.
 pub fn encoder_args(c: &RecorderConfig, f: &Format, video: &Path, audio: &Path, out: &Path) -> Vec<String> {
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let s = crate::util::strs;
     let kbps = (c.bitrate * 1000.0).round() as u32;
     let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning"]);
     a.extend(s(&["-thread_queue_size", "256", "-f", "rawvideo", "-pix_fmt", f.pix, "-video_size", &format!("{}x{}", f.width, f.height), "-framerate", &format!("{}/{}", f.fps_n, f.fps_d), "-i", &video.to_string_lossy()]));

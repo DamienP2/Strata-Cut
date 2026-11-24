@@ -1,6 +1,6 @@
 //! Streamer: the programme of a source — what its lives send. The source, or an image; a PNG
-//! overlay placed anywhere over both; passed together (« Passer ») at once or by a fade (its length
-//! chosen), an overlay moved coming over its old place by the same fade; the sound of the tracks
+//! overlay placed anywhere over both; each put on air or taken off by its own CUT (at once) or
+//! AUTO (a fade of its length), an overlay moved on air coming over its old place; the sound of the tracks
 //! chosen, at their level, on the channels chosen (none under the image); the source gone, its
 //! last picture (what goes out never stops). Its settings are the source's, shared by all its
 //! lives (`program.json`).
@@ -63,8 +63,6 @@ pub struct Program {
     pub image: Option<String>,
     /// The image is on air (rather than the source).
     pub image_on: bool,
-    /// Kept for the settings written before CUT / AUTO (each passage now says which).
-    pub fade_on: bool,
     /// The image's AUTO, s.
     pub fade_secs: f64,
     /// The overlay's AUTO, s.
@@ -91,7 +89,6 @@ impl Default for Program {
         Program {
             image: None,
             image_on: false,
-            fade_on: true,
             fade_secs: 1.0,
             overlay_fade_secs: 1.0,
             overlay: None,
@@ -401,12 +398,12 @@ impl Programs {
 
     /// Saves a programme, and gives it to its mixer if it runs.
     fn put(&self, source: &str, p: Program, fade: f64) -> Result<(), String> {
-        let all = {
+        {
+            // Written while held: two changes at once are saved in the order they were made.
             let mut all = self.all.lock().unwrap();
             all.insert(source.to_string(), p.clone());
-            all.clone()
-        };
-        crate::paths::write_json(&path(&self.data_dir), &all, false).map_err(|e| e.to_string())?;
+            crate::paths::write_json(&path(&self.data_dir), &*all, false).map_err(|e| e.to_string())?;
+        }
         if let Some(r) = self.running.lock().unwrap().get(source) {
             let _ = r.tx.send(Change { program: p, fade });
         }
@@ -590,12 +587,11 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/program/{source}", get(read).put(write))
         .route("/api/program/{source}/take", post(take))
-        .route("/api/program/{source}/overlay", post(overlay_on))
         .route("/api/program/{source}/levels", get(levels))
 }
 
 async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view") || me.is_admin())?;
+    require(me.can("stream.view"))?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let programs = &s.streams.programs;
     // Each track's language and kind (as the stream says them).
@@ -606,7 +602,7 @@ async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
     Ok(Json(json!({ "program": programs.get(&source), "tracks": langs, "kinds": kinds, "running": programs.is_running(&source) })))
 }
 
-/// The settings (not what is on air, nor where the overlay is: « Passer » says that).
+/// The settings (not what is on air, nor where the overlay is: CUT and AUTO say that).
 async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, Json(mut p): Json<Program>) -> ApiResult<Json<Value>> {
     require(me.can("stream.run"))?;
     s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
@@ -621,7 +617,7 @@ async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(so
 }
 
 /// The overlay stays on air only while it is the same: another one chosen (or none) is not on
-/// air until « Passer » puts it there.
+/// air until its CUT or AUTO puts it there.
 fn kept_on(now: &Program, next: &Program) -> bool {
     now.overlay_on && next.overlay.is_some() && next.overlay == now.overlay
 }
@@ -630,12 +626,9 @@ fn kept_on(now: &Program, next: &Program) -> bool {
 struct Take {
     /// The image on air (else the source).
     image: bool,
-    /// The overlay as it was made ready: on air or not, where, how big.
+    /// The overlay: on air or not, where, how big.
     overlay: Option<OverlayAt>,
-    /// CUT: at once; else AUTO, by a fade of the programme's length.
-    #[serde(default)]
-    cut: bool,
-    /// The fade's length, s, when said (0: at once: an overlay moved on air).
+    /// The fade's length, s (CUT and an overlay moved: 0); not said: the image's AUTO.
     #[serde(default)]
     fade: Option<f64>,
 }
@@ -663,7 +656,6 @@ async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
     if p != was {
         let secs = match t.fade {
             Some(f) if f.is_finite() => f.clamp(0.0, 5.0),
-            _ if t.cut => 0.0,
             _ => p.fade_secs,
         };
         programs.put(&source, p.clone(), secs).map_err(bad)?;
@@ -681,26 +673,10 @@ struct At {
 /// Each sound track's peaks, each of its channels (dB, -90: silence; none yet: none), of the frame
 /// the page shows (it plays some seconds behind the source): by that frame's own timestamp.
 async fn levels(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, axum::extract::Query(q): axum::extract::Query<At>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view") || me.is_admin())?;
+    require(me.can("stream.view"))?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let n = rec.status.lock().unwrap().media.as_ref().map_or(0, |m| m.audio_tracks as usize);
     Ok(Json(json!({ "tracks": s.streams.programs.meters.read(&source, n, q.t) })))
-}
-
-#[derive(Deserialize)]
-struct On {
-    on: bool,
-}
-
-async fn overlay_on(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, Json(b): Json<On>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.run"))?;
-    s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
-    let programs = &s.streams.programs;
-    let mut p = programs.get(&source);
-    p.overlay_on = b.on;
-    let secs = p.fade_secs;
-    programs.put(&source, p.clone(), secs).map_err(bad)?;
-    Ok(Json(json!(p)))
 }
 
 #[cfg(test)]

@@ -238,14 +238,7 @@ fn chrome() -> Option<String> {
         .map(String::from)
 }
 
-/// A free local port (TCP, or UDP).
-fn free_port(tcp: bool) -> Option<u16> {
-    if tcp {
-        std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?.local_addr().ok().map(|a| a.port())
-    } else {
-        std::net::UdpSocket::bind(("127.0.0.1", 0)).ok()?.local_addr().ok().map(|a| a.port())
-    }
-}
+use crate::util::free_port;
 
 /// A free X display: none there, or one left by a screen that died (its process gone: its files
 /// taken away).
@@ -524,8 +517,8 @@ async fn film(pages: &Pages, page: &Arc<Page>, display: u32, socket: &Path, audi
     enc.args(crate::recorder::muxrate_args(k, 160, page.cbr));
     enc.args(["-f", "mpegts"]);
     enc.arg(format!("udp://127.0.0.1:{}?pkt_size=1316", page.port));
-    enc.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
-    let mut enc = match enc.spawn() {
+    enc.stdin(Stdio::piped()).stdout(Stdio::null());
+    let mut enc = match Proc::start(enc) {
         Ok(c) => c,
         Err(e) => return format!("cannot start {}: {e}", pages.ffmpeg),
     };
@@ -541,28 +534,18 @@ async fn film(pages: &Pages, page: &Arc<Page>, display: u32, socket: &Path, audi
         grab.args(["-map", "1:a", "-af", "aresample=48000:async=1:first_pts=0", "-f", "f32le", "-ar", "48000", "-ac", "2"]);
         grab.arg(format!("tcp://127.0.0.1:{audio_port}"));
     }
-    grab.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    grab.stdin(Stdio::null()).stdout(Stdio::piped());
     // The encoder listens before the grabber connects.
     if page.sound {
         tokio::time::sleep(Duration::from_millis(400)).await;
     }
-    let mut grab = match grab.spawn() {
+    // (Both killed and waited for however this ends: dropped with the page too.)
+    let mut grab = match Proc::start(grab) {
         Ok(c) => c,
-        Err(e) => {
-            let _ = enc.kill();
-            return format!("cannot start {}: {e}", pages.ffmpeg);
-        }
+        Err(e) => return format!("cannot start {}: {e}", pages.ffmpeg),
     };
-    let (Some(mut input), Some(mut output)) = (grab.stdout.take(), enc.stdin.take()) else {
-        let _ = (grab.kill(), enc.kill());
+    let (Some(mut input), Some(mut output)) = (grab.child.stdout.take(), enc.child.stdin.take()) else {
         return "cannot read the grabber".into();
-    };
-    let last = |c: &mut std::process::Child| {
-        let mut s = String::new();
-        if let Some(mut e) = c.stderr.take() {
-            let _ = e.read_to_string(&mut s);
-        }
-        s.lines().last().unwrap_or("").to_string()
     };
     let p = page.clone();
     let (tx, rx) = oneshot::channel();
@@ -606,15 +589,56 @@ async fn film(pages: &Pages, page: &Arc<Page>, display: u32, socket: &Path, audi
         })
         .ok();
     let why = rx.await.unwrap_or("the frames stopped");
-    let _ = grab.kill();
-    let _ = enc.kill();
-    let _ = grab.wait();
-    let _ = enc.wait();
-    let said = [last(&mut grab), last(&mut enc)].into_iter().filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ");
+    let said = [grab.finish(), enc.finish()].into_iter().filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" / ");
     if said.is_empty() {
         why.to_string()
     } else {
         format!("{why}: {said}")
+    }
+}
+
+/// A process of the filming (blocking pipes, read by threads): killed and waited for when it
+/// goes, however the filming ends; its errors read as it says them (its pipe never full), the
+/// last one kept.
+struct Proc {
+    child: std::process::Child,
+    said: Arc<Mutex<String>>,
+    reader: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Proc {
+    fn start(mut cmd: std::process::Command) -> std::io::Result<Proc> {
+        let mut child = cmd.stderr(Stdio::piped()).spawn()?;
+        let said: Arc<Mutex<String>> = Arc::default();
+        let reader = child.stderr.take().map(|err| {
+            let said = said.clone();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for l in std::io::BufReader::new(err).lines().map_while(Result::ok) {
+                    if !l.trim().is_empty() {
+                        *said.lock().unwrap() = l;
+                    }
+                }
+            })
+        });
+        Ok(Proc { child, said, reader })
+    }
+
+    /// Stopped: its last words.
+    fn finish(&mut self) -> String {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(r) = self.reader.take() {
+            let _ = r.join();
+        }
+        self.said.lock().unwrap().clone()
+    }
+}
+
+impl Drop for Proc {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -969,7 +993,7 @@ fn page_of(s: &Shared, id: &str) -> ApiResult<Arc<Page>> {
 }
 
 async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view") || me.can("extract.view") || me.is_admin())?;
+    require(me.can("stream.view") || me.can("extract.view"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let c = rec.config();
     let f = Format::parse(&c.video_mode).unwrap_or(Format { width: 1920, height: 1080, interlaced: false, num: 25, den: 1 });
@@ -1109,7 +1133,7 @@ async fn input(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
 
 /// The page as it is now, as its pictures change (MJPEG: an image element shows it).
 async fn live(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
-    require(me.can("stream.view") || me.can("extract.view") || me.is_admin())?;
+    require(me.can("stream.view") || me.can("extract.view"))?;
     let page = page_of(&s, &id)?;
     let rx = page.frames.subscribe();
     let stream = futures_util::stream::unfold(rx, |mut rx| async move {

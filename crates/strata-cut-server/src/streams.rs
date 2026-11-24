@@ -1,6 +1,7 @@
 //! Streaming (Streamer page): a source sent live to destinations (Système › Destinations: RTMP,
-//! RTMPS or SRT encoders and platforms), each by its own FFmpeg reading the stream as received
-//! from the source's relay (`Rec::taps`): starting or stopping one never touches the recording.
+//! RTMPS or SRT encoders and platforms), each by its own FFmpeg reading the source's programme
+//! (the Streamer's image, overlay and sound, `program.rs`) from its relay (`Runner::taps`):
+//! starting or stopping one never touches the recording.
 //!
 //! A destination's secrets (stream key, SRT passphrase) are masked for everyone; an operator
 //! sees only its name, its type, its server's host and what the admin hands to them (a key
@@ -53,7 +54,7 @@ pub struct Destination {
     /// SRT: latency (ms) and passphrase (secret).
     pub latency: u32,
     pub passphrase: String,
-    /// "copy" (the source as it is) or "h264" (encoded again: picture height, bitrates).
+    /// "copy" (the programme as it is) or "h264" (encoded again: picture height, bitrates).
     pub encode: String,
     pub height: u32,
     pub video_kbps: u32,
@@ -181,21 +182,16 @@ fn target(d: &Destination) -> String {
     }
 }
 
-fn urlencode(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
-}
+use crate::util::urlencode;
 
 /// The encoding of a destination (`video_codec`: the source's, as received).
-fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+fn output_args(d: &Destination) -> Vec<String> {
+    let s = crate::util::strs;
     let mut a = s(&["-map", "0:v:0", "-map", "0:a:0?"]);
-    // RTMP carries H.264 and AAC only: a source in another codec is encoded again.
-    let must = !d.srt() && !video_codec.is_empty() && video_codec != "h264";
-    let mut note = String::new();
-    if d.encode == "h264" || must {
-        if must && d.encode == "copy" {
-            note = "encoded again: rtmp does not carry this source's video".into();
-        }
+    // The programme is H.264 and AAC already: sent as it is, or encoded again at the
+    // destination's own bitrate and height.
+    let encode = d.encode == "h264";
+    if encode {
         let k = if d.video_kbps > 0 { d.video_kbps } else { 6000 };
         let scale = if d.height > 0 { format!(",scale=-2:{}", d.height) } else { String::new() };
         a.extend(s(&["-vf", &format!("yadif=deint=interlaced{scale},format=yuv420p"), "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high"]));
@@ -204,14 +200,13 @@ fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
     } else {
         a.extend(s(&["-c:v", "copy"]));
     }
-    if d.srt() && d.encode == "copy" {
-        // SRT carries the stream as it is: its subtitles (DVB, teletext) go with it.
-        a.extend(s(&["-map", "0:s?", "-c:s", "copy", "-c:a", "copy", "-f", "mpegts"]));
+    if d.srt() && !encode {
+        a.extend(s(&["-c:a", "copy", "-f", "mpegts"]));
     } else {
         let ak = if d.audio_kbps > 0 { d.audio_kbps } else { 160 };
         a.extend(s(&["-c:a", "aac", "-b:a", &format!("{ak}k"), "-ar", "48000", "-ac", "2"]));
         // SRT encoded again in CBR: the MPEG-TS padded to its rate too.
-        if d.srt() && (d.encode == "h264" || must) {
+        if d.srt() {
             a.extend(crate::recorder::muxrate_args(if d.video_kbps > 0 { d.video_kbps } else { 6000 }, ak, !d.vbr));
         }
         a.extend(s(&["-f", if d.srt() { "mpegts" } else { "flv" }]));
@@ -222,11 +217,11 @@ fn output_args(d: &Destination, video_codec: &str) -> (Vec<String>, String) {
         a.extend(s(&["-rw_timeout", "10000000"]));
     }
     a.push(target(d));
-    (a, note)
+    a
 }
 
 fn free_port() -> Option<u16> {
-    std::net::UdpSocket::bind("127.0.0.1:0").ok()?.local_addr().ok().map(|a| a.port())
+    crate::util::free_port(false)
 }
 
 /// A live under way, as written in `lives.json` (started again after a restart).
@@ -497,12 +492,12 @@ impl Streams {
         Ok(())
     }
 
-    /// Every live of a source stopped (the source deleted, or "Tout arrêter").
     /// A destination's name (its id when it is gone).
     pub fn name_of(&self, id: &str) -> String {
         self.get(id).map(|d| d.name).unwrap_or_else(|| id.to_string())
     }
 
+    /// Every live of a source stopped (the source deleted, or "Tout arrêter").
     pub fn end_source(&self, source: &str) {
         let dests: Vec<String> = self.sessions.lock().unwrap().values().filter(|x| x.source == source).map(|x| x.dest.clone()).collect();
         for d in dests {
@@ -674,7 +669,6 @@ impl Streams {
             }
             // The programme is H.264, a key frame every 2 s: read 3 s to be sure to find one (its
             // size, without which nothing can be sent).
-            let codec = "h264";
             let Some(port) = free_port() else {
                 if !self.wait_again(&s, &d, "no free local port for the stream: trying again".into(), &mut stop).await {
                     break;
@@ -683,8 +677,7 @@ impl Streams {
             };
             let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-progress", "pipe:1", "-stats_period", "1", "-thread_queue_size", "4096", "-analyzeduration", "3000000", "-probesize", "10000000", "-f", "mpegts", "-i"].map(String::from).to_vec();
             args.push(format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout=5000000"));
-            let (out, note) = output_args(&d, codec);
-            args.extend(out);
+            args.extend(output_args(&d));
             let mut cmd = Command::new(&ffmpeg);
             cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
             let mut child = match cmd.spawn() {
@@ -698,7 +691,6 @@ impl Streams {
             };
             self.set(&s, |st| {
                 st.state = "connecting";
-                st.note = note.clone();
                 if st.message == "waiting for the source" {
                     st.message.clear();
                 }
@@ -879,7 +871,7 @@ impl Streams {
             o.key = "test".into(); // no key yet: the server is tried (it refuses the key)
         }
         let d = effective(&dest, &o)?;
-        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+        let s = crate::util::strs;
         let mut args = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-re", "-f", "lavfi", "-i", "color=c=black:s=640x360:r=25", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", "2"]);
         args.extend(s(&["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "25", "-c:a", "aac", "-b:a", "64k", "-f", if d.srt() { "mpegts" } else { "flv" }]));
         args.push(target(&d));
@@ -898,10 +890,7 @@ impl Streams {
     }
 }
 
-/// A short random key (the taps of a source).
-fn rand_key() -> u64 {
-    uuid::Uuid::new_v4().as_u128() as u64
-}
+use crate::util::rand_key;
 
 /// FFmpeg's message without the secrets (its address holds the key).
 fn hide(msg: &str, d: &Destination) -> String {
@@ -1062,7 +1051,7 @@ async fn test(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id)
 }
 
 async fn streams(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view") || me.is_admin())?;
+    require(me.can("stream.view"))?;
     Ok(Json(s.streams.json()))
 }
 
@@ -1137,14 +1126,13 @@ mod tests {
 
     #[test]
     fn encodings() {
-        let d = dest("rtmp", "rtmp://live.example.com/app");
-        let (a, note) = output_args(&d, "h264");
-        assert!(a.windows(2).any(|w| w == ["-c:v", "copy"]) && a.contains(&"flv".to_string()) && note.is_empty());
-        // MPEG-2 cannot go by RTMP: encoded again, and said.
-        let (a, note) = output_args(&d, "mpeg2video");
-        assert!(a.contains(&"libx264".to_string()) && !note.is_empty());
-        // SRT carries anything as it is.
-        let (a, _) = output_args(&dest("srt", "srt://h:1"), "mpeg2video");
+        let mut d = dest("rtmp", "rtmp://live.example.com/app");
+        let a = output_args(&d);
+        assert!(a.windows(2).any(|w| w == ["-c:v", "copy"]) && a.contains(&"flv".to_string()));
+        d.encode = "h264".into();
+        assert!(output_args(&d).contains(&"libx264".to_string()));
+        // SRT as it is: the sound copied too, in MPEG-TS.
+        let a = output_args(&dest("srt", "srt://h:1"));
         assert!(a.windows(2).any(|w| w == ["-c:a", "copy"]) && a.contains(&"mpegts".to_string()));
     }
 

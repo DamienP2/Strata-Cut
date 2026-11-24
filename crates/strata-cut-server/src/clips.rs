@@ -548,8 +548,9 @@ impl Clips {
                 }
             }
         }
-        let status = child.wait().await;
+        // No longer cancellable before it is reaped: once reaped, its pid may be another process's.
         *self.running.lock().unwrap() = None;
+        let status = child.wait().await;
         let err = err_task.await.unwrap_or_default();
         match status {
             Ok(s) if s.success() => {}

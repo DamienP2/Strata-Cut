@@ -322,9 +322,7 @@ pub(super) fn hls_reason(message: &str) -> String {
     String::new()
 }
 
-fn urlencode(s: &str) -> String {
-    s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
-}
+use crate::util::urlencode;
 
 /// What FFmpeg says of a source, without its secrets (it is logged, shown, exported for support):
 /// its address as the host alone (a key or a token in its path or query), its passphrase as given
@@ -371,7 +369,7 @@ pub fn receiver_args(input: Vec<String>, run_dir: &Path, describe: bool, epg: Op
     // without its reference (mosaic up to the next key frame) and the clips a frame short.
     let mut a: Vec<String> = ["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", level, "-copyts", "-thread_queue_size", "4096"].map(String::from).to_vec();
     a.extend(input);
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let s = crate::util::strs;
     let from = program.map_or("0:".to_string(), |p| format!("0:p:{p}:"));
     let (video, sounds) = (format!("{from}v:0"), format!("{from}a?"));
     // Its subtitles too (DVB subtitles, teletext), as they come.
@@ -411,7 +409,7 @@ const PREVIEW_AUDIO: &str = "aresample=async=1:min_hard_comp=0.1,silencedetect=n
 
 pub fn preview_args(preview_port: u16, run_dir: &Path, thumb: &Path, audio: bool, extra_audio: u32) -> Vec<String> {
     let d = |p: &str| run_dir.join(p).to_string_lossy().into_owned();
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let s = crate::util::strs;
     // Its info lines too, tagged: what the picture and the sound show (black, frozen, silent).
     let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-y", "-loglevel", "level+info", "-copyts", "-thread_queue_size", "4096", "-i"]);
     // No timeout: it waits for the receiver, and is stopped with it.
@@ -508,7 +506,7 @@ fn set_receive_buffer(sock: &std::net::UdpSocket, bytes: i32) {
 
 /// A free UDP port on the loopback, for the receiver's copy to the preview.
 fn free_port() -> Option<u16> {
-    std::net::UdpSocket::bind("127.0.0.1:0").ok()?.local_addr().ok().map(|a| a.port())
+    crate::util::free_port(false)
 }
 
 async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg_rx: &mut watch::Receiver<RecorderConfig>, stop_rx: &mut watch::Receiver<bool>) -> Outcome {

@@ -472,9 +472,7 @@ pub fn only_host(url: &str) -> String {
     format!("{scheme}://{host}")
 }
 
-pub fn now_ms() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
-}
+pub use crate::util::now_ms;
 
 /// One recorder: its settings, its live state and its loop.
 pub struct Rec {

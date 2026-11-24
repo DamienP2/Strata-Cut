@@ -36,6 +36,7 @@ mod storage;
 mod system;
 mod update;
 mod users;
+mod util;
 mod web;
 mod ws;
 

@@ -92,7 +92,7 @@ pub fn routes() -> Router<Shared> {
 }
 
 async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view") || me.is_admin())?;
+    require(me.can("stream.view"))?;
     let i = load(&s.data_dir);
     Ok(Json(json!({ "images": i.images })))
 }
@@ -176,7 +176,7 @@ async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
 }
 
 async fn image(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
-    require(me.can("stream.view") || me.is_admin())?;
+    require(me.can("stream.view"))?;
     let img = load(&s.data_dir).images.into_iter().find(|x| x.id == id).ok_or_else(|| not_found("image"))?;
     let data = tokio::fs::read(dir(&s.data_dir).join(format!("{}.{}", img.id, img.ext))).await.map_err(|_| not_found("image"))?;
     let mime = kind(&data).map(|k| k.1).unwrap_or("application/octet-stream");

@@ -15,7 +15,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime},
 };
 
 use crate::{
@@ -52,9 +52,7 @@ pub fn http_agent(redirects: u32, timeout: Duration) -> ureq::Agent {
         .into()
 }
 
-fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
-}
+use crate::util::now_ms;
 
 /// Numeric comparison: "1.2.10" > "1.2.9"; a leading `v` is ignored.
 pub fn cmp_versions(a: &str, b: &str) -> Ordering {

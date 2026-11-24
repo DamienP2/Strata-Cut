@@ -136,7 +136,7 @@ impl Meters {
 /// The meter: each track's peaks, each channel, every 0.1 s (`astats@m<track>`), the timestamps in
 /// microseconds (`asettb=AVTB`: `pts_time` has 6 digits only before FFmpeg 7), printed.
 fn meter_args(picks: &Picks, port: u16, segments: bool) -> Vec<String> {
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let s = crate::util::strs;
     let wait = if segments { 30_000_000 } else { 5_000_000 };
     let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", "-copyts", "-thread_queue_size", "4096", "-analyzeduration", "300000", "-probesize", "1000000", "-f", "mpegts", "-i"]);
     a.push(format!("udp://127.0.0.1:{port}?fifo_size=250000&overrun_nonfatal=1&buffer_size=16777216&timeout={wait}"));

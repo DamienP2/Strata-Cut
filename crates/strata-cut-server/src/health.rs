@@ -42,9 +42,7 @@ static HEALTH: OnceLock<Health> = OnceLock::new();
 /// Set by `stopped()`: the heartbeat no longer writes the marker.
 static STOPPED: AtomicBool = AtomicBool::new(false);
 
-fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
-}
+use crate::util::now_ms;
 
 fn ms_of(t: SystemTime) -> i64 {
     t.duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)

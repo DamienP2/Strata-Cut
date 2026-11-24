@@ -553,7 +553,7 @@ pub fn open_recording(c: &RecorderConfig) -> Result<Recording, String> {
 /// FFmpeg's command line (without the program) encoding a capture: the pictures (`video`, UYVY)
 /// and the sound (`audio`, 32-bit at 48 kHz) into an MPEG-TS written in `out`.
 pub fn encoder_args(c: &RecorderConfig, m: &sdk::Mode, video: &Path, audio: &Path, out: &Path) -> Vec<String> {
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let s = crate::util::strs;
     let kbps = (c.bitrate * 1000.0).round() as u32;
     let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning"]);
     a.extend(s(&["-thread_queue_size", "256", "-f", "rawvideo", "-pix_fmt", "uyvy422", "-video_size", &format!("{}x{}", m.width, m.height), "-framerate", &format!("{}/{}", m.timescale, m.duration), "-i", &video.to_string_lossy()]));

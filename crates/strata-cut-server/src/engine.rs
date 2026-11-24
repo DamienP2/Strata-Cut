@@ -63,7 +63,7 @@ const SOUND: &str = "aresample=48000:async=1:first_pts=0,aformat=sample_fmts=flt
 fn decoder_args(sh: &Shape, input: &str, picks: &Picks, ports: &[u16]) -> Vec<String> {
     let (w, h) = (sh.w, sh.h);
     let rate = format!("{}/{}", sh.rate.num, sh.rate.den);
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let s = crate::util::strs;
     let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error", "-dts_delta_threshold", "1", "-thread_queue_size", "4096", "-analyzeduration", "1000000", "-probesize", "3000000", "-f", "mpegts", "-i", input]);
     let tracks = picks.tracks();
     let sound = |port: u16| s(&["-f", "f32le", "-ar", "48000", "-ac", "2", &format!("tcp://127.0.0.1:{port}")]);
@@ -269,7 +269,7 @@ impl Drop for Watch {
 /// The encoder: the mixer's pictures and sound (raw, over TCP: their timestamps are their count,
 /// so they stay in step), H.264 and AAC in MPEG-TS to the programme's relay.
 fn encoder_args(sh: &Shape, video: u16, audio: u16, out: u16) -> Vec<String> {
-    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let s = crate::util::strs;
     let (w, h, fps, k) = (sh.w, sh.h, sh.rate.fps(), sh.kbps);
     let rate = format!("{}/{}", sh.rate.num, sh.rate.den);
     let mut a = s(&["-hide_banner", "-nostdin", "-nostats", "-loglevel", "error"]);
@@ -473,15 +473,10 @@ impl Drop for Untap {
 }
 
 pub(crate) fn free_udp() -> Result<u16, String> {
-    UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).and_then(|s| s.local_addr()).map(|a| a.port()).map_err(|e| e.to_string())
+    crate::util::free_port(false).ok_or_else(|| "no free local port".to_string())
 }
 
-pub fn rand_key() -> u64 {
-    use std::hash::{BuildHasher, Hasher};
-    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_i64(now_ms());
-    h.finish()
-}
+pub use crate::util::rand_key;
 
 #[cfg(test)]
 mod tests {
