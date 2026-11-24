@@ -31,6 +31,8 @@ export interface Recorder {
   loopHours: number;
   /** Expected bitrate, Mb/s: the loop's space is reserved from it (0 = unknown). DeckLink: the recording's bitrate. */
   bitrate: number;
+  /** A source the server encodes (page, pattern, NDI, DeckLink): a constant rate (CBR), else variable (VBR). */
+  cbr?: boolean;
   enabled: boolean;
   /** DeckLink: the card (from 0), its video input, the format ("auto": detected), the audio input and the channels captured. */
   device?: number;

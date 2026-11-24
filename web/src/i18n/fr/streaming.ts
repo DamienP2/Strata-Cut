@@ -292,4 +292,7 @@ export const streaming: Record<string, string> = {
   'On air since': 'À l\'antenne depuis',
   'streamer|Next': 'Suivant',
   Enter: 'Entrée',
+  Rate: 'Débit',
+  'Variable (VBR)': 'Variable (VBR)',
+  'Constant (CBR)': 'Constant (CBR)',
 };

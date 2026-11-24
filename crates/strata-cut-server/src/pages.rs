@@ -77,6 +77,8 @@ pub struct Page {
     rate: (u32, u32),
     sound: bool,
     kbps: u32,
+    /// A constant rate (CBR), else variable (VBR).
+    cbr: bool,
     /// What it was started with (its format, its sound, its bitrate): another, it starts again.
     key: String,
     /// The local port its MPEG-TS goes to (the recorder reads it).
@@ -139,7 +141,7 @@ pub fn ensure(c: &RecorderConfig) -> Option<u16> {
     let f = Format::parse(&c.video_mode).filter(|f| !f.interlaced).unwrap_or(Format { width: 1920, height: 1080, interlaced: false, num: 25, den: 1 });
     let sound = c.audio_channels > 0;
     let kbps = ((if c.bitrate > 0.0 { c.bitrate } else { 6.0 }) * 1000.0) as u32;
-    let key = format!("{}x{}@{}/{}:{sound}:{kbps}", f.width, f.height, f.num, f.den);
+    let key = format!("{}x{}@{}/{}:{sound}:{kbps}:{}", f.width, f.height, f.num, f.den, c.cbr);
     let mut running = p.running.lock().unwrap();
     if let Some(page) = running.get(&c.id) {
         if page.key == key && !*page.stop.borrow() {
@@ -161,6 +163,7 @@ pub fn ensure(c: &RecorderConfig) -> Option<u16> {
         rate: (f.num, f.den),
         sound,
         kbps,
+        cbr: c.cbr,
         key,
         port,
         crop: Mutex::new(saved.crop.map(|k| clamp(k, f.width, f.height)).unwrap_or(full)),
@@ -495,7 +498,11 @@ async fn film(pages: &Pages, page: &Arc<Page>, display: u32, socket: &Path, audi
     }
     enc.args(["-thread_queue_size", "64", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", &format!("{w}x{h}"), "-framerate", &rate, "-i", "pipe:0"]);
     let k = page.kbps;
-    enc.args(["-map", "1:v", "-map", "0:a", "-c:v", "libx264", "-preset", "superfast", "-pix_fmt", "yuv420p", "-b:v", &format!("{k}k"), "-maxrate", &format!("{k}k"), "-bufsize", &format!("{}k", k * 2), "-g", &(fps * 2).to_string(), "-c:a", "aac", "-b:a", "160k", "-f", "mpegts"]);
+    enc.args(["-map", "1:v", "-map", "0:a", "-c:v", "libx264", "-preset", "superfast", "-pix_fmt", "yuv420p"]);
+    enc.args(crate::recorder::rate_args(k, page.cbr));
+    enc.args(["-g", &(fps * 2).to_string(), "-c:a", "aac", "-b:a", "160k"]);
+    enc.args(crate::recorder::muxrate_args(k, 160, page.cbr));
+    enc.args(["-f", "mpegts"]);
     enc.arg(format!("udp://127.0.0.1:{}?pkt_size=1316", page.port));
     enc.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
     let mut enc = match enc.spawn() {

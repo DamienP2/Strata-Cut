@@ -553,6 +553,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
               <Field label={t('Sound of the page')} group>
                 <Segmented value={(c.audioChannels ?? 2) > 0 ? 'on' : 'off'} options={[{ value: 'on', label: t('Recorded') }, { value: 'off', label: t('Silent') }]} onChange={(v) => set({ audioChannels: v === 'on' ? 2 : 0 })} />
               </Field>
+              <RateField c={c} set={set} />
               <Field label={t('Recording bitrate')}>
                 <NumberField value={c.bitrate} min={1} max={50} step={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
               </Field>
@@ -565,6 +566,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
               <Field label={t('Format')}>
                 <Dropdown value={c.videoMode ?? '1080i50'} options={PATTERN_FORMATS.map((f) => ({ value: f, label: formatName(f, lang() === 'fr') }))} onChange={(v) => set({ videoMode: v })} />
               </Field>
+              <RateField c={c} set={set} />
               <Field label={t('Recording bitrate')} hint={t('A flash and a beep together once a second (lip sync), something moving, a clock to the frame, the name and the logo of the source.')}>
                 <NumberField value={c.bitrate} min={1} max={200} step={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
               </Field>
@@ -767,6 +769,7 @@ function NdiFields({ c, set }: { c: Recorder; set: (patch: Partial<Recorder>) =>
       <Field label={t('Address (optional)')}>
         <input value={host} placeholder="192.168.1.50" spellCheck={false} onChange={(e) => set({ host: e.target.value })} />
       </Field>
+      <RateField c={c} set={set} />
       <Field label={t('Recording bitrate')}>
         <NumberField value={c.bitrate} min={5} max={200} step={1} suffix="Mb/s" onChange={(v) => set({ bitrate: v })} />
       </Field>
@@ -849,6 +852,7 @@ function DecklinkFields({ c, set, info, detected, rec }: { c: Recorder; set: (pa
       <Field label={t('Audio channels')} group hint={tn(channels / 2, 'Recorded as {n} stereo track', 'Recorded as {n} stereo tracks')}>
         <Segmented value={String(channels)} options={[2, 8, 16].map((n) => ({ value: String(n), label: String(n) }))} onChange={(v) => set({ audioChannels: Number(v) })} />
       </Field>
+      <RateField c={c} set={set} />
       <Field
         label={<>{t('Recording bitrate')}<InfoTip text={t('The card gives raw pictures: the server encodes them in H.264 at this bitrate (about 1 to 2 processor cores per HD input, 4 to 8 in UHD). 25 Mb/s keeps the HD quality for clips; more takes more disk.')} /></>}
         hint={
@@ -1020,12 +1024,12 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
   const rows: [string, string][] = [];
   if (c.protocol === 'pattern' || c.protocol === 'ndi' || c.protocol === 'page') {
     rows.push([t('Source'), sourceAddress(c) || '—']);
-    rows.push([t('Recording bitrate'), `${c.bitrate} Mb/s · H.264 / AAC`]);
+    rows.push([t('Recording bitrate'), `${c.bitrate} Mb/s · ${c.cbr ? 'CBR' : 'VBR'} · H.264 / AAC`]);
   } else if (card) {
     rows.push([t('Input'), input ? inputLabel(input) : t('Input {n}', { n: device + 1 })]);
     rows.push([t('Format'), detected ? formatName(detected, fr) : dlMode(c.videoMode ?? 'auto')]);
     rows.push([t('Audio'), `${dlAudioInput(c.audioInput ?? 'auto')} · ${tn((c.audioChannels ?? 2) / 2, '{n} stereo track', '{n} stereo tracks')}`]);
-    rows.push([t('Recording bitrate'), `${c.bitrate} Mb/s · H.264 / AAC`]);
+    rows.push([t('Recording bitrate'), `${c.bitrate} Mb/s · ${c.cbr ? 'CBR' : 'VBR'} · H.264 / AAC`]);
   } else {
     rows.push([t('Source'), sourceAddress(c) || '—']);
     if (c.protocol === 'srt') rows.push([t('Latency'), `${c.latency} ms`]);
@@ -1198,6 +1202,22 @@ function LogoField({ rec, change, onChange }: { rec: Recorder | null; change: Lo
           )}
         </div>
       </div>
+    </Field>
+  );
+}
+
+/** For a source the server encodes: a variable rate (the quality kept, the bitrate a ceiling) or a constant one. */
+function RateField({ c, set }: { c: Pick<Recorder, 'cbr'>; set: (p: Partial<Recorder>) => void }) {
+  return (
+    <Field label={t('Rate')} group>
+      <Segmented
+        value={c.cbr ? 'cbr' : 'vbr'}
+        options={[
+          { value: 'vbr', label: t('Variable (VBR)') },
+          { value: 'cbr', label: t('Constant (CBR)') },
+        ]}
+        onChange={(v) => set({ cbr: v === 'cbr' })}
+      />
     </Field>
   );
 }

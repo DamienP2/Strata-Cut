@@ -318,8 +318,9 @@ enum Got {
     Lost,
     /// Rows packed, its picture format, its time (100 ns units; None: not given).
     Video(Vec<u8>, VideoShape, Option<i64>),
-    /// Samples interleaved (32-bit float), their rate and channels.
-    Audio(Vec<u8>, u32, u32),
+    /// Samples interleaved (32-bit float), their rate and channels, the time of the first one
+    /// (100 ns units, the sender's clock; None: not given).
+    Audio(Vec<u8>, u32, u32, Option<i64>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -397,7 +398,7 @@ impl Receiver {
                                 out.extend_from_slice(&p[i].clamp(-1.0, 1.0).to_le_bytes());
                             }
                         }
-                        Some(Got::Audio(out, a.sample_rate.max(1) as u32, ch as u32))
+                        Some(Got::Audio(out, a.sample_rate.max(1) as u32, ch as u32, (a.timestamp != TIMESTAMP_UNDEFINED).then_some(a.timestamp)))
                     })();
                     (self.lib.recv_free_audio)(self.recv, &a);
                     got.unwrap_or(Got::Nothing)
@@ -436,7 +437,7 @@ pub fn open(c: &RecorderConfig) -> Result<Recording, String> {
                 }
                 video = Some((data, shape));
             }
-            Got::Audio(data, rate, channels) => {
+            Got::Audio(data, rate, channels, _) => {
                 if audio.is_some_and(|a| a != (rate, channels)) {
                     first_audio.clear();
                 }
@@ -477,7 +478,9 @@ pub fn encoder_args(c: &RecorderConfig, f: &Format, video: &Path, audio: &Path, 
     // Picture: 4:2:0 H.264; interlacing kept (NDI's first field is the top one).
     let vf = if f.interlaced { "setfield=tff,format=yuv420p" } else { "format=yuv420p" };
     let gop = ((f.fps_n as f64 / f.fps_d.max(1) as f64).round() as u32).clamp(1, 120);
-    a.extend(s(&["-map", "0:v", "-vf", vf, "-c:v", "libx264", "-preset", "superfast", "-b:v", &format!("{kbps}k"), "-maxrate", &format!("{kbps}k"), "-bufsize", &format!("{kbps}k"), "-g", &gop.to_string()]));
+    a.extend(s(&["-map", "0:v", "-vf", vf, "-c:v", "libx264", "-preset", "superfast"]));
+    a.extend(super::rate_args(kbps, c.cbr));
+    a.extend(s(&["-g", &gop.to_string()]));
     if f.interlaced {
         a.extend(s(&["-flags", "+ildct+ilme", "-top", "1"]));
     }
@@ -492,14 +495,20 @@ pub fn encoder_args(c: &RecorderConfig, f: &Format, video: &Path, audio: &Path, 
         a.extend(s(&["-map", "1:a"]));
     }
     a.extend(s(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]));
+    a.extend(super::muxrate_args(kbps, 192 * (n / 2).max(1), c.cbr));
     a.extend(s(&["-f", "mpegts", "-muxdelay", "0", "-y", &out.to_string_lossy()]));
     a
 }
 
 /// Moves the source's pictures and sound into the encoder's pipes until `stop`, the encoder
-/// stops, the source is gone or its format changes. The pictures keep the source's pace: one
-/// that did not come (by the times the source gives) or that the encoder could not take in
-/// time is made up by the next one, repeated; sound that does not come is silence.
+/// stops, the source is gone or its format changes.
+///
+/// The encoder counts time in pictures and samples: both are kept on the sender's own clock (its
+/// timestamps), from the first picture on — not from one picture to the next, whose jitter would
+/// only ever add pictures. A picture that comes for a time already written is dropped; one that
+/// did not come (or that the encoder could not take in time) is made up by the next, repeated.
+/// The sound goes where its own time says: a gap is silence, too much is cut (past a picture and
+/// a half); a sender without times, as far as the pictures (silence half a second late).
 pub fn pump(r: Recording, video: PathBuf, audio: PathBuf, stop: Arc<AtomicBool>) -> End {
     let broken = Arc::new(AtomicBool::new(false));
     let (vtx, vrx) = std::sync::mpsc::sync_channel::<Vec<u8>>(25);
@@ -511,11 +520,17 @@ pub fn pump(r: Recording, video: PathBuf, audio: PathBuf, stop: Arc<AtomicBool>)
     let sample = f.channels.max(1) as usize * 4;
     // Pictures written (counting those owed), sound samples written, pictures owed to the encoder.
     let (mut frames, mut samples, mut owed) = (0u64, 0u64, 0u64);
-    let mut last_time: Option<i64> = None;
+    // The sender's time of a picture, and how many pictures were written before it: where its
+    // clock meets ours.
+    let mut anchor: Option<(i64, u64)> = None;
+    // Times given with the sound: it is placed by them (else as far as the pictures).
+    let mut timed_sound = false;
     let mut last_video = Instant::now();
-    let (mut repeated, mut last_report) = (0u64, Instant::now());
+    let mut said = Said::default();
+    let mut last_report = Instant::now();
     let begun = Instant::now();
     let failed = || End::Failed("the encoder stopped".into());
+    let tolerance = (1.5 * frame * f.rate as f64) as i64;
     let mut pending = Some(Got::Video(r.first_video, VideoShape { width: f.width, height: f.height, fps_n: f.fps_n, fps_d: f.fps_d, interlaced: f.interlaced, pix: f.pix, bpp: f.bpp }, None));
     let mut first_audio = Some(r.first_audio).filter(|a| !a.is_empty());
     loop {
@@ -528,7 +543,7 @@ pub fn pump(r: Recording, video: PathBuf, audio: PathBuf, stop: Arc<AtomicBool>)
         let got = match pending.take() {
             Some(g) => g,
             None => match first_audio.take() {
-                Some(a) => Got::Audio(a, f.rate, f.channels),
+                Some(a) => Got::Audio(a, f.rate, f.channels, None),
                 None => r.rx.next(Duration::from_millis(250)),
             },
         };
@@ -538,51 +553,96 @@ pub fn pump(r: Recording, video: PathBuf, audio: PathBuf, stop: Arc<AtomicBool>)
                 if (shape.width, shape.height, shape.fps_n, shape.fps_d, shape.interlaced, shape.pix) != (f.width, f.height, f.fps_n, f.fps_d, f.interlaced, f.pix) || picture.len() != f.frame_bytes() {
                     return End::FormatChanged(super::decklink::mode_of(shape.width, shape.height, shape.interlaced, shape.fps_n, shape.fps_d));
                 }
-                // Pictures that did not come, by the source's times: this one stands for them.
-                let mut copies = 1u64;
-                if let (Some(t), Some(prev)) = (time, last_time) {
-                    let gap = ((t - prev) as f64 / 1e7 / frame).round();
-                    if (2.0..=50.0).contains(&gap) {
-                        copies = gap as u64;
+                // How many pictures this one stands for: by its time on the sender's clock, from
+                // the anchor (a jump of more than 2 s: the sender's clock started again).
+                let mut copies = 1i64;
+                if let Some(t) = time {
+                    match anchor {
+                        Some((t0, n0)) => {
+                            let target = n0 as i64 + ((t - t0) as f64 / 1e7 / frame).round() as i64 + 1;
+                            let c = target - frames as i64;
+                            if c.unsigned_abs() as f64 * frame > 2.0 {
+                                anchor = Some((t, frames));
+                                said.anchored += 1;
+                            } else {
+                                copies = c;
+                            }
+                        }
+                        None => anchor = Some((t, frames)),
                     }
                 }
-                last_time = time.or(last_time);
-                frames += copies;
-                owed += copies - 1;
-                let copy = (owed > 0).then(|| picture.clone());
-                match vtx.try_send(picture) {
-                    Ok(()) => {
-                        if let Some(copy) = copy {
-                            while owed > 0 && vtx.try_send(copy.clone()).is_ok() {
-                                owed -= 1;
-                                if begun.elapsed() > Duration::from_secs(5) {
-                                    repeated += 1;
+                if copies <= 0 {
+                    // Its time is already written: dropped.
+                    said.dropped += 1;
+                } else {
+                    let copies = copies as u64;
+                    frames += copies;
+                    owed += copies - 1;
+                    if copies > 1 && begun.elapsed() > Duration::from_secs(5) {
+                        said.missing += copies - 1;
+                    }
+                    let copy = (owed > 0).then(|| picture.clone());
+                    match vtx.try_send(picture) {
+                        Ok(()) => {
+                            if let Some(copy) = copy {
+                                while owed > 0 && vtx.try_send(copy.clone()).is_ok() {
+                                    owed -= 1;
                                 }
                             }
                         }
+                        Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                            owed += 1;
+                            if begun.elapsed() > Duration::from_secs(5) {
+                                said.late += 1;
+                            }
+                        }
+                        Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return failed(),
                     }
-                    Err(std::sync::mpsc::TrySendError::Full(_)) => owed += 1,
-                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => return failed(),
                 }
-                // The sound as far as the pictures: silence for what did not come (all of it
-                // for a source without sound; half a second late for one with).
+                // The sound as far as the pictures: silence for what did not come (all of it for
+                // a source without sound; half a second late for one with — its own times, when
+                // it gives them, keep it closer).
                 let due = (frames as f64 * frame * f.rate as f64) as u64;
                 let slack = if f.silent { 0 } else { f.rate as u64 / 2 };
                 if samples + slack < due {
                     let n = due - samples;
                     samples += n;
+                    if !f.silent {
+                        said.silence_ms += n * 1000 / f.rate as u64;
+                    }
                     if atx.send(vec![0u8; n as usize * sample]).is_err() {
                         return failed();
                     }
                 }
             }
-            Got::Audio(data, rate, channels) => {
+            Got::Audio(mut data, rate, channels, time) => {
                 if f.silent {
                     // Sound after all: the recording starts again with it.
                     return End::FormatChanged(f.name());
                 }
                 if (rate, channels.min(16)) != (f.rate, f.channels) {
                     return End::FormatChanged(f.name());
+                }
+                // Where its time says it goes: a gap before it, silence; already written, cut.
+                if let (Some(t), Some((t0, n0))) = (time, anchor) {
+                    timed_sound = true;
+                    let at = ((n0 as f64 * frame + (t - t0) as f64 / 1e7) * f.rate as f64) as i64;
+                    let off = samples as i64 - at;
+                    if off < -tolerance && off > -(f.rate as i64 * 2) {
+                        let n = (-off) as u64;
+                        samples += n;
+                        said.silence_ms += n * 1000 / f.rate as u64;
+                        if atx.send(vec![0u8; n as usize * sample]).is_err() {
+                            return failed();
+                        }
+                    } else if off > tolerance && off < f.rate as i64 * 2 {
+                        let cut = (off as usize * sample).min(data.len());
+                        said.cut_ms += (cut / sample) as u64 * 1000 / f.rate as u64;
+                        data.drain(..cut);
+                    }
+                }
+                if data.is_empty() {
+                    continue;
                 }
                 samples += (data.len() / sample) as u64;
                 if atx.send(data).is_err() {
@@ -599,11 +659,37 @@ pub fn pump(r: Recording, video: PathBuf, audio: PathBuf, stop: Arc<AtomicBool>)
         }
         if last_report.elapsed() > Duration::from_secs(60) {
             last_report = Instant::now();
-            if repeated > 0 {
-                tracing::warn!("ndi {}: {repeated} picture(s) repeated in the last minute (not received, or the encoder could not keep up: the server is short of processor)", f.name());
-            }
-            repeated = 0;
+            let lag = samples as f64 / f.rate as f64 - frames as f64 * frame;
+            said.report(&f.name(), timed_sound, lag);
         }
+    }
+}
+
+/// What the pump had to do in the last minute, said in the journal.
+#[derive(Default)]
+struct Said {
+    /// Pictures that did not come (by the sender's times), the next one repeated for them.
+    missing: u64,
+    /// Pictures the encoder could not take in time (the server short of processor).
+    late: u64,
+    /// Pictures dropped: their time was already written.
+    dropped: u64,
+    /// The sender's clock started again.
+    anchored: u64,
+    /// Silence put for sound that did not come, and sound cut (already written), ms.
+    silence_ms: u64,
+    cut_ms: u64,
+}
+
+impl Said {
+    fn report(&mut self, name: &str, timed: bool, lag: f64) {
+        if self.missing + self.late + self.dropped + self.anchored + self.silence_ms + self.cut_ms > 0 {
+            tracing::warn!(
+                "ndi {name}: the last minute, {} picture(s) not received (repeated), {} the encoder could not take in time, {} dropped (early), {} restart(s) of the sender's clock; {} ms of silence put, {} ms of sound cut (sound {}; ahead of the pictures by {:.0} ms)",
+                self.missing, self.late, self.dropped, self.anchored, self.silence_ms, self.cut_ms, if timed { "placed by its times" } else { "without times" }, lag * 1000.0
+            );
+        }
+        *self = Said::default();
     }
 }
 

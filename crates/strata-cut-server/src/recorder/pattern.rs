@@ -165,12 +165,15 @@ pub fn args(data_dir: &Path, c: &RecorderConfig) -> Vec<String> {
     a.push(v);
     let br = c.bitrate.clamp(1.0, 200.0);
     a.extend(["-map", "[v]", "-map", "1:a", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p"].map(String::from));
-    a.extend(["-b:v".into(), format!("{br}M"), "-maxrate".into(), format!("{br}M"), "-bufsize".into(), format!("{}M", br * 2.0), "-g".into(), fps.to_string()]);
+    let kbps = (br * 1000.0).round() as u32;
+    a.extend(super::rate_args(kbps, c.cbr));
+    a.extend(["-g".into(), fps.to_string()]);
     if f.interlaced {
         a.extend(["-flags", "+ildct+ilme", "-top", "1"].map(String::from));
     }
     a.extend(["-c:a", "aac", "-b:a", "192k", "-ar", "48000"].map(String::from));
     a.extend(["-metadata".into(), format!("service_name={}", c.name.trim()), "-metadata".into(), "service_provider=Strata LiveCut".into()]);
+    a.extend(super::muxrate_args(kbps, 192, c.cbr));
     a.extend(["-f", "mpegts", "-muxdelay", "0", "pipe:1"].map(String::from));
     a
 }

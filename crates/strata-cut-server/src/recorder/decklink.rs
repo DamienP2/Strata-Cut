@@ -562,7 +562,9 @@ pub fn encoder_args(c: &RecorderConfig, m: &sdk::Mode, video: &Path, audio: &Pat
     // Picture: 4:2:0 H.264; interlacing kept (fields coded as fields, in the card's order).
     let top = m.field != sdk::LOWER_FIELD_FIRST;
     let vf = if m.interlaced() { format!("setfield={},format=yuv420p", if top { "tff" } else { "bff" }) } else { "format=yuv420p".to_string() };
-    a.extend(s(&["-map", "0:v", "-vf", &vf, "-c:v", "libx264", "-preset", "superfast", "-b:v", &format!("{kbps}k"), "-maxrate", &format!("{kbps}k"), "-bufsize", &format!("{kbps}k"), "-g", "25"]));
+    a.extend(s(&["-map", "0:v", "-vf", &vf, "-c:v", "libx264", "-preset", "superfast"]));
+    a.extend(super::rate_args(kbps, c.cbr));
+    a.extend(s(&["-g", "25"]));
     if m.interlaced() {
         a.extend(s(&["-flags", "+ildct+ilme", "-top", if top { "1" } else { "0" }]));
     }
@@ -573,6 +575,7 @@ pub fn encoder_args(c: &RecorderConfig, m: &sdk::Mode, video: &Path, audio: &Pat
         a.extend(s(&["-map", &format!("[a{k}]")]));
     }
     a.extend(s(&["-c:a", "aac", "-b:a", "192k", "-ar", "48000"]));
+    a.extend(super::muxrate_args(kbps, 192 * (n / 2).max(1), c.cbr));
     a.extend(s(&["-f", "mpegts", "-muxdelay", "0", "-y", &out.to_string_lossy()]));
     a
 }
@@ -963,6 +966,7 @@ mod tests {
             cookies: String::new(),
             loop_hours: 24,
             bitrate: 25.0,
+            cbr: false,
             enabled: true,
             device: 1,
             connection: "sdi".into(),
@@ -987,7 +991,10 @@ mod tests {
         assert!(line.contains("-f rawvideo -pix_fmt uyvy422 -video_size 1920x1080 -framerate 25000/1000 -i /d/capture/x.uyvy"), "{line}");
         assert!(line.contains("-f s32le -ar 48000 -ac 8 -i /d/capture/x.pcm"));
         assert!(line.contains("setfield=tff,format=yuv420p") && line.contains("-flags +ildct+ilme -top 1"));
-        assert!(line.contains("-b:v 25000k"));
+        // VBR by default: the quality kept, the bitrate a ceiling; CBR: exactly it, padded.
+        assert!(line.contains("-crf 20 -maxrate 25000k -bufsize 50000k") && !line.contains("-muxrate"), "{line}");
+        let cbr = encoder_args(&RecorderConfig { cbr: true, ..cfg() }, &hd(b"uppr"), Path::new("v"), Path::new("a"), Path::new("o")).join(" ");
+        assert!(cbr.contains("-b:v 25000k -minrate 25000k -maxrate 25000k -bufsize 25000k -x264-params nal-hrd=cbr") && cbr.contains("-muxrate "), "{cbr}");
         // 8 channels: 4 stereo tracks, the second one made of channels 3 and 4.
         assert!(line.contains("[1:a]pan=stereo|c0=c2|c1=c3[a1]"));
         assert_eq!(a.iter().filter(|x| x.starts_with("[a")).count(), 4);

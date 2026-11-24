@@ -135,6 +135,10 @@ pub struct RecorderConfig {
     /// Expected bitrate of the source, Mb/s (reserves the loop's space; 0 = unknown).
     #[serde(default)]
     pub bitrate: f64,
+    /// For a source the server encodes (a page, a pattern, NDI, DeckLink): a constant rate (CBR),
+    /// else a variable one (VBR: the quality kept, the bitrate a ceiling).
+    #[serde(default)]
+    pub cbr: bool,
     #[serde(default = "yes")]
     pub enabled: bool,
     /// DeckLink: the card (its number, from 0), its video input, the video format ("auto":
@@ -168,6 +172,26 @@ pub struct RecorderConfig {
 }
 
 /// Empty settings (to fill a few of them: a preview, a test).
+/// x264's rate control: VBR (the quality kept, `kbps` a ceiling) or CBR (exactly `kbps`, with the
+/// hypothetical decoder's buffer said in the stream).
+pub fn rate_args(kbps: u32, cbr: bool) -> Vec<String> {
+    let k = format!("{kbps}k");
+    if cbr {
+        ["-b:v", &k, "-minrate", &k, "-maxrate", &k, "-bufsize", &k, "-x264-params", "nal-hrd=cbr"].map(String::from).to_vec()
+    } else {
+        ["-crf", "20", "-maxrate", &k, "-bufsize", &format!("{}k", kbps * 2)].map(String::from).to_vec()
+    }
+}
+
+/// CBR: the MPEG-TS padded to a constant rate (the video, the sound, the stream's own overhead).
+pub fn muxrate_args(video_kbps: u32, audio_kbps: u32, cbr: bool) -> Vec<String> {
+    if !cbr {
+        return Vec::new();
+    }
+    let total = ((video_kbps + audio_kbps) as f64 * 1.08) as u32 + 100;
+    vec!["-muxrate".into(), format!("{total}k")]
+}
+
 pub fn blank_config() -> RecorderConfig {
     RecorderConfig {
         id: String::new(),
@@ -183,6 +207,7 @@ pub fn blank_config() -> RecorderConfig {
         cookies: String::new(),
         loop_hours: default_loop(),
         bitrate: 0.0,
+        cbr: false,
         enabled: false,
         device: 0,
         connection: auto(),
