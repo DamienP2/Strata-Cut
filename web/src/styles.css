@@ -1317,9 +1317,6 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .pg-input-name i { width: 7px; height: 7px; border-radius: 50%; background: var(--live); }
 .pg-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 38px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); font-weight: 600; font-size: 13px; cursor: pointer; }
 .pg-row .check { gap: 0; }
-.pg-live { margin-top: auto; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); white-space: nowrap; min-height: 30px; }
-.pg-live > i { width: 7px; height: 7px; border-radius: 50%; background: var(--live); flex: none; }
-.pg-live b { color: var(--text); }
 .pg-mixer { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
 .pg-mixer > header { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex: none; }
 .pg-strips { flex: 1; min-height: 0; display: flex; gap: 16px; }
@@ -1387,7 +1384,10 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .gal-add:hover:not(:disabled) { border-color: var(--text-3); color: var(--text-2); }
 .gal-add:disabled { cursor: default; opacity: 0.6; }
 .checker { background: repeating-conic-gradient(#2a2e40 0 25%, #1c1f2c 0 50%) 0 0 / 10px 10px !important; }
-.st-dests-panel { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.st-dests-panel { display: flex; flex-direction: column; gap: 8px; padding: 12px; min-height: 100%; }
+.st-dests-foot { position: sticky; bottom: -12px; margin: auto -12px -12px; padding: 10px 14px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); white-space: nowrap; background: var(--panel); border-top: 1px solid var(--line); }
+.st-dests-foot > i { width: 7px; height: 7px; border-radius: 50%; background: var(--live); flex: none; }
+.st-dests-foot b { color: var(--text); }
 .st-dests-head { display: flex; align-items: center; justify-content: space-between; min-height: 30px; padding: 0 2px; }
 .st-dests-head .label { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
 .st-cards { display: flex; flex-direction: column; gap: 8px; }

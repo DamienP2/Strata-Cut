@@ -162,7 +162,7 @@ export function ProgramLayer({ rec, prog, editable }: { rec: Recorder; prog: Pro
 }
 
 /** The two inputs, the fade, the overlay; the lives of the source. */
-export function Antenne({ rec, prog, live, kbps, onStopAll, onSettings }: { rec: Recorder; prog: ProgramApi; live: number; kbps: string; onStopAll: () => void; onSettings: () => void }) {
+export function Antenne({ rec, prog, onSettings }: { rec: Recorder; prog: ProgramApi; onSettings: () => void }) {
   const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -211,22 +211,6 @@ export function Antenne({ rec, prog, live, kbps, onStopAll, onSettings }: { rec:
           <span>{t("Overlay")}</span>
           <Switch checked={p.overlayOn && !!p.overlay} disabled={!run || !p.overlay} onChange={(on) => prog.overlayOn(on)} />
         </label>
-        <div className="pg-live">
-          {live > 0 ? (
-            <>
-              <i />
-              <span>
-                <b>{live}</b> {t("on air")} · <b>{kbps}</b>
-              </span>
-            </>
-          ) : null}
-          <span className="spacer" />
-          {run && live > 0 && (
-            <button type="button" className="btn" onClick={onStopAll}>
-              {t("Stop all")}
-            </button>
-          )}
-        </div>
       </div>
     </section>
   );

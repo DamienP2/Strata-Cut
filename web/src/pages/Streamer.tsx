@@ -64,15 +64,15 @@ export function Streamer({ source }: { source?: string }) {
           ) : null;
         }}
       />
-      {rec ? <Center key={rec.id} rec={rec} streams={streams.filter((s) => s.source === rec.id)} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
+      {rec ? <Center key={rec.id} rec={rec} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
       <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} streams={streams} failed={all.filter((s) => s.state === 'failed')} />}</aside>
     </section>
   );
 }
 
 /** The programme of the source: the picture as it goes out, what is on air, the sound. */
-function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
-  const { st, timezone, toast } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone, toast: s.toast })));
+function Center({ rec }: { rec: Recorder }) {
+  const { st, timezone } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone })));
   const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
   const prog = useProgram(rec.id);
   const video = useRef<HTMLVideoElement>(null);
@@ -151,13 +151,6 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
   useEffect(() => audio.out?.setChannels(solo !== null ? 'lr' : (pg?.channels ?? 'lr')), [audio.out, solo, pg?.channels]);
   const m = st?.media;
   const fps = fpsOf(m?.fpsNum, m?.fpsDen);
-  const stopAll = async () => {
-    try {
-      await api('POST', '/api/streams/stop', { source: rec.id });
-    } catch (e) {
-      toast(t((e as Error).message), 'error');
-    }
-  };
   return (
     <div className="sc-center pg-center">
       <div className="pg-top">
@@ -175,7 +168,7 @@ function Center({ rec, streams }: { rec: Recorder; streams: StreamInfo[] }) {
             </div>
           )}
         </div>
-        <Antenne rec={rec} prog={prog} live={streams.length} kbps={mbps(streams.reduce((a, s) => a + s.kbps, 0), locale())} onStopAll={() => void stopAll()} onSettings={() => setSettings(true)} />
+        <Antenne rec={rec} prog={prog} onSettings={() => setSettings(true)} />
       </div>
       <Mixer rec={rec} prog={prog} shown={() => shown.current} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, solo, setSolo, heard }} />
       {settings && createPortal(<SettingsModal rec={rec} prog={prog} onClose={() => setSettings(false)} />, document.body)}
@@ -224,6 +217,15 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
   const stop = async (d: Destination) => {
     try {
       await api('DELETE', `/api/streams/${d.id}`);
+    } catch (e) {
+      toast(t((e as Error).message), 'error');
+    }
+  };
+  // This source's lives: how many, their bitrate, all stopped at once.
+  const mine = streams.filter((s) => s.source === rec.id);
+  const stopAll = async () => {
+    try {
+      await api('POST', '/api/streams/stop', { source: rec.id });
     } catch (e) {
       toast(t((e as Error).message), 'error');
     }
@@ -350,6 +352,20 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
             );
           })}
       </div>
+      {mine.length > 0 && (
+        <footer className="st-dests-foot">
+          <i />
+          <span>
+            <b>{mine.length}</b> {t('on air')} · <b>{mbps(mine.reduce((a, s) => a + s.kbps, 0), locale())}</b>
+          </span>
+          <span className="spacer" />
+          {run && (
+            <button type="button" className="btn" onClick={() => void stopAll()}>
+              {t('Stop all')}
+            </button>
+          )}
+        </footer>
+      )}
     </section>
   );
 }
