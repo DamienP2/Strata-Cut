@@ -25,8 +25,8 @@ import { explainGuard } from '../ui/guard';
 import { confirmDialog } from '../ui/dialogs';
 import { SourceGroups } from '../ui/SourceGroups';
 import { usePageTools } from '../ui/PageTools';
-import { Mixer, ProgramLayer, SettingsModal, useProgram, type Tab } from './StreamerProgram';
-import { ControlBar, ReadyWindow, useNext } from './StreamerPass';
+import { Mixer, PicturesModal, ProgramLayer, useProgram, type Tab } from './StreamerProgram';
+import { OverlayEditor, PassBar, type Place } from './StreamerPass';
 
 /** A message of the server, translated: whole, or its known beginning and what follows (FFmpeg's words). */
 function said(m: string): string {
@@ -81,32 +81,43 @@ function Center({ rec }: { rec: Recorder }) {
   const audio = useAudioOut(video, 'streamer');
   const [wall, setWall] = useState<number | null>(null);
   const [settings, setSettings] = useState<Tab | null>(null);
-  const [next, setNext] = useNext(prog);
-  // Each passage (AUTO's button fills while its fade goes).
-  const [passing, setPassing] = useState(0);
-  const pass = (cut: boolean) => {
+  // Each passage (its AUTO fills while its fade goes).
+  const [passing, setPassing] = useState({ image: 0, overlay: 0 });
+  const overlayAt = (p: { x: number; y: number; size: number; overlayOn: boolean }) => ({ on: p.overlayOn, x: p.x, y: p.y, size: p.size });
+  // The image on air or taken off (the source back): CUT at once, AUTO by its fade.
+  const passImage = (cut: boolean) => {
     const p = prog.state?.program;
-    if (!p || !next || !run) return;
-    const same = (a: number, b: number) => Math.abs(a - b) < 1e-4;
-    if (next.image === p.imageOn && (!p.overlay || (same(next.overlay.x, p.x) && same(next.overlay.y, p.y) && same(next.overlay.size, p.size)))) return;
-    const was = p.imageOn;
-    // The overlay stays on or off as it is on air (its switch says that).
-    prog.pass({ ...next, overlay: { ...next.overlay, on: p.overlayOn } }, cut);
-    setPassing((n) => n + 1);
-    // What was on air comes back on the left: a second passage goes back.
-    setNext({ ...next, image: was });
+    if (!p || !run) return;
+    prog.pass({ image: !p.imageOn, overlay: overlayAt(p) }, cut ? 0 : p.fadeSecs);
+    setPassing((x) => ({ ...x, image: x.image + 1 }));
   };
-  const passRef = useRef(pass);
-  passRef.current = pass;
-  // Space: AUTO; Enter: CUT (not while writing, nor in a window, nor while piloting a page).
+  // The overlay on air or taken off, where it is placed.
+  const passOverlay = (cut: boolean) => {
+    const p = prog.state?.program;
+    if (!p || !run || !p.overlay) return;
+    prog.pass({ image: p.imageOn, overlay: { ...overlayAt(p), on: !p.overlayOn } }, cut ? 0 : (p.overlayFadeSecs ?? 1));
+    setPassing((x) => ({ ...x, overlay: x.overlay + 1 }));
+  };
+  // The overlay moved (on the window, or from its window): kept; on air, there at once.
+  const place = (at: Place) => {
+    const p = prog.state?.program;
+    if (!p || !run) return;
+    prog.pass({ image: p.imageOn, overlay: { on: p.overlayOn, ...at } }, 0);
+  };
+  const keysRef = useRef({ passImage, passOverlay });
+  keysRef.current = { passImage, passOverlay };
+  // Space: the image's AUTO; Enter: its CUT; H: the overlay's AUTO (not while writing, nor in a
+  // window, nor while piloting a page).
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if ((e.code !== 'Space' && e.key !== 'Enter') || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      const which = e.code === 'Space' ? 'auto' : e.key === 'Enter' ? 'cut' : e.key === 'h' || e.key === 'H' ? 'overlay' : null;
+      if (!which || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON', 'A'].includes(el.tagName))) return;
       if (document.querySelector('.modal-back')) return;
       e.preventDefault();
-      passRef.current(e.key === 'Enter');
+      if (which === 'overlay') keysRef.current.passOverlay(false);
+      else keysRef.current.passImage(which === 'cut');
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
@@ -186,20 +197,23 @@ function Center({ rec }: { rec: Recorder }) {
   return (
     <div className="sc-center pg-center">
       {page.bar && <div className="ps-bar">{page.bar}</div>}
-      <div className="ps-duo">
-        <div className="ps-col">{prog.state && next && <ReadyWindow rec={rec} prog={prog} next={next} setNext={setNext} video={video} received={received} editable={run} />}</div>
-        <div className="ps-col">
-          <div className="ps-win air">
-            <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
-            {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
-            {received && page.mode === 'view' && <ProgramLayer rec={rec} prog={prog} />}
-            {page.over}
-          </div>
+      <div className="ps-one">
+        <div className="ps-win air">
+          <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
+          {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
+          {received && page.mode === 'view' && <ProgramLayer rec={rec} prog={prog} />}
+          {page.mode === 'view' && <OverlayEditor prog={prog} editable={run} onPlace={place} />}
+          {page.over}
         </div>
+        {page.below ?? (
+          <div className="ps-tcrow">
+            <span className="pg-tc">{wall ? timecode(wall, fps, timezone) : '--:--:--:--'}</span>
+          </div>
+        )}
       </div>
-      {page.below ?? (prog.state && next && <ControlBar rec={rec} prog={prog} next={next} setNext={setNext} editable={run} passing={passing} onPass={pass} clock={wall ? timecode(wall, fps, timezone) : '--:--:--:--'} onSettings={setSettings} />)}
+      {!page.below && prog.state && <PassBar rec={rec} prog={prog} editable={run} passing={passing} onImage={passImage} onOverlay={passOverlay} onPictures={setSettings} />}
       <Mixer rec={rec} prog={prog} shown={() => shown.current} monitor={{ volume: audio.volume, setVolume: audio.setVolume, muted: audio.muted, setMuted: audio.setMuted, solo, setSolo, heard }} />
-      {settings && createPortal(<SettingsModal rec={rec} prog={prog} initial={settings} onClose={() => setSettings(null)} />, document.body)}
+      {settings && createPortal(<PicturesModal rec={rec} prog={prog} use={settings} onPlace={place} onClose={() => setSettings(null)} />, document.body)}
     </div>
   );
 }

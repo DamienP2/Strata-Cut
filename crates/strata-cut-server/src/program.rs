@@ -65,8 +65,10 @@ pub struct Program {
     pub image_on: bool,
     /// Kept for the settings written before CUT / AUTO (each passage now says which).
     pub fade_on: bool,
-    /// AUTO's fade, s.
+    /// The image's AUTO, s.
     pub fade_secs: f64,
+    /// The overlay's AUTO, s.
+    pub overlay_fade_secs: f64,
     /// The overlay (a PNG of the Streamer's overlays), and whether it is on air.
     pub overlay: Option<String>,
     pub overlay_on: bool,
@@ -91,6 +93,7 @@ impl Default for Program {
             image_on: false,
             fade_on: true,
             fade_secs: 1.0,
+            overlay_fade_secs: 1.0,
             overlay: None,
             overlay_on: false,
             x: 0.79,
@@ -110,11 +113,12 @@ impl Program {
             return Err("the channels are lr, l, r or mono".into());
         }
         let ok = |v: f64| v.is_finite();
-        if ![self.x, self.y, self.size, self.opacity, self.master, self.fade_secs].into_iter().all(ok) || self.tracks.iter().any(|t| !ok(t.gain)) {
+        if ![self.x, self.y, self.size, self.opacity, self.master, self.fade_secs, self.overlay_fade_secs].into_iter().all(ok) || self.tracks.iter().any(|t| !ok(t.gain)) {
             return Err("a value is not a number".into());
         }
         self.master = self.master.clamp(-40.0, 12.0);
         self.fade_secs = self.fade_secs.clamp(0.2, 5.0);
+        self.overlay_fade_secs = self.overlay_fade_secs.clamp(0.2, 5.0);
         self.x = self.x.clamp(0.0, 1.0);
         self.y = self.y.clamp(0.0, 1.0);
         self.size = self.size.clamp(2.0, 100.0);
@@ -625,6 +629,9 @@ struct Take {
     /// CUT: at once; else AUTO, by a fade of the programme's length.
     #[serde(default)]
     cut: bool,
+    /// The fade's length, s, when said (0: at once: an overlay moved on air).
+    #[serde(default)]
+    fade: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -648,7 +655,11 @@ async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
         p.normalize().map_err(bad)?;
     }
     if p != was {
-        let secs = if t.cut { 0.0 } else { p.fade_secs };
+        let secs = match t.fade {
+            Some(f) if f.is_finite() => f.clamp(0.0, 5.0),
+            _ if t.cut => 0.0,
+            _ => p.fade_secs,
+        };
         programs.put(&source, p.clone(), secs).map_err(bad)?;
         tracing::info!("{} passes {}{} on air for {}", me.username, if t.image { "the image" } else { "the source" }, if p.overlay_on { " and the overlay" } else { "" }, rec.config().name);
     }

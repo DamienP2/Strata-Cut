@@ -296,4 +296,9 @@ export const streaming: Record<string, string> = {
   'Variable (VBR)': 'Variable (VBR)',
   'Constant (CBR)': 'Constant (CBR)',
   'Audio bitrate': 'Débit audio',
+  'Taken off': 'Retiré',
+  Choose: 'Choisir',
+  Opacity: 'Opacité',
+  Centre: 'Recentrer',
+  'Original size': 'Taille d\'origine',
 };

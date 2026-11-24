@@ -21,8 +21,10 @@ export interface Program {
   image: string | null;
   imageOn: boolean;
   fadeOn: boolean;
-  /** AUTO's fade, s. */
+  /** The image's AUTO, s. */
   fadeSecs: number;
+  /** The overlay's AUTO, s. */
+  overlayFadeSecs?: number;
   overlay: string | null;
   overlayOn: boolean;
   /** The overlay's top left corner (shares of the picture) and width (% of it). */
@@ -81,14 +83,14 @@ export function useProgram(recId: string) {
       return { ...s, program };
     });
   };
-  /** What was made ready goes on air (the source or the image, the overlay): CUT at once, else AUTO (a fade). */
-  const pass = (next: Next, cut: boolean) => {
+  /** On air: the source or the image, the overlay (on or not, where), by a fade of `fade` s (0: at once). */
+  const pass = (next: Next, fade: number) => {
     if (!state) return;
     const p = state.program;
-    setLastFade(cut ? 0 : p.fadeSecs);
+    setLastFade(fade);
     const o = next.overlay;
     setState({ ...state, program: { ...p, imageOn: next.image, overlayOn: o.on && !!p.overlay, x: o.x, y: o.y, size: o.size } });
-    api("POST", `/api/program/${recId}/take`, { image: next.image, overlay: o, cut }).catch(fail);
+    api("POST", `/api/program/${recId}/take`, { image: next.image, overlay: o, fade }).catch(fail);
   };
   return { state, set, pass, lastFade };
 }
@@ -100,21 +102,15 @@ export interface Next {
   overlay: { on: boolean; x: number; y: number; size: number };
 }
 
-/** Over the source's picture: the image and the overlay, as they go out (with their fades). */
+/** Over the source's picture: the image, as it goes out (with its fade). */
 export function ProgramLayer({ rec, prog }: { rec: Recorder; prog: ProgramApi }) {
   if (!prog.state) return null;
   const p = prog.state.program;
-  const fade = `opacity ${prog.lastFade}s linear`;
   return (
     <div className="pg-layer">
-      <div className="pg-image" style={{ opacity: p.imageOn ? 1 : 0, transition: fade }}>
+      <div className="pg-image" style={{ opacity: p.imageOn ? 1 : 0, transition: `opacity ${prog.lastFade}s linear` }}>
         {p.image ? <img src={pictureUrl(p.image)} alt="" /> : <DefaultSlate name={rec.name} />}
       </div>
-      {p.overlay && (
-        <div className="pg-ovl" style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%`, width: `${p.size}%`, opacity: p.overlayOn ? p.opacity / 100 : 0, transition: fade }}>
-          <img src={pictureUrl(p.overlay)} alt="" draggable={false} />
-        </div>
-      )}
     </div>
   );
 }
@@ -411,9 +407,9 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
 export type Tab = "image" | "overlay";
 
 /** The source's pictures: its image, its overlay. */
-export function SettingsModal({ rec, prog, onClose, initial = "image" }: { rec: Recorder; prog: ProgramApi; onClose: () => void; initial?: Tab }) {
+export function PicturesModal({ rec, prog, use, onClose, onPlace }: { rec: Recorder; prog: ProgramApi; use: Tab; onClose: () => void; onPlace: (p: { x: number; y: number; size: number }) => void }) {
   const run = useApp((s) => can.has(s.auth?.user, "stream.run"));
-  const [tab, setTab] = useState<Tab>(initial);
+  const width = useApp((s) => s.status[rec.id]?.media?.width) || 1920;
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", key);
@@ -421,30 +417,48 @@ export function SettingsModal({ rec, prog, onClose, initial = "image" }: { rec: 
   }, [onClose]);
   if (!prog.state) return null;
   const p = prog.state.program;
-  const tabs: [Tab, string][] = [
-    ["image", t("Image")],
-    ["overlay", t("Overlay")],
-  ];
-  const fallback = { name: t("Default"), pic: <DefaultSlate name={rec.name} /> };
+  // The overlay at its own size (its pixels on the programme's), or in the middle.
+  const original = () => {
+    if (!p.overlay) return;
+    const i = new Image();
+    i.onload = () => {
+      const size = Math.min(100, Math.max(2, (i.naturalWidth / width) * 100));
+      onPlace({ x: Math.min(p.x, 1 - size / 100), y: p.y, size });
+    };
+    i.src = pictureUrl(p.overlay);
+  };
   return (
     <div className="modal-back" onPointerDown={onClose}>
       <div className="modal pg-settings" onPointerDown={(e) => e.stopPropagation()}>
         <header>
-          <h2>{t("Settings of “{name}”", { name: rec.name })}</h2>
+          <h2>{use === "image" ? t("Image") : t("Overlay")}</h2>
           <button type="button" className="icon-btn ghost" title={t("Close")} onClick={onClose}>
             <X size={16} />
           </button>
         </header>
-        <nav className="pg-tabs" role="tablist">
-          {tabs.map(([k, label]) => (
-            <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>
-              {label}
-            </button>
-          ))}
-        </nav>
         <div className="pg-settings-body">
-          {tab === "image" && <Gallery use="image" source={rec.id} chosen={p.image} onChoose={(image) => prog.set({ image })} fallback={fallback} disabled={!run} />}
-          {tab === "overlay" && <Gallery use="overlay" source={rec.id} chosen={p.overlay} onChoose={(overlay) => prog.set({ overlay, ...(overlay ? {} : { overlayOn: false }) })} fallback={{ name: tc("overlay", "None"), pic: null }} disabled={!run} />}
+          {use === "image" ? (
+            <Gallery use="image" source={rec.id} chosen={p.image} onChoose={(image) => prog.set({ image })} fallback={{ name: t("Default"), pic: <DefaultSlate name={rec.name} /> }} disabled={!run} />
+          ) : (
+            <>
+              <Gallery use="overlay" source={rec.id} chosen={p.overlay} onChoose={(overlay) => prog.set({ overlay, ...(overlay ? {} : { overlayOn: false }) })} fallback={{ name: tc("overlay", "None"), pic: null }} disabled={!run} />
+              {p.overlay && (
+                <div className="pg-ovl-set">
+                  <label>
+                    {t("Opacity")}
+                    <input type="range" min={10} max={100} value={p.opacity} disabled={!run} onChange={(e) => prog.set({ opacity: Number(e.target.value) })} />
+                    <b>{Math.round(p.opacity)} %</b>
+                  </label>
+                  <button type="button" className="btn small" disabled={!run} onClick={() => onPlace({ x: 0.5 - p.size / 200, y: p.y, size: p.size })}>
+                    {t("Centre")}
+                  </button>
+                  <button type="button" className="btn small" disabled={!run} onClick={original}>
+                    {t("Original size")}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
         </div>
         <footer>
           <button type="button" className="btn" onClick={onClose}>
