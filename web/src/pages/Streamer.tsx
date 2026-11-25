@@ -57,15 +57,7 @@ export function Streamer({ source }: { source?: string }) {
         kind="stream"
         current={id}
         base="/streamer"
-        badge={(r) => {
-          const n = streams.filter((s) => s.source === r.id).length;
-          return n > 0 ? (
-            <span className="sc-grp-air" data-tip={tn(n, 'Sent to {n} destination', 'Sent to {n} destinations')}>
-              <Radio size={12} />
-              {n}
-            </span>
-          ) : null;
-        }}
+        onAir={(r) => streams.filter((s) => s.source === r.id).length}
       />
       {rec ? <Center key={rec.id} rec={rec} /> : <div className="sc-center"><Empty icon={RadioTower} text={t('No recorder')} /></div>}
       <aside className="panel right st-panel">{rec && <DestPanel rec={rec} dests={dests} streams={streams} failed={all.filter((s) => s.state === 'failed')} />}</aside>
