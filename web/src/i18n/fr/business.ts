@@ -264,9 +264,7 @@ export const business: Record<string, string> = {
   'Hardware inputs': 'Entrées hardware',
   'From the IN again': 'Rejouer depuis le IN',
   'Extract the sound': 'Extraire le son',
-  'Extract the picture under the playhead': 'Extraire l’image sous la tête de lecture',
   'Extract the video': 'Extraire la vidéo',
-  'Preview the clip: from IN to OUT': 'Aperçu de l’extrait\u00a0: de IN à OUT',
   'Loop of {h} h': 'Boucle de {h} h',
   'Back to': 'Retour possible jusqu’au',
   'What the clip holds': 'Ce que contient l’extrait',
@@ -530,5 +528,4 @@ export const business: Record<string, string> = {
   'Extract anyway': 'Extraire quand même',
   'MP4 light': 'MP4 léger',
   'TS copy': 'TS copie',
-  'More than the free space of the clips': 'Plus que la place libre des extraits',
 };

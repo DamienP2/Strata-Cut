@@ -2,10 +2,10 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, Film, History, Play, PlayCircle, RadioTower, RotateCcw, Scissors, Upload, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, Film, History, Play, RadioTower, RotateCcw, Scissors, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { SourceGroups } from '../ui/SourceGroups';
-import { t, tn, locale } from '../i18n';
+import { t, locale } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer, type RunInfo } from '../player';
 import { ClipPreview } from './ClipPreview';
@@ -17,7 +17,7 @@ import type { Clip, Job, Recorder } from '../types';
 import { trackLabel } from '../audioLabel';
 import { Transport, useTransportKeys, type TransportActs } from '../ui/Transport';
 import { usePageTools } from '../ui/PageTools';
-import { ClipFormat, DEFAULT_FORMAT, FORMATS, sizeText, useClipsFree, weightOf, type ClipKind } from '../ui/ClipFormat';
+import { DEFAULT_FORMAT, ExtractChoices, FORMATS, sizeText, useClipsFree, weightOf, type ClipKind } from '../ui/ClipFormat';
 import { useSendTargets } from '../sends';
 import { confirmDialog } from '../ui/dialogs';
 import { showError } from '../ui/serverError';
@@ -376,14 +376,9 @@ function Editor({ rec }: { rec: Recorder }) {
     setHole(null);
     void pl.seekWall(wall);
   }, []);
-  /** The clip seen before it is made, in a window (the page's player paused meanwhile). */
-  const [previewing, setPreviewing] = useState(false);
-  const previewClip = () => {
-    if (!mIn || !mOut) return;
-    setLive(false);
-    p()?.halt();
-    setPreviewing(true);
-  };
+  /** The extraction's window: the clip seen as it will be, what to make of it (the page's player
+   * paused meanwhile). */
+  const [extracting, setExtracting] = useState(false);
 
   /** An in or out point dragged on the timeline: the frame there becomes it. */
   const markAt = useCallback((which: 'in' | 'out', wall: number) => {
@@ -541,7 +536,7 @@ function Editor({ rec }: { rec: Recorder }) {
       else if (k === 'o' && e.shiftKey) mOut && seekWall(mOut.wall);
       else if (k === 'l' && e.shiftKey) goLive();
       else if (k === 'backspace') clearMarks();
-      else if (k === 'enter') canCut && void cut();
+      else if (k === 'enter') canCut && openExtract();
       else if (k === 'i') markIn();
       else if (k === 'o') markOut();
       else return;
@@ -563,6 +558,9 @@ function Editor({ rec }: { rec: Recorder }) {
   const free = useClipsFree();
   const recSt = useApp((s) => s.status[rec.id]);
   const basis = { seconds: kind === 'image' ? 0 : frames / fps, bps: recSt?.bitrate || recSt?.measured || (rec.bitrate || 8) * 1e6, media: run?.media ?? recSt?.media ?? null };
+  const weight = weightOf(kind, format, basis, free);
+  /** The clip's name: as typed, else the source's and the moment's. */
+  const clipName = name.trim() || `${rec.name} ${timecode((kind === 'image' ? pos?.wall : mIn?.wall) ?? serverNow(), fps, timezone)}`;
   /** False: more than the free space, and not cut after all. */
   const fits = async () => {
     const f = FORMATS.find((x) => x.id === format && x.kind === kind);
@@ -570,30 +568,47 @@ function Editor({ rec }: { rec: Recorder }) {
     if (free === null || est[est.length - 1] <= free) return true;
     return confirmDialog({ title: t('This clip may not fit'), message: t('About {size} for {free} free on the disk of the clips.', { size: sizeText(est).replace('≈ ', ''), free: sizeText([free]).replace('≈ ', '') }), confirm: t('Extract anyway'), danger: true });
   };
-  const cut = async () => {
-    if (!(await fits())) return;
+  /** The clip asked for: true when its extraction started. */
+  const cut = async (): Promise<boolean> => {
+    if (!(await fits())) return false;
     // The picture under the playhead: no in or out needed (they stay).
     if (kind === 'image') {
-      if (!pos || hole || !pos.run) return;
+      if (!pos || hole || !pos.run) return false;
       try {
         await api('POST', '/api/clips', { recorder: rec.id, run: pos.run, t: pos.t, frames: 1, kind, format, sendTo, name: name.trim() || `${rec.name} ${timecode(pos.wall, fps, timezone)}` });
         setName('');
+        return true;
       } catch (e) {
         showError(e);
+        return false;
       }
-      return;
     }
-    if (!mIn || !mOut) return;
-    if (mIn.run !== mOut.run) return toast(t('The in and out points must be in the same recording'), 'error');
+    if (!mIn || !mOut) return false;
+    if (mIn.run !== mOut.run) {
+      toast(t('The in and out points must be in the same recording'), 'error');
+      return false;
+    }
     try {
       await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, format, sendTo, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
       // Extraction started: the marks are cleared for the next clip.
       setIn(null);
       setOut(null);
       setName('');
+      return true;
     } catch (e) {
       showError(e);
+      return false;
     }
+  };
+  /** The extraction's window opened (one button, one key: seen, then made). */
+  function openExtract() {
+    if (!canCut) return;
+    setLive(false);
+    p()?.halt();
+    setExtracting(true);
+  }
+  const extractNow = async () => {
+    if (canCut && (await cut())) setExtracting(false);
   };
 
   const typed = (text: string, set: (m: Mark | null) => void) => {
@@ -709,19 +724,13 @@ function Editor({ rec }: { rec: Recorder }) {
           <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>
             <Eraser size={18} />
           </button>
-          <button className="ctl sc-preview" data-tip={t('Preview the clip: from IN to OUT')} disabled={kind === 'image' || frames === 0} onClick={previewClip}>
-            <PlayCircle size={18} />
-          </button>
           {can.extract(user) && (
             <ExtractButton
               jobs={myJobs}
               recId={rec.id}
               canCut={canCut}
-              onCut={() => void cut()}
+              onCut={openExtract}
               kind={kind}
-              top={<ClipFormat kind={kind} value={format} onChange={(id) => setFormats((f) => ({ ...f, [kind]: id }))} basis={basis} disabled={!canCut} places={places ?? []} sendTo={sendTo} onSendTo={setSendTo} />}
-              sends={sendTo.length}
-              weight={weightOf(kind, format, basis, free)}
             />
           )}
         </div>
@@ -729,8 +738,52 @@ function Editor({ rec }: { rec: Recorder }) {
       {/* The timeline takes the whole width, under the panels. */}
       <Timeline rec={rec} pos={pos} playing={playing} fps={fps} span={span} setSpan={setSpan} spans={spans} clips={clips} mIn={mIn} mOut={mOut} onSeek={seekWall} onMarkAt={markAt} timezone={timezone} guide={guide} onProgramme={(g) => void markProgramme(g)} />
 
-      {previewing && mIn && mOut && (
-        <ClipPreview recId={rec.id} name={name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}`} from={mIn} to={mOut} fps={fps} timezone={timezone} sound={kind === 'audio'} onClose={() => setPreviewing(false)} />
+      {extracting && (kind === 'image' ? pos : mIn && mOut) && (
+        <ClipPreview
+          recId={rec.id}
+          name={clipName}
+          title={kind === 'audio' ? t('Extract the sound') : kind === 'image' ? t('Extract the picture') : t('Extract the video')}
+          from={kind === 'image' ? pos! : mIn!}
+          to={kind === 'image' ? pos! : mOut!}
+          fps={fps}
+          timezone={timezone}
+          sound={kind === 'audio'}
+          still={kind === 'image'}
+          onEnter={() => void extractNow()}
+          onClose={() => setExtracting(false)}
+          side={
+            <ExtractChoices
+              name={name}
+              placeholder={clipName}
+              onName={setName}
+              kind={kind}
+              onKind={setKind}
+              format={format}
+              onFormat={(id) => setFormats((f) => ({ ...f, [kind]: id }))}
+              basis={basis}
+              places={places ?? []}
+              source={rec.id}
+              sendTo={sendTo}
+              onSendTo={setSendTo}
+            />
+          }
+          foot={
+            <>
+              <span className={`sc-xm-w ${weight.over ? 'over' : ''}`}>{weight.text}</span>
+              {free !== null && <span className="muted">· {t('{size} free', { size: sizeText([free]).replace('≈ ', '') })}</span>}
+              <div className="spacer" />
+              <span className="muted sc-xm-key">
+                <kbd>⏎</kbd> {t('extract')}
+              </span>
+              <button type="button" className="btn" onClick={() => setExtracting(false)}>
+                {t('Cancel')}
+              </button>
+              <button type="button" className="btn primary" disabled={!canCut} onClick={() => void extractNow()}>
+                <Scissors size={14} /> {t('Extract')}
+              </button>
+            </>
+          }
+        />
       )}
       <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={can.has(user, 'schedule.edit')} act={act} />
     </>
@@ -940,8 +993,9 @@ function MarkTag({ kind, mark, fps, timezone, onType, onClear, onMark }: { kind:
  * clip ready: play it in Clips, download it, put it away). A click extracts the marks (queued
  * after the others); without marks, it opens the bubble.
  */
-/** The extraction button, on two floors: the format (`top`) over the action and the clip's weight; while clips are made, their progress. */
-function ExtractButton({ jobs, recId, canCut, onCut, kind, top, weight, sends }: { jobs: Job[]; recId: string; canCut: boolean; onCut: () => void; kind: 'video' | 'audio' | 'image'; top: React.ReactNode; weight: { text: string; over: boolean }; sends: number }) {
+/** The extraction button: it opens the extraction's window (the clip seen, its format, where it
+ * goes); while clips are made, their progress. */
+function ExtractButton({ jobs, recId, canCut, onCut, kind }: { jobs: Job[]; recId: string; canCut: boolean; onCut: () => void; kind: 'video' | 'audio' | 'image' }) {
   const [open, setOpen] = useState(false);
   const closing = useRef(0);
   // When each job was first seen running and how far: the time left from its pace.
@@ -982,11 +1036,10 @@ function ExtractButton({ jobs, recId, canCut, onCut, kind, top, weight, sends }:
     return secs < 60 ? t('{n} s left', { n: Math.max(1, Math.round(secs)) }) : t('{n} min left', { n: Math.round(secs / 60) });
   };
   return (
-    <div className={`sc-xwrap two k-${kind} ${weight.over && !busy ? 'over' : ''}`} onMouseEnter={show} onMouseLeave={hide}>
-      {top}
+    <div className={`sc-xwrap k-${kind}`} onMouseEnter={show} onMouseLeave={hide}>
       <button
         className={`ctl primary sc-xbtn kind-${kind} ${busy ? 'busy' : ''}`}
-        data-tip={busy ? undefined : kind === 'audio' ? t('Extract the sound') : kind === 'image' ? t('Extract the picture under the playhead') : t('Extract the video')}
+        data-tip={busy ? undefined : t('See the clip, choose its format and where it goes, extract it')}
         data-keys={busy ? undefined : '⏎'}
         disabled={!canCut && list.length === 0}
         onClick={() => (canCut ? onCut() : setOpen((o) => !o))}
@@ -1002,13 +1055,7 @@ function ExtractButton({ jobs, recId, canCut, onCut, kind, top, weight, sends }:
         ) : (
           <>
             <Scissors size={15} />
-            <span className="sc-xkind">{t('Extract')}</span>
-            {weight.text && <span className="sc-xw" data-tip={weight.over ? t('More than the free space of the clips') : undefined}>{weight.text}</span>}
-            {sends > 0 && (
-              <span className="sc-xs" data-tip={tn(sends, 'Then sent to {n} place', 'Then sent to {n} places')}>
-                <Upload size={12} /> {sends}
-              </span>
-            )}
+            <span className="sc-xkind">{t('Extract…')}</span>
             {ready > 0 && <span className="sc-xready" />}
           </>
         )}

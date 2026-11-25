@@ -908,7 +908,7 @@ pub fn routes() -> Router<Shared> {
 }
 
 /// For an admin: every place (passwords masked), with its last result; for the others: those
-/// they may send to (their name, kind, where).
+/// they may send to, and those clips go to by themselves (their name, kind, where).
 async fn list_targets(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<Value> {
     let all = s.sends.targets.lock().unwrap().clone();
     // Each place's last send ended: (when, ok, what it said).
@@ -925,6 +925,7 @@ async fn list_targets(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> 
             all.iter()
                 .map(|t| {
                     let mut v = t.public();
+                    v["usable"] = json!(true);
                     if let Some((at, ok, said)) = last.get(&t.id) {
                         v["last"] = json!({ "at": at, "ok": ok, "message": said });
                     }
@@ -934,7 +935,13 @@ async fn list_targets(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> 
         ));
     }
     let groups = crate::groups::of(&s, &me.id);
-    Json(Value::Array(all.iter().filter(|t| t.usable_by(&me, &groups)).map(|t| json!({ "id": t.id, "name": t.name, "kind": t.kind, "folder": t.folder })).collect()))
+    // Those it may send to, and those clips go to by themselves (shown, not chosen).
+    Json(Value::Array(
+        all.iter()
+            .filter(|t| t.auto || t.usable_by(&me, &groups))
+            .map(|t| json!({ "id": t.id, "name": t.name, "kind": t.kind, "folder": t.folder, "auto": t.auto, "sources": t.sources, "usable": t.usable_by(&me, &groups) }))
+            .collect(),
+    ))
 }
 
 /// The saved password kept when the form sends it masked, for the same server and account only.

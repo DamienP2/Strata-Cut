@@ -79,6 +79,8 @@ export function Meters({ out }: { out: AudioOut | null }) {
       const dpr = devicePixelRatio || 1;
       const w = c.clientWidth;
       const h = c.clientHeight;
+      // Not shown (hidden, or not laid out yet): nothing to draw on.
+      if (!w || !h) return;
       const key = `${w}x${h}@${dpr}`;
       const state = `${key}|${level.map((v) => v.toFixed(1))}|${hold.map((v) => v.toFixed(1))}`;
       if (state === shown) return;

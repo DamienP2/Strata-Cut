@@ -32,6 +32,7 @@ export interface SendTarget {
   address?: string;
   /** Read only: its last send. */
   last?: { at: number; ok: boolean; message: string };
+  usable: boolean;
 }
 
 /** A place, as anyone who may send there sees it. */
@@ -40,7 +41,15 @@ export interface UsableTarget {
   name: string;
   kind: SendKind;
   folder: string;
+  /** Every new clip goes there by itself (of `sources`; none: of all). */
+  auto: boolean;
+  sources: string[];
+  /** This account may send there when it wants. */
+  usable: boolean;
 }
+
+/** Do the clips of this source go there by themselves? */
+export const autoFor = (p: UsableTarget, source: string) => p.auto && (p.sources.length === 0 || p.sources.includes(source));
 
 export interface SendJob {
   id: string;
@@ -64,7 +73,7 @@ export interface SendJob {
 export const KIND_TAG: Record<SendKind, string> = { smb: 'SMB', sftp: 'SFTP', ftp: 'FTP', webdav: 'DAV', dir: 'DIR' };
 
 export function blankTarget(): SendTarget {
-  return { id: '', name: '', kind: 'smb', host: '', port: 0, share: '', path: '', user: '', password: '', tls: 'explicit', folder: '{source}/{date}', exists: 'rename', auto: false, sources: [], who: 'extract', groups: [] };
+  return { id: '', name: '', kind: 'smb', host: '', port: 0, share: '', path: '', user: '', password: '', tls: 'explicit', folder: '{source}/{date}', exists: 'rename', auto: false, sources: [], who: 'extract', groups: [], usable: true };
 }
 
 /** The places this account may send to (an admin: all, set as they are). */

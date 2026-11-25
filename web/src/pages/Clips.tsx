@@ -60,7 +60,9 @@ export function Clips() {
   /** The clips ticked, for actions on several at once. */
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const admin = can.admin(user);
-  const [targets] = useSendTargets();
+  const [allTargets] = useSendTargets();
+  // The places this account may send to (not those it only sees as automatic).
+  const targets = allTargets?.filter((x) => x.usable) ?? null;
   const sends = useSends();
   const load = useCallback(async () => {
     try {

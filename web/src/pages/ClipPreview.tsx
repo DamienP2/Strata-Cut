@@ -1,8 +1,10 @@
 /*
  * Extraction: the clip seen before it is made, in a window: played from its IN to its OUT
- * (stopped on the OUT), as it will be — the picture with its sound, or the sound alone.
+ * (stopped on the OUT), as it will be — the picture with its sound, or the sound alone; a picture
+ * alone (`still`): that frame. Beside it (`side`), what to make of it; under it (`foot`), the
+ * extraction (⏎).
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AudioLines, RotateCcw, X } from 'lucide-react';
 import { serverNow } from '../store';
 import { t } from '../i18n';
@@ -15,7 +17,7 @@ interface Point {
   wall: number;
 }
 
-export function ClipPreview({ recId, name, from, to, fps, timezone, sound, onClose }: { recId: string; name: string; from: Point; to: Point; fps: number; timezone: string; sound: boolean; onClose: () => void }) {
+export function ClipPreview({ recId, name, from, to, fps, timezone, sound, still, title, side, foot, onEnter, onClose }: { recId: string; name: string; from: Point; to: Point; fps: number; timezone: string; sound: boolean; still?: boolean; title?: string; side?: ReactNode; foot?: ReactNode; onEnter?: () => void; onClose: () => void }) {
   const video = useRef<HTMLVideoElement>(null);
   const player = useRef<LoopPlayer | null>(null);
   const audio = useAudioOut(video, 'extract');
@@ -42,14 +44,14 @@ export function ClipPreview({ recId, name, from, to, fps, timezone, sound, onClo
     const onPause = () => setPlaying(p.playing);
     v.addEventListener('play', onPlay);
     v.addEventListener('pause', onPause);
-    void p.seekWall(from.wall, true);
+    void p.seekWall(from.wall, !still);
     return () => {
       v.removeEventListener('play', onPlay);
       v.removeEventListener('pause', onPause);
       p.destroy();
       player.current = null;
     };
-  }, [recId, from.wall, to.wall]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [recId, from.wall, to.wall, still]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const replay = () => {
     setRate(1);
@@ -96,11 +98,19 @@ export function ClipPreview({ recId, name, from, to, fps, timezone, sound, onClo
     toOut: () => go(to.wall),
     mute: () => audio.setMuted(!audio.muted),
   };
-  useTransportKeys(acts, { rate, playing }, true, true);
-  // Escape: closed.
+  useTransportKeys(acts, { rate, playing }, !still, true);
+  // Escape: closed; Enter: extracted (its name being typed too).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // (Not on the window's own buttons: Cancel, Close do what they say.)
+      if (e.key === 'Enter' && onEnter && !e.repeat && !(e.target as HTMLElement).closest('textarea, header button, .sc-xmodal-foot button')) {
+        e.preventDefault();
+        e.stopPropagation();
+        onEnter();
+        return;
+      }
       if (e.key !== 'Escape') return;
+      if (document.querySelectorAll('.modal-back').length > 1) return; // a question over it: that one
       e.preventDefault();
       e.stopPropagation();
       onClose();
@@ -118,28 +128,19 @@ export function ClipPreview({ recId, name, from, to, fps, timezone, sound, onClo
   const done = Math.min(1, Math.max(0, (at - from.wall) / length));
   const frames = Math.round(((end - from.wall) / 1000) * fps);
   const elapsed = Math.round(((Math.min(at, end) - from.wall) / 1000) * fps);
-  return (
-    <div className="modal-back" onPointerDown={onClose}>
-      <div className="modal sc-clip-modal sc-preview-modal" role="dialog" aria-labelledby="preview-title" onPointerDown={(e) => e.stopPropagation()}>
-        <header>
-          <h2 id="preview-title">
-            {t('Preview')} · {name}
-          </h2>
-          <span className={`sc-kind-tag ${sound ? 'audio' : 'video'}`}>{sound ? t('Sound') : t('Video')}</span>
-          <button type="button" className="icon-btn ghost" title={t('Close')} onClick={onClose}>
-            <X size={16} />
-          </button>
-        </header>
-        <div className="sc-clip-view" onClick={toggle}>
-          <video ref={video} className="sc-video" playsInline />
-          {sound && (
-            <span className="sc-clip-sound solid">
-              <AudioLines size={56} strokeWidth={1.5} />
-            </span>
-          )}
-          <Meters out={audio.out} />
-        </div>
-        {/* The playhead: dragged, or a click, goes there. */}
+  const player_ = (
+    <>
+      <div className="sc-clip-view" onClick={still ? undefined : toggle}>
+        <video ref={video} className="sc-video" playsInline />
+        {sound && (
+          <span className="sc-clip-sound solid">
+            <AudioLines size={56} strokeWidth={1.5} />
+          </span>
+        )}
+        {!still && <Meters out={audio.out} />}
+      </div>
+      {!still && (
+        /* The playhead: dragged, or a click, goes there. */
         <div
           className="sc-scrub"
           role="slider"
@@ -163,19 +164,45 @@ export function ClipPreview({ recId, name, from, to, fps, timezone, sound, onClo
           <span className="sc-scrub-done" style={{ width: `${done * 100}%` }} />
           <span className="sc-scrub-head" style={{ left: `${done * 100}%` }} />
         </div>
-        <div className="sc-clip-bar">
-          <div className="sc-tc-big">{timecode(Math.min(at, to.wall), fps, timezone)}</div>
-          <span className="muted sc-clip-time">
-            {duration(elapsed, fps)} / {duration(frames, fps)}
-          </span>
-          <div className="spacer" />
-          <Transport acts={acts} rate={rate} playing={playing} hasIn hasOut />
-          <button className="ctl" data-tip={t('From the IN again')} onClick={replay}>
-            <RotateCcw size={17} />
+      )}
+      <div className="sc-clip-bar">
+        <div className="sc-tc-big">{timecode(Math.min(at, to.wall), fps, timezone)}</div>
+        {!still && (
+          <>
+            <span className="muted sc-clip-time">
+              {duration(elapsed, fps)} / {duration(frames, fps)}
+            </span>
+            <div className="spacer" />
+            <Transport acts={acts} rate={rate} playing={playing} hasIn hasOut />
+            <button className="ctl" data-tip={t('From the IN again')} onClick={replay}>
+              <RotateCcw size={17} />
+            </button>
+            <div className="spacer" />
+            <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
+          </>
+        )}
+      </div>
+    </>
+  );
+  return (
+    <div className="modal-back" onPointerDown={onClose}>
+      <div className={`modal sc-clip-modal sc-preview-modal ${side ? 'sc-xmodal' : ''}`} role="dialog" aria-labelledby="preview-title" onPointerDown={(e) => e.stopPropagation()}>
+        <header>
+          <h2 id="preview-title">{title ?? `${t('Preview')} · ${name}`}</h2>
+          {!side && <span className={`sc-kind-tag ${sound ? 'audio' : 'video'}`}>{sound ? t('Sound') : t('Video')}</span>}
+          <button type="button" className="icon-btn ghost" title={t('Close')} onClick={onClose}>
+            <X size={16} />
           </button>
-          <div className="spacer" />
-          <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
-        </div>
+        </header>
+        {side ? (
+          <div className="sc-xmodal-body">
+            <div className="sc-xmodal-view">{player_}</div>
+            <div className="sc-xmodal-side">{side}</div>
+          </div>
+        ) : (
+          player_
+        )}
+        {foot && <footer className="sc-xmodal-foot">{foot}</footer>}
       </div>
     </div>
   );

@@ -1,10 +1,10 @@
 /*
  * Extraction: the format a clip is made in (by its kind: video, sound or picture), each with its
- * weight for the clip as it is marked; the one chosen in the extraction's button, in orange
- * when it would not fit in the space the clips have left.
+ * weight for the clip as it is marked; chosen in the extraction's window, with where it goes.
  */
-import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { AudioLines, Camera, Check, Film } from 'lucide-react';
+import { autoFor, KIND_TAG, type UsableTarget } from '../sends';
 import { api } from '../store';
 import { lang, locale, t } from '../i18n';
 import { volume } from '../streams';
@@ -88,64 +88,84 @@ export function weightOf(kind: ClipKind, value: string, basis: Basis, free: numb
   return { text: kind === 'image' || basis.seconds > 0 ? sizeText(est) : '', over: free !== null && est[est.length - 1] > free };
 }
 
-/** The extraction button's left part: the chosen format, a click opens the formats (each with its weight); as the button, only when there is something to extract. */
-export function ClipFormat({ kind, value, onChange, basis, disabled, places, sendTo, onSendTo }: { kind: ClipKind; value: string; onChange: (id: string) => void; basis: Basis; disabled?: boolean; places?: { id: string; name: string }[]; sendTo?: string[]; onSendTo?: (ids: string[]) => void }) {
-  const [open, setOpen] = useState(false);
-  // Nothing to extract: closed.
-  useEffect(() => {
-    if (disabled) setOpen(false);
-  }, [disabled]);
-  const box = useRef<HTMLSpanElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: PointerEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
-    window.addEventListener('pointerdown', away);
-    return () => window.removeEventListener('pointerdown', away);
-  }, [open]);
+/** The extraction window's choices: the clip's name, its kind, its format (each with its weight),
+ * where it goes (Extraits always; the places chosen; those it goes to by itself, shown). */
+export function ExtractChoices(props: {
+  name: string;
+  placeholder: string;
+  onName: (v: string) => void;
+  kind: ClipKind;
+  onKind: (k: ClipKind) => void;
+  format: string;
+  onFormat: (id: string) => void;
+  basis: Basis;
+  places: UsableTarget[];
+  source: string;
+  sendTo: string[];
+  onSendTo: (ids: string[]) => void;
+}) {
+  const { kind, basis, places, source, sendTo } = props;
   const list = FORMATS.filter((f) => f.kind === kind);
-  const cur = list.find((f) => f.id === value) ?? list[0];
+  const cur = list.find((f) => f.id === props.format) ?? list[0];
+  const shown = places.filter((p) => p.usable || autoFor(p, source));
+  const kinds: [ClipKind, ReactNode, string][] = [
+    ['video', <Film key="v" size={13} />, t('Video')],
+    ['audio', <AudioLines key="a" size={13} />, t('Sound')],
+    ['image', <Camera key="i" size={13} />, t('Image')],
+  ];
   return (
-    <span className="cf" ref={box}>
-      <button type="button" className="cf-btn" disabled={disabled} aria-haspopup="listbox" aria-expanded={open} data-tip={open ? undefined : t(cur.name)} onClick={() => setOpen((o) => !o)}>
-        <span>{t(cur.short)}</span>
-        <ChevronDown size={11} />
-      </button>
-      {open && (
-        <div className="cf-menu" role="listbox">
+    <div className="xc">
+      <label className="xc-field">
+        <span className="xc-lab">{t('Name')}</span>
+        <input value={props.name} placeholder={props.placeholder} onChange={(e) => props.onName(e.target.value)} />
+      </label>
+      <div className="xc-field">
+        <span className="xc-lab">{t('Type')}</span>
+        <div className="segmented xc-kinds" role="radiogroup">
+          {kinds.map(([k, icon, label]) => (
+            <button key={k} type="button" role="radio" aria-checked={kind === k} className={kind === k ? 'on' : ''} onClick={() => props.onKind(k)}>
+              {icon} {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="xc-field">
+        <span className="xc-lab">{t('Format')}</span>
+        <div className="xc-list" role="radiogroup">
           {list.map((f) => (
-            <button
-              key={f.id}
-              type="button"
-              role="option"
-              aria-selected={f.id === cur.id}
-              className={f.id === cur.id ? 'on' : ''}
-              onClick={() => {
-                onChange(f.id);
-                setOpen(false);
-              }}
-            >
+            <button key={f.id} type="button" role="radio" aria-checked={f.id === cur.id} className={`xc-fmt ${f.id === cur.id ? 'on' : ''}`} onClick={() => props.onFormat(f.id)}>
+              <span className="xc-dot" />
               <b>{t(f.name)}</b>
               <small>{t(f.detail)}</small>
               <em>{kind === 'image' || basis.seconds > 0 ? sizeText(f.size(basis)) : ''}</em>
             </button>
           ))}
-          {places && places.length > 0 && onSendTo && (
-            <>
-              <h6 className="cf-then-t">{t('Then send to')}</h6>
-              <div className="cf-then">
-                {places.map((p) => {
-                  const on = !!sendTo?.includes(p.id);
-                  return (
-                    <button key={p.id} type="button" role="checkbox" aria-checked={on} className={on ? 'on' : ''} onClick={() => onSendTo(on ? (sendTo ?? []).filter((x) => x !== p.id) : [...(sendTo ?? []), p.id])}>
-                      {on && <Check size={12} />} {p.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          )}
         </div>
-      )}
-    </span>
+      </div>
+      <div className="xc-field">
+        <span className="xc-lab">{t('Send to')}</span>
+        <div className="xc-list">
+          <span className="xc-dst on lock">
+            <span className="xc-cb">
+              <Check size={11} />
+            </span>
+            <b>{t('Clips')}</b>
+            <small>{t('always')}</small>
+          </span>
+          {shown.map((p) => {
+            const auto = autoFor(p, source);
+            const on = auto || sendTo.includes(p.id);
+            return (
+              <button key={p.id} type="button" role="checkbox" aria-checked={on} disabled={auto} className={`xc-dst ${on ? 'on' : ''} ${auto ? 'lock' : ''}`} data-tip={auto ? t('Every clip of this source goes there by itself') : undefined} onClick={() => props.onSendTo(on ? sendTo.filter((x) => x !== p.id) : [...sendTo, p.id])}>
+                <span className="xc-cb">{on && <Check size={11} />}</span>
+                <span className="io-proto small">{KIND_TAG[p.kind]}</span>
+                <b>{p.name}</b>
+                <small>{auto ? t('automatic') : p.folder}</small>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
