@@ -41,6 +41,8 @@ export interface UsableTarget {
   name: string;
   kind: SendKind;
   folder: string;
+  /** The folder on the server the sub-folder is made under. */
+  base?: string;
   /** Every new clip goes there by itself (of `sources`; none: of all). */
   auto: boolean;
   sources: string[];
@@ -49,6 +51,28 @@ export interface UsableTarget {
 }
 
 /** Do the clips of this source go there by themselves? */
+/** A folder name as the server makes it: no character a file name refuses, no dots at the ends. */
+// eslint-disable-next-line no-control-regex
+const safe = (s: string) => s.replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/g, '-').trim().replace(/^\.+|\.+$/g, '').trim();
+const KIND_FOLDER = { video: 'Vidéo', audio: 'Son', image: 'Image' } as const;
+
+/** The folder a clip made now goes to there, its tokens replaced (as the server does). */
+export function whereIn(p: Pick<UsableTarget, 'base' | 'folder'>, v: { source: string; kind: keyof typeof KIND_FOLDER; user: string; timezone: string; now: number }): string {
+  let date = '';
+  try {
+    date = new Intl.DateTimeFormat('en-CA', { timeZone: v.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(v.now);
+  } catch {
+    date = new Date(v.now).toISOString().slice(0, 10);
+  }
+  const values: [string, string][] = [['{source}', v.source], ['{date}', date], ['{kind}', KIND_FOLDER[v.kind]], ['{user}', v.user]];
+  const sub = p.folder
+    .split(/[/\\]/)
+    .map((part) => safe(values.reduce((acc, [k, x]) => acc.split(k).join(safe(x)), part)))
+    .filter((x) => x && x !== '.' && x !== '..');
+  const base = (p.base ?? '').replace(/[/\\]+$/, '');
+  return [base, ...sub].filter(Boolean).join('/') || '/';
+}
+
 export const autoFor = (p: UsableTarget, source: string) => p.auto && (p.sources.length === 0 || p.sources.includes(source));
 
 export interface SendJob {

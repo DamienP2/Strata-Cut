@@ -1553,6 +1553,7 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .xc-dst.lock { cursor: default; opacity: 0.75; }
 .xc-dst b { font-size: 13px; white-space: nowrap; }
 .xc-dst small { margin-left: auto; color: var(--text-3); font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.xc-dst small.xc-path { direction: rtl; text-align: right; }
 .xc-cb { width: 15px; height: 15px; flex: none; border-radius: 4px; border: 1.5px solid var(--line-2); display: grid; place-items: center; color: var(--on-accent); }
 .xc-dst.on .xc-cb { background: var(--accent); border-color: var(--accent); }
 @media (max-width: 900px) { .sc-xmodal-body { grid-template-columns: 1fr; } .sc-xmodal-side { max-height: none; } }

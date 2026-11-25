@@ -179,6 +179,16 @@ impl Target {
         }
     }
 
+    /// The folder clips go under on the server (its sub-folder added to it): shown in the extraction window.
+    fn base(&self) -> String {
+        let path = self.path.trim_matches(['/', '\\']);
+        match self.kind.as_str() {
+            "dir" => self.path.trim_end_matches(['/', '\\']).to_string(),
+            "smb" => [self.share.trim_matches(['/', '\\']), path].iter().filter(|p| !p.is_empty()).copied().collect::<Vec<_>>().join("/"),
+            _ => format!("/{path}"),
+        }
+    }
+
     /// For the admins: the password masked.
     fn public(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap_or_default();
@@ -186,6 +196,7 @@ impl Target {
             v["password"] = json!(MASKED);
         }
         v["address"] = json!(self.address());
+        v["base"] = json!(self.base());
         v
     }
 
@@ -1067,7 +1078,7 @@ async fn list_targets(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> 
     Json(Value::Array(
         all.iter()
             .filter(|t| t.auto || t.usable_by(&me, &groups))
-            .map(|t| json!({ "id": t.id, "name": t.name, "kind": t.kind, "folder": t.folder, "auto": t.auto, "sources": t.sources, "usable": t.usable_by(&me, &groups) }))
+            .map(|t| json!({ "id": t.id, "name": t.name, "kind": t.kind, "folder": t.folder, "base": t.base(), "auto": t.auto, "sources": t.sources, "usable": t.usable_by(&me, &groups) }))
             .collect(),
     ))
 }

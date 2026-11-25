@@ -4,8 +4,10 @@
  */
 import { useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
-import { autoFor, type UsableTarget } from '../sends';
-import { api } from '../store';
+import { useShallow } from 'zustand/react/shallow';
+import { autoFor, whereIn, type UsableTarget } from '../sends';
+import { displayName } from './UserMenu';
+import { api, serverNow, useApp } from '../store';
 import { lang, locale, t } from '../i18n';
 import { volume } from '../streams';
 import type { MediaInfo } from '../types';
@@ -108,6 +110,8 @@ export function ExtractChoices(props: {
   const list = FORMATS.filter((f) => f.kind === kind);
   const cur = list.find((f) => f.id === props.format) ?? list[0];
   const shown = places.filter((p) => p.usable || autoFor(p, source));
+  const { recorders, user, timezone } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, timezone: s.timezone })));
+  const where = { source: recorders.find((r) => r.id === source)?.name ?? '', kind, user: user ? displayName(user) : '', timezone, now: serverNow() };
   return (
     <div className="xc">
       <label className="xc-field">
@@ -138,7 +142,10 @@ export function ExtractChoices(props: {
               <button key={p.id} type="button" role="checkbox" aria-checked={on} disabled={auto} className={`xc-dst ${on ? 'on' : ''} ${auto ? 'lock' : ''}`} data-tip={auto ? t('Every clip of this source goes there by itself') : undefined} onClick={() => props.onSendTo(on ? sendTo.filter((x) => x !== p.id) : [...sendTo, p.id])}>
                 <span className="xc-cb">{on && <Check size={11} />}</span>
                 <b>{p.name}</b>
-                <small>{p.folder}</small>
+                {/* A long path loses its start, not its end. */}
+                <small className="xc-path" title={whereIn(p, where)}>
+                  <bdi>{whereIn(p, where)}</bdi>
+                </small>
               </button>
             );
           })}
