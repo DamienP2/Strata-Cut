@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { AudioLines, CalendarClock, Camera, Clapperboard, Film, Download, Globe2, Lock, Play, Search, Share2, Trash2, UsersRound, X } from 'lucide-react';
+import { AudioLines, CalendarClock, Camera, Check, Clapperboard, Film, Download, Globe2, Hourglass, Lock, Play, Search, Share2, Trash2, Upload, UsersRound, X } from 'lucide-react';
 import { api, can, useApp, useChanged } from '../store';
 import { lang, locale, t, tn } from '../i18n';
 import { confirmDialog } from '../ui/dialogs';
@@ -16,6 +16,9 @@ import type { Clip } from '../types';
 import { ClipPlayer } from './ClipPlayer';
 import { loadGroups, useGroups, type Group } from './Groups';
 import { showError } from '../ui/serverError';
+import { openContextMenu } from '../ui/ContextMenu';
+import { KIND_TAG, sendClips, sendStateText, useSends, useSendTargets, type SendJob } from '../sends';
+import { retrySend, SendsPanel } from '../ui/SendsPanel';
 
 /** "il y a 2 min", "il y a 3 h", else the date. */
 function ago(ms: number, now: number, tz: string): string {
@@ -57,6 +60,8 @@ export function Clips() {
   /** The clips ticked, for actions on several at once. */
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const admin = can.admin(user);
+  const [targets] = useSendTargets();
+  const sends = useSends();
   const load = useCallback(async () => {
     try {
       setClips(await api<Clip[]>('GET', '/api/clips'));
@@ -137,6 +142,14 @@ export function Clips() {
       }, i * 400),
     );
   };
+  // The places this account may send to: a menu under the button.
+  const sendMenu = (e: React.MouseEvent, ids: string[]) =>
+    openContextMenu(
+      e,
+      (targets ?? []).map((tg) => ({ label: tg.name, icon: <span className="io-proto small">{KIND_TAG[tg.kind]}</span>, onClick: () => void sendClips(ids, tg) })),
+    );
+  /** The last send of a clip to each place. */
+  const sendsOf = (id: string): SendJob[] => sends.filter((j) => j.clip === id);
   const remove = async (c: Clip) => {
     if (!(await confirmDialog({ title: t('Delete the clip “{name}”?', { name: c.name }), confirm: t('Delete'), danger: true }))) return;
     try {
@@ -206,6 +219,11 @@ export function Clips() {
                 <button type="button" className="btn small" onClick={downloadMany}>
                   <Download size={13} /> {t('Download')}
                 </button>
+                {(targets ?? []).length > 0 && (
+                  <button type="button" className="btn small" onClick={(e) => sendMenu(e, pickedClips.map((c) => c.id))}>
+                    <Upload size={13} /> {t('Send to')} ▾
+                  </button>
+                )}
                 {pickedClips.some(mayShare) && (
                   <button type="button" className="btn small" onClick={() => setSharing(pickedClips.filter(mayShare))}>
                     <Share2 size={13} /> {t('Share')}
@@ -234,6 +252,7 @@ export function Clips() {
                   <col className="c-made" />
                   <col className="c-until" />
                   <col className="c-share" />
+                  <col className="c-sends" />
                   <col className="c-act" />
                 </colgroup>
                 <thead>
@@ -246,6 +265,7 @@ export function Clips() {
                     <th>{t('Created')}</th>
                     <th>{t('Valid until')}</th>
                     <th>{t('Shared with')}</th>
+                    <th>{t('Clip sends')}</th>
                     <th />
                   </tr>
                 </thead>
@@ -258,7 +278,7 @@ export function Clips() {
                         <td>
                           <input type="checkbox" checked={allPicked} aria-label={t('Select the clips of this recorder')} ref={(el) => { if (el) el.indeterminate = !allPicked && g.list.some((c) => picked.has(c.id)); }} onChange={(e) => toggle(g.list.map((c) => c.id), e.target.checked)} />
                         </td>
-                        <td colSpan={8}>
+                        <td colSpan={9}>
                           <span className="sc-src-row-t">
                             <RecLogo rec={recOf(g.id)} size="sm" />
                             <strong>{g.name}</strong>
@@ -276,7 +296,7 @@ export function Clips() {
                             lastDay = d;
                             rows.push(
                               <tr key={`day-${d}`} className="sc-day-row">
-                                <td colSpan={9}>{d}</td>
+                                <td colSpan={10}>{d}</td>
                               </tr>,
                             );
                           }
@@ -346,10 +366,33 @@ export function Clips() {
                                   </span>
                                 )}
                               </td>
+                              <td>
+                                <div className="snd-chips-row">
+                                  {sendsOf(c.id).map((j) => (
+                                    <button
+                                      key={j.id}
+                                      type="button"
+                                      className={`snd-st ${j.state}`}
+                                      title={j.state === 'error' ? `${t(j.message)} · ${t('Retry')}` : j.remote}
+                                      disabled={j.state !== 'error' || !j.mine}
+                                      onClick={() => void retrySend(j)}
+                                    >
+                                      {j.state === 'done' ? <Check size={11} /> : j.state === 'error' ? <X size={11} /> : j.state === 'queued' ? <Hourglass size={11} /> : <Upload size={11} />}
+                                      {j.targetName}
+                                      {j.state === 'running' && <span className="mono"> {sendStateText(j)}</span>}
+                                    </button>
+                                  ))}
+                                </div>
+                              </td>
                               <td className="sc-clip-acts">
                                 <button className="icon-btn ghost" title={t('Play')} onClick={() => setOpen(c)}>
                                   <Play size={14} />
                                 </button>
+                                {(targets ?? []).length > 0 && (
+                                  <button className="icon-btn ghost" title={t('Send to')} onClick={(e) => sendMenu(e, [c.id])}>
+                                    <Upload size={14} />
+                                  </button>
+                                )}
                                 <a className="icon-btn ghost" title={t('Download')} href={`/api/clips/${c.id}/download`}>
                                   <Download size={14} />
                                 </a>
@@ -376,6 +419,7 @@ export function Clips() {
           </p>
         )}
       </div>
+      <SendsPanel sends={sends} />
       {open && <ClipPlayer clip={open} onClose={() => setOpen(null)} />}
       {sharing && <ShareModal clips={sharing} groups={groups} onClose={() => setSharing(null)} onDone={() => void load()} />}
     </div>

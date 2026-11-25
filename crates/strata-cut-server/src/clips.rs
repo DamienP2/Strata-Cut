@@ -71,7 +71,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn ext(self) -> &'static str {
+    pub fn ext(self) -> &'static str {
         match self {
             Kind::Video => "mp4",
             Kind::Audio => "m4a",
@@ -125,7 +125,7 @@ impl Clip {
     }
 
     /// An account sees its clips, those shared with it; an admin sees them all.
-    fn visible(&self, me: &crate::auth::User, groups: &[String]) -> bool {
+    pub(crate) fn visible(&self, me: &crate::auth::User, groups: &[String]) -> bool {
         me.is_admin() || self.mine(me) || self.shared_with(groups)
     }
 }
@@ -178,7 +178,15 @@ pub struct ClipRequest {
     /// them as they are).
     #[serde(default)]
     pub subtitles: bool,
+    /// The places it is sent to once made (Système › Envois des extraits).
+    #[serde(default)]
+    pub send_to: Vec<String>,
 }
+
+/// Told of a clip made: the clip, the places chosen for it, who asked.
+pub type OnMade = Box<dyn Fn(&Clip, &[String], &str) + Send + Sync>;
+/// Told of a clip deleted (its id).
+pub type OnGone = Box<dyn Fn(&str) + Send + Sync>;
 
 pub struct Clips {
     data_dir: PathBuf,
@@ -193,6 +201,9 @@ pub struct Clips {
     running: Mutex<Option<(String, String, u32)>>,
     /// Clips older than this many days are deleted (0 = kept).
     keep_days: std::sync::atomic::AtomicU32,
+    /// Told of each clip made (with the places chosen for it, and who asked) and deleted: the sends.
+    pub made: std::sync::OnceLock<OnMade>,
+    pub gone: std::sync::OnceLock<OnGone>,
 }
 
 impl Clips {
@@ -208,6 +219,8 @@ impl Clips {
             wake: Notify::new(),
             running: Mutex::new(None),
             keep_days: cfg.clips_keep_days.into(),
+            made: std::sync::OnceLock::new(),
+            gone: std::sync::OnceLock::new(),
         });
         // A clip being cut when the server stopped (a crash, a restart) left its part file: its job
         // is gone with the server, the file too.
@@ -238,8 +251,25 @@ impl Clips {
         self.save();
         let _ = tokio::fs::remove_file(&clip.file).await;
         let _ = tokio::fs::remove_file(self.thumb_path(id)).await;
+        if let Some(f) = self.gone.get() {
+            f(id);
+        }
         self.clips_changed();
         Some(clip)
+    }
+
+    pub fn get(&self, id: &str) -> Option<Clip> {
+        self.clips.lock().unwrap().iter().find(|c| c.id == id).cloned()
+    }
+
+    /// The clips this account sees.
+    pub fn visible_ids(&self, me: &crate::auth::User, groups: &[String]) -> std::collections::HashSet<String> {
+        self.clips.lock().unwrap().iter().filter(|c| c.visible(me, groups)).map(|c| c.id.clone()).collect()
+    }
+
+    /// The clips this account made.
+    pub fn owned_ids(&self, me: &crate::auth::User) -> std::collections::HashSet<String> {
+        self.clips.lock().unwrap().iter().filter(|c| c.mine(me)).map(|c| c.id.clone()).collect()
     }
 
     pub fn dir(&self) -> PathBuf {
@@ -638,8 +668,11 @@ async fn worker(c: Arc<Clips>) {
             Ok(clip) => {
                 tracing::info!("clip {} cut ({} frames)", clip.name, clip.frames);
                 let id = clip.id.clone();
-                c.clips.lock().unwrap().push(clip);
+                c.clips.lock().unwrap().push(clip.clone());
                 c.save();
+                if let Some(f) = c.made.get() {
+                    f(&clip, &job.req.send_to, &job.by_id);
+                }
                 c.set_job(&job.id, |j| {
                     j.state = JobState::Done;
                     j.progress = 1.0;
@@ -778,7 +811,7 @@ async fn cancel(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
 }
 
 /// "Plateau 1 / 14:32" → "Plateau 1 - 14-32.mp4" (no path characters), with the file's extension.
-fn file_name(name: &str, ext: &str) -> String {
+pub(crate) fn file_name(name: &str, ext: &str) -> String {
     let clean: String = name.chars().map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '-' } else { c }).collect();
     format!("{}.{ext}", clean.trim())
 }

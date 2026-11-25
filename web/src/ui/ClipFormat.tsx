@@ -4,7 +4,7 @@
  * when it would not fit in the space the clips have left.
  */
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { Check, ChevronDown } from 'lucide-react';
 import { api } from '../store';
 import { lang, locale, t } from '../i18n';
 import { volume } from '../streams';
@@ -89,7 +89,7 @@ export function weightOf(kind: ClipKind, value: string, basis: Basis, free: numb
 }
 
 /** The extraction button's left part: the chosen format, a click opens the formats (each with its weight); as the button, only when there is something to extract. */
-export function ClipFormat({ kind, value, onChange, basis, disabled }: { kind: ClipKind; value: string; onChange: (id: string) => void; basis: Basis; disabled?: boolean }) {
+export function ClipFormat({ kind, value, onChange, basis, disabled, places, sendTo, onSendTo }: { kind: ClipKind; value: string; onChange: (id: string) => void; basis: Basis; disabled?: boolean; places?: { id: string; name: string }[]; sendTo?: string[]; onSendTo?: (ids: string[]) => void }) {
   const [open, setOpen] = useState(false);
   // Nothing to extract: closed.
   useEffect(() => {
@@ -129,6 +129,21 @@ export function ClipFormat({ kind, value, onChange, basis, disabled }: { kind: C
               <em>{kind === 'image' || basis.seconds > 0 ? sizeText(f.size(basis)) : ''}</em>
             </button>
           ))}
+          {places && places.length > 0 && onSendTo && (
+            <>
+              <h6 className="cf-then-t">{t('Then send to')}</h6>
+              <div className="cf-then">
+                {places.map((p) => {
+                  const on = !!sendTo?.includes(p.id);
+                  return (
+                    <button key={p.id} type="button" role="checkbox" aria-checked={on} className={on ? 'on' : ''} onClick={() => onSendTo(on ? (sendTo ?? []).filter((x) => x !== p.id) : [...(sendTo ?? []), p.id])}>
+                      {on && <Check size={12} />} {p.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
       )}
     </span>

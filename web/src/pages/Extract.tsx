@@ -2,10 +2,10 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, Film, History, Play, PlayCircle, RadioTower, RotateCcw, Scissors, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, Film, History, Play, PlayCircle, RadioTower, RotateCcw, Scissors, Upload, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { SourceGroups } from '../ui/SourceGroups';
-import { t, locale } from '../i18n';
+import { t, tn, locale } from '../i18n';
 import { navigate } from '../router';
 import { LoopPlayer, type RunInfo } from '../player';
 import { ClipPreview } from './ClipPreview';
@@ -18,6 +18,7 @@ import { trackLabel } from '../audioLabel';
 import { Transport, useTransportKeys, type TransportActs } from '../ui/Transport';
 import { usePageTools } from '../ui/PageTools';
 import { ClipFormat, DEFAULT_FORMAT, FORMATS, sizeText, useClipsFree, weightOf, type ClipKind } from '../ui/ClipFormat';
+import { useSendTargets } from '../sends';
 import { confirmDialog } from '../ui/dialogs';
 import { showError } from '../ui/serverError';
 
@@ -433,7 +434,7 @@ function Editor({ rec }: { rec: Recorder }) {
     if (!m) return;
     if (m.a.run !== m.b.run) return toast(t('The in and out points must be in the same recording'), 'error');
     try {
-      await api('POST', '/api/clips', { recorder: rec.id, run: m.a.run, t: m.a.t, frames: Math.round((m.b.t - m.a.t) * fps) + 1, name: g.name });
+      await api('POST', '/api/clips', { recorder: rec.id, run: m.a.run, t: m.a.t, frames: Math.round((m.b.t - m.a.t) * fps) + 1, name: g.name, sendTo });
       toast(t('Extraction of “{name}” started', { name: g.name }));
       // Extraction started: the marks are cleared for the next clip.
       setIn(null);
@@ -554,6 +555,10 @@ function Editor({ rec }: { rec: Recorder }) {
   const canCut = can.extract(user) && (kind === 'image' ? !!pos && !hole && !!pos.run : frames > 0);
   // The clip's format (the last chosen for each kind) and its weight, by the source's measured bitrate.
   const [formats, setFormats] = useDisplayPref<Record<ClipKind, string>>('extract.formats', DEFAULT_FORMAT);
+  // Where the clip goes once made (chosen in the formats' menu, kept for this account).
+  const [places] = useSendTargets();
+  const [sendToPref, setSendTo] = useDisplayPref<string[]>('extract.sendTo', []);
+  const sendTo = sendToPref.filter((id) => places?.some((p) => p.id === id));
   const format = formats[kind] ?? DEFAULT_FORMAT[kind];
   const free = useClipsFree();
   const recSt = useApp((s) => s.status[rec.id]);
@@ -571,7 +576,7 @@ function Editor({ rec }: { rec: Recorder }) {
     if (kind === 'image') {
       if (!pos || hole || !pos.run) return;
       try {
-        await api('POST', '/api/clips', { recorder: rec.id, run: pos.run, t: pos.t, frames: 1, kind, format, name: name.trim() || `${rec.name} ${timecode(pos.wall, fps, timezone)}` });
+        await api('POST', '/api/clips', { recorder: rec.id, run: pos.run, t: pos.t, frames: 1, kind, format, sendTo, name: name.trim() || `${rec.name} ${timecode(pos.wall, fps, timezone)}` });
         setName('');
       } catch (e) {
         showError(e);
@@ -581,7 +586,7 @@ function Editor({ rec }: { rec: Recorder }) {
     if (!mIn || !mOut) return;
     if (mIn.run !== mOut.run) return toast(t('The in and out points must be in the same recording'), 'error');
     try {
-      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, format, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
+      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, format, sendTo, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
       // Extraction started: the marks are cleared for the next clip.
       setIn(null);
       setOut(null);
@@ -714,7 +719,8 @@ function Editor({ rec }: { rec: Recorder }) {
               canCut={canCut}
               onCut={() => void cut()}
               kind={kind}
-              top={<ClipFormat kind={kind} value={format} onChange={(id) => setFormats((f) => ({ ...f, [kind]: id }))} basis={basis} disabled={!canCut} />}
+              top={<ClipFormat kind={kind} value={format} onChange={(id) => setFormats((f) => ({ ...f, [kind]: id }))} basis={basis} disabled={!canCut} places={places ?? []} sendTo={sendTo} onSendTo={setSendTo} />}
+              sends={sendTo.length}
               weight={weightOf(kind, format, basis, free)}
             />
           )}
@@ -935,7 +941,7 @@ function MarkTag({ kind, mark, fps, timezone, onType, onClear, onMark }: { kind:
  * after the others); without marks, it opens the bubble.
  */
 /** The extraction button, on two floors: the format (`top`) over the action and the clip's weight; while clips are made, their progress. */
-function ExtractButton({ jobs, recId, canCut, onCut, kind, top, weight }: { jobs: Job[]; recId: string; canCut: boolean; onCut: () => void; kind: 'video' | 'audio' | 'image'; top: React.ReactNode; weight: { text: string; over: boolean } }) {
+function ExtractButton({ jobs, recId, canCut, onCut, kind, top, weight, sends }: { jobs: Job[]; recId: string; canCut: boolean; onCut: () => void; kind: 'video' | 'audio' | 'image'; top: React.ReactNode; weight: { text: string; over: boolean }; sends: number }) {
   const [open, setOpen] = useState(false);
   const closing = useRef(0);
   // When each job was first seen running and how far: the time left from its pace.
@@ -998,6 +1004,11 @@ function ExtractButton({ jobs, recId, canCut, onCut, kind, top, weight }: { jobs
             <Scissors size={15} />
             <span className="sc-xkind">{t('Extract')}</span>
             {weight.text && <span className="sc-xw" data-tip={weight.over ? t('More than the free space of the clips') : undefined}>{weight.text}</span>}
+            {sends > 0 && (
+              <span className="sc-xs" data-tip={tn(sends, 'Then sent to {n} place', 'Then sent to {n} places')}>
+                <Upload size={12} /> {sends}
+              </span>
+            )}
             {ready > 0 && <span className="sc-xready" />}
           </>
         )}

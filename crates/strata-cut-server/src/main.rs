@@ -14,6 +14,7 @@ mod groups;
 mod roles;
 mod limits;
 mod streams;
+mod sends;
 mod ts;
 mod guard;
 mod health;
@@ -279,6 +280,18 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     tokio::spawn(recorder::decklink::search_at_start(data_dir.clone()));
     let clips = clips::Clips::start(&data_dir, &first, events.clone(), recorders.clone());
     clips.adopt(&auth.users());
+    let sends = sends::Sends::start(&data_dir, events.clone(), clips.clone());
+    {
+        // A clip made: sent to the places that take them all, and to those chosen for it.
+        let (to, users, dir) = (sends.clone(), auth.clone(), data_dir.clone());
+        let _ = clips.made.set(Box::new(move |clip, chosen, by| {
+            let maker = users.get(by);
+            let groups = crate::groups::of_in(&dir, by);
+            to.clip_made(clip, chosen, maker.as_ref(), &groups);
+        }));
+        let gone = sends.clone();
+        let _ = clips.gone.set(Box::new(move |id| gone.clip_gone(id)));
+    }
     let programs = program::Programs::start(&data_dir, recorders.clone(), events.clone());
     let streams = streams::Streams::start(&data_dir, recorders.clone(), programs, events.clone());
     // The lives under way before the restart start again.
@@ -290,6 +303,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
         recorders.set_config(&config);
         ntp::request(&data_dir, &config.ntp);
         clips.set_config(&config);
+        sends.set_config(&config);
         recorder::web::configure(&data_dir, &config.youtube);
         let wanted = args.bind.or(config.bind).or(args.default_bind).unwrap_or(DEFAULT_BIND.parse()?);
         let listener = bind_retry(wanted).await?;
@@ -307,6 +321,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
             closing: watch::channel(false).0,
             recorders: recorders.clone(),
             clips: clips.clone(),
+            sends: sends.clone(),
             streams: streams.clone(),
         });
         let mut app = api::router();

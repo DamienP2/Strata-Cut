@@ -41,6 +41,11 @@ pub fn list(s: &Shared) -> Vec<Group> {
     all
 }
 
+/// The groups an account is in, read from the data folder (outside a request).
+pub fn of_in(data_dir: &Path, user: &str) -> Vec<String> {
+    crate::paths::read_json::<Vec<Group>>(&path(data_dir)).unwrap_or_default().into_iter().filter(|g| g.members.iter().any(|m| m == user)).map(|g| g.id).collect()
+}
+
 /// The groups an account is in.
 pub fn of(s: &Shared, user: &str) -> Vec<String> {
     list(s).into_iter().filter(|g| g.members.iter().any(|m| m == user)).map(|g| g.id).collect()

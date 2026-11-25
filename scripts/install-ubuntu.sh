@@ -359,6 +359,9 @@ if [ "$NO_APT" -eq 1 ]; then
 else
   apt_install ca-certificates curl ffmpeg python3 cloud-guest-utils fonts-dejavu-core
   if [ -z "$PACKAGE" ]; then apt_install git openssh-client build-essential pkg-config; fi
+  # Envois des extraits : partages NAS (smbclient, SMB 2/3), SFTP (clé du serveur : ssh-keyscan),
+  # FTP/FTPS et WebDAV (curl).
+  apt_install smbclient openssh-client
   ok "ffmpeg, python3 et outils de base en place"
   # Cartes DeckLink (Blackmagic) : le serveur les capture lui-même avec le SDK de Blackmagic
   # (Desktop Video) et FFmpeg encode leurs images ; lspci les montre même sans pilote.

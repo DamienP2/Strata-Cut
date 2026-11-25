@@ -22,6 +22,7 @@ pub struct AppState {
     pub closing: watch::Sender<bool>,
     pub recorders: Arc<crate::recorder::Manager>,
     pub clips: Arc<crate::clips::Clips>,
+    pub sends: Arc<crate::sends::Sends>,
     pub streams: Arc<crate::streams::Streams>,
 }
 

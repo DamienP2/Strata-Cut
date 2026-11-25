@@ -1,7 +1,7 @@
 /* /system/<section>: the list of sections on the left, the open one on the right. */
 import { useDisplayPref } from '../displayPrefs';
 import { lazy, Suspense, useEffect, type ComponentType, type LazyExoticComponent } from 'react';
-import { Bell, Cpu, HardDrive, KeyRound, HeartPulse, Lock, Radio, RadioTower, SlidersHorizontal, Users as UsersIcon, UsersRound, MonitorPlay, Wrench } from 'lucide-react';
+import { Bell, Cpu, HardDrive, KeyRound, HeartPulse, Lock, Radio, RadioTower, SlidersHorizontal, Upload, Users as UsersIcon, UsersRound, MonitorPlay, Wrench } from 'lucide-react';
 import { t } from '../i18n';
 import { navigate } from '../router';
 import { can, useApp, useChanged, type PublicUser } from '../store';
@@ -43,6 +43,7 @@ export const SYSTEM: Group[] = [
     sections: [
       { id: 'sources', label: 'Sources', icon: RadioTower, admin: true, page: page(() => import('./Recorders'), 'Recorders') },
       { id: 'destinations', label: 'Destinations', icon: Radio, admin: true, page: page(() => import('../settings/Destinations'), 'Destinations') },
+      { id: 'sends', label: 'Clip sending', icon: Upload, admin: true, page: page(() => import('../settings/Sends'), 'Sends') },
     ],
   },
   {
@@ -99,7 +100,7 @@ export function SystemPage({ section }: { section?: string }) {
   return (
     <SidePage
       className="sys-page"
-      wide={open?.id === 'sources' || open?.id === 'destinations'}
+      wide={open?.id === 'sources' || open?.id === 'destinations' || open?.id === 'sends'}
       nav={groups.map((g) => (
         <div key={g.title} className="sys-group">
           <NavSection title={t(g.title)} />
