@@ -706,7 +706,7 @@ function Editor({ rec }: { rec: Recorder }) {
           )}
           <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
         </div>
-        {/* The clip: its in and out (the timeline's E and S), its length, its name. */}
+        {/* The clip: its kind, its in and out (the timeline's E and S), its length (its name in the extraction window). */}
         <div className="sc-clipbar">
           <div className="sc-kind" role="radiogroup" aria-label={t('What the clip holds')}>
             {([
@@ -722,7 +722,6 @@ function Editor({ rec }: { rec: Recorder }) {
           <MarkTag kind="in" mark={mIn} fps={fps} timezone={timezone} onType={(s) => typed(s, setIn)} onClear={() => setIn(null)} onMark={markIn} />
           <MarkTag kind="out" mark={mOut} fps={fps} timezone={timezone} onType={(s) => typed(s, setOut)} onClear={() => setOut(null)} onMark={markOut} />
           <span className="sc-clipdur">{kind === 'image' ? (pos ? timecode(pos.wall, fps, timezone) : '--:--:--:--') : duration(frames, fps)}</span>
-          <input className="sc-clipname" value={name} placeholder={mIn ? `${rec.name} ${timecode(mIn.wall, fps, timezone)}` : t('Name of the clip')} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
           <button className="ctl" data-tip={t('Clear the in and out points')} data-keys="⌫" disabled={!mIn && !mOut} onClick={clearMarks}>
             <Eraser size={18} />
           </button>
@@ -759,7 +758,6 @@ function Editor({ rec }: { rec: Recorder }) {
               placeholder={clipName}
               onName={setName}
               kind={kind}
-              onKind={setKind}
               format={format}
               onFormat={(id) => setFormats((f) => ({ ...f, [kind]: id }))}
               basis={basis}
@@ -774,9 +772,6 @@ function Editor({ rec }: { rec: Recorder }) {
               <span className={`sc-xm-w ${weight.over ? 'over' : ''}`}>{weight.text}</span>
               {free !== null && <span className="muted">· {t('{size} free', { size: sizeText([free]).replace('≈ ', '') })}</span>}
               <div className="spacer" />
-              <span className="muted sc-xm-key">
-                <kbd>⏎</kbd> {t('extract')}
-              </span>
               <button type="button" className="btn" onClick={() => setExtracting(false)}>
                 {t('Cancel')}
               </button>

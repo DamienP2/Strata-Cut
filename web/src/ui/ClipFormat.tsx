@@ -2,9 +2,9 @@
  * Extraction: the format a clip is made in (by its kind: video, sound or picture), each with its
  * weight for the clip as it is marked; chosen in the extraction's window, with where it goes.
  */
-import { useEffect, useState, type ReactNode } from 'react';
-import { AudioLines, Camera, Check, Film } from 'lucide-react';
-import { autoFor, KIND_TAG, type UsableTarget } from '../sends';
+import { useEffect, useState } from 'react';
+import { Check } from 'lucide-react';
+import { autoFor, type UsableTarget } from '../sends';
 import { api } from '../store';
 import { lang, locale, t } from '../i18n';
 import { volume } from '../streams';
@@ -88,14 +88,14 @@ export function weightOf(kind: ClipKind, value: string, basis: Basis, free: numb
   return { text: kind === 'image' || basis.seconds > 0 ? sizeText(est) : '', over: free !== null && est[est.length - 1] > free };
 }
 
-/** The extraction window's choices: the clip's name, its kind, its format (each with its weight),
- * where it goes (Extraits always; the places chosen; those it goes to by itself, shown). */
+/** The extraction window's choices: the clip's name, its format (each with its weight; the kind
+ * is chosen in the Extraction), where else it goes (Extraits always, unsaid; the places chosen;
+ * those it goes to by itself, shown ticked), each by its name and its folder. */
 export function ExtractChoices(props: {
   name: string;
   placeholder: string;
   onName: (v: string) => void;
   kind: ClipKind;
-  onKind: (k: ClipKind) => void;
   format: string;
   onFormat: (id: string) => void;
   basis: Basis;
@@ -108,27 +108,12 @@ export function ExtractChoices(props: {
   const list = FORMATS.filter((f) => f.kind === kind);
   const cur = list.find((f) => f.id === props.format) ?? list[0];
   const shown = places.filter((p) => p.usable || autoFor(p, source));
-  const kinds: [ClipKind, ReactNode, string][] = [
-    ['video', <Film key="v" size={13} />, t('Video')],
-    ['audio', <AudioLines key="a" size={13} />, t('Sound')],
-    ['image', <Camera key="i" size={13} />, t('Image')],
-  ];
   return (
     <div className="xc">
       <label className="xc-field">
         <span className="xc-lab">{t('Name')}</span>
         <input value={props.name} placeholder={props.placeholder} onChange={(e) => props.onName(e.target.value)} />
       </label>
-      <div className="xc-field">
-        <span className="xc-lab">{t('Type')}</span>
-        <div className="segmented xc-kinds" role="radiogroup">
-          {kinds.map(([k, icon, label]) => (
-            <button key={k} type="button" role="radio" aria-checked={kind === k} className={kind === k ? 'on' : ''} onClick={() => props.onKind(k)}>
-              {icon} {label}
-            </button>
-          ))}
-        </div>
-      </div>
       <div className="xc-field">
         <span className="xc-lab">{t('Format')}</span>
         <div className="xc-list" role="radiogroup">
@@ -142,30 +127,24 @@ export function ExtractChoices(props: {
           ))}
         </div>
       </div>
+      {shown.length > 0 && (
       <div className="xc-field">
         <span className="xc-lab">{t('Send to')}</span>
         <div className="xc-list">
-          <span className="xc-dst on lock">
-            <span className="xc-cb">
-              <Check size={11} />
-            </span>
-            <b>{t('Clips')}</b>
-            <small>{t('always')}</small>
-          </span>
           {shown.map((p) => {
             const auto = autoFor(p, source);
             const on = auto || sendTo.includes(p.id);
             return (
               <button key={p.id} type="button" role="checkbox" aria-checked={on} disabled={auto} className={`xc-dst ${on ? 'on' : ''} ${auto ? 'lock' : ''}`} data-tip={auto ? t('Every clip of this source goes there by itself') : undefined} onClick={() => props.onSendTo(on ? sendTo.filter((x) => x !== p.id) : [...sendTo, p.id])}>
                 <span className="xc-cb">{on && <Check size={11} />}</span>
-                <span className="io-proto small">{KIND_TAG[p.kind]}</span>
                 <b>{p.name}</b>
-                <small>{auto ? t('automatic') : p.folder}</small>
+                <small>{p.folder}</small>
               </button>
             );
           })}
         </div>
       </div>
+      )}
     </div>
   );
 }

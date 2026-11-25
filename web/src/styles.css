@@ -702,8 +702,7 @@ a.btn { color: inherit; }
 .sc-mtag input { width: 104px; min-height: 0 !important; height: 24px; padding: 0 2px; border: none; background: none; font: 13px var(--mono); color: var(--text); }
 .sc-mtag-x { border: none; background: none; color: var(--text-3); cursor: pointer; display: grid; place-items: center; padding: 2px; border-radius: 4px; }
 .sc-mtag-x:hover { color: var(--text); background: var(--panel-2); }
-.sc-clipdur { font: 600 14px var(--mono); font-variant-numeric: tabular-nums; padding: 0 2px; }
-.sc-clipname { flex: 1; min-width: 48px; }
+.sc-clipdur { flex: 1; min-width: 0; font: 600 14px var(--mono); font-variant-numeric: tabular-nums; padding: 0 2px; }
 .sc-guide-panel { display: flex; flex-direction: column; min-height: 0; }
 .sc-guide-sec { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .sc-guide { flex: 1; min-height: 0; overflow: auto; padding: 4px 8px 10px; display: flex; flex-direction: column; gap: 2px; }
@@ -975,8 +974,7 @@ a.btn { color: inherit; }
 .sc-kind-b.audio.on svg { color: var(--mask, #2dd4bf); }
 .sc-kind-b.image.on svg { color: #f472b6; }
 /* The clip bar follows the width the centre column really has (the side panels take their share):
-   narrower, the kinds keep only their icons; narrower still, it goes on two lines rather than
-   running under the panel beside it. */
+   narrower, the kinds keep only their icons and the marks tighten. */
 .sc-center { container-type: inline-size; container-name: centre; }
 @container centre (max-width: 1100px) {
   .sc-kind-b span { display: none; }
@@ -988,12 +986,6 @@ a.btn { color: inherit; }
   .sc-clipdur { font-size: 13px; }
   .sc-clipbar .ctl { width: 36px; }
   /* The scissors say it (and its tip): the format and the weight keep their room. */
-}
-@container centre (max-width: 800px) {
-  .sc-clipbar { flex-wrap: wrap; row-gap: 8px; }
-  /* Line 1: what, in, out, length; line 2: its name and what to do with it. */
-  .sc-clipbar .sc-clipname, .sc-clipbar .sc-xwrap { order: 2; }
-  .sc-clipbar .sc-clipname { flex: 1 1 200px; }
 }
 /* Extraits: the kind of each clip; a sound shows its icon, not a picture. */
 .sc-mini.audio { background: color-mix(in srgb, var(--mask, #2dd4bf) 16%, var(--panel-3)); }
@@ -1544,11 +1536,9 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .sc-xmodal-foot { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding-top: 12px; }
 .sc-xm-w { font: 700 14px var(--mono); }
 .sc-xm-w.over { color: var(--warn); }
-.sc-xm-key kbd { font: 600 10.5px var(--mono); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line-2); }
 .xc { display: flex; flex-direction: column; gap: 12px; }
 .xc-field { display: flex; flex-direction: column; gap: 6px; }
 .xc-lab { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
-.xc-kinds button { display: inline-flex; align-items: center; gap: 5px; }
 .xc-list { display: flex; flex-direction: column; gap: 4px; }
 .xc-fmt { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 0 10px; align-items: center; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: none; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .xc-fmt:hover { background: var(--panel-2); }
