@@ -12,6 +12,7 @@ import { ClipPreview } from './ClipPreview';
 import { behind, clock, day, duration, fpsOf, parseTimecode, timecode } from '../tc';
 import { Empty } from '../ui/Empty';
 import { Meters, VolumeControl, useAudioOut } from '../ui/AudioUi';
+import { ClipLevel } from '../ui/ClipLevel';
 import { GrainCache } from '../audio';
 import type { Clip, Job, Recorder } from '../types';
 import { trackLabel } from '../audioLabel';
@@ -189,6 +190,9 @@ function Editor({ rec }: { rec: Recorder }) {
     };
   }, [rec.id, rec.loopHours]);
   const audio = useAudioOut(videoRef, 'extract');
+  // The sound's level (each source its own): heard so, and so in the clip.
+  const [gain, setGain] = useDisplayPref<number>(`extract.gain.${rec.id}`, 0);
+  useEffect(() => audio.out?.setMain(10 ** (gain / 20)), [audio.out, gain]);
 
   // The player lives as long as this recorder is open.
   useEffect(() => {
@@ -548,6 +552,13 @@ function Editor({ rec }: { rec: Recorder }) {
 
   const frames = mIn && mOut && mIn.run === mOut.run && mOut.t >= mIn.t ? Math.round((mOut.t - mIn.t) * fps) + 1 : 0;
   const canCut = can.extract(user) && (kind === 'image' ? !!pos && !hole && !!pos.run : frames > 0);
+  // The loudest peak of the part marked (else the last 10 s heard) on the track heard, before the level.
+  const measurePeak = async (): Promise<number | null> => {
+    const part = kind !== 'image' && mIn && mOut && frames > 0 ? { run: mIn.run, t: mIn.t, seconds: frames / fps } : pos?.run ? { run: pos.run, t: pos.t - 10, seconds: 10 } : null;
+    if (!part) return null;
+    const r = await api<{ peak: number | null }>('POST', '/api/clips/peak', { recorder: rec.id, ...part, track: audioTrack });
+    return r.peak;
+  };
   // The clip's format (the last chosen for each kind) and its weight, by the source's measured bitrate.
   const [formats, setFormats] = useDisplayPref<Record<ClipKind, string>>('extract.formats', DEFAULT_FORMAT);
   // Where the clip goes once made (chosen in the formats' menu, kept for this account).
@@ -575,7 +586,7 @@ function Editor({ rec }: { rec: Recorder }) {
     if (kind === 'image') {
       if (!pos || hole || !pos.run) return false;
       try {
-        await api('POST', '/api/clips', { recorder: rec.id, run: pos.run, t: pos.t, frames: 1, kind, format, sendTo, name: name.trim() || `${rec.name} ${timecode(pos.wall, fps, timezone)}` });
+        await api('POST', '/api/clips', { recorder: rec.id, run: pos.run, t: pos.t, frames: 1, kind, format, sendTo, track: audioTrack, gain, name: name.trim() || `${rec.name} ${timecode(pos.wall, fps, timezone)}` });
         setName('');
         return true;
       } catch (e) {
@@ -589,7 +600,7 @@ function Editor({ rec }: { rec: Recorder }) {
       return false;
     }
     try {
-      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, format, sendTo, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
+      await api('POST', '/api/clips', { recorder: rec.id, run: mIn.run, t: mIn.t, frames, kind, format, sendTo, track: audioTrack, gain, name: name.trim() || `${rec.name} ${timecode(mIn.wall, fps, timezone)}` });
       // Extraction started: the marks are cleared for the next clip.
       setIn(null);
       setOut(null);
@@ -704,6 +715,7 @@ function Editor({ rec }: { rec: Recorder }) {
               ))}
             </select>
           )}
+          {run?.audio && <ClipLevel out={audio.out} gain={gain} onGain={setGain} measure={measurePeak} measureKey={`${mIn?.wall}|${mOut?.wall}|${kind}|${audioTrack}`} />}
           <VolumeControl volume={audio.volume} setVolume={audio.setVolume} muted={audio.muted} setMuted={audio.setMuted} />
         </div>
         {/* The clip: its kind, its in and out (the timeline's E and S), its length (its name in the extraction window). */}
@@ -711,7 +723,7 @@ function Editor({ rec }: { rec: Recorder }) {
           <div className="sc-kind" role="radiogroup" aria-label={t('What the clip holds')}>
             {([
               ['video', <Film key="v" size={14} />, t('Video'), t('The picture with its sound')],
-              ['audio', <AudioLines key="a" size={14} />, t('Sound'), t('The sound alone (every track)')],
+              ['audio', <AudioLines key="a" size={14} />, t('Sound'), t('The sound alone')],
               ['image', <Camera key="i" size={14} />, t('Image'), t('The picture under the playhead')],
             ] as const).map(([k, icon, label, tip]) => (
               <button key={k} type="button" role="radio" aria-checked={kind === k} aria-label={label} className={`sc-kind-b ${k} ${kind === k ? 'on' : ''}`} data-tip={`${label} · ${tip}`} onClick={() => setKind(k)}>

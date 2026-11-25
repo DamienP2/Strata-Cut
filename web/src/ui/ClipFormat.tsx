@@ -14,7 +14,7 @@ import type { MediaInfo } from '../types';
 
 export type ClipKind = 'video' | 'audio' | 'image';
 
-/** What the estimate goes by: the clip's length, the source's measured bitrate, its picture and tracks. */
+/** What the estimate goes by: the clip's length, the source's measured bitrate, its picture (one sound track: the one heard). */
 export interface Basis {
   seconds: number;
   /** bits/s, the source as recorded. */
@@ -34,20 +34,19 @@ interface Format {
 }
 
 const bytes = (bps: number, s: number) => (bps * s) / 8;
-const tracks = (b: Basis) => Math.max(1, b.media?.audioTracks ?? 1);
 const pixels = (b: Basis) => (b.media ? b.media.width * b.media.height : 1920 * 1080);
 const fps = (b: Basis) => (b.media && b.media.fpsDen ? b.media.fpsNum / b.media.fpsDen : 25);
 
 export const FORMATS: Format[] = [
-  { id: 'master', short: 'MP4 master', kind: 'video', name: 'MP4 · H.264 master', detail: 'The quality kept, very close to the source', size: (b) => [bytes(b.bps * 1.2 + 256e3 * tracks(b), b.seconds), bytes(b.bps * 2 + 256e3 * tracks(b), b.seconds)] },
+  { id: 'master', short: 'MP4 master', kind: 'video', name: 'MP4 · H.264 master', detail: 'The quality kept, very close to the source', size: (b) => [bytes(b.bps * 1.2 + 256e3, b.seconds), bytes(b.bps * 2 + 256e3, b.seconds)] },
   { id: 'web', short: 'MP4 web', kind: 'video', name: 'MP4 · H.264 web', detail: '1080p · 6 Mb/s · AAC 160 kb/s', size: (b) => [bytes(6e6 + 160e3, b.seconds)] },
   { id: 'light', short: 'MP4 light', kind: 'video', name: 'MP4 · H.264 light', detail: '720p · 2.5 Mb/s · AAC 128 kb/s', size: (b) => [bytes(2.5e6 + 128e3, b.seconds)] },
   // ProRes 422: about 117 Mb/s in 1080 at 29.97, by the pixels and the pictures a second.
-  { id: 'prores', short: 'ProRes', kind: 'video', name: 'MOV · ProRes 422', detail: 'For editing · PCM sound', size: (b) => [bytes((117e6 * pixels(b)) / (1920 * 1080) * (fps(b) / 29.97) + 1536e3 * tracks(b), b.seconds)] },
+  { id: 'prores', short: 'ProRes', kind: 'video', name: 'MOV · ProRes 422', detail: 'For editing · PCM sound', size: (b) => [bytes((117e6 * pixels(b)) / (1920 * 1080) * (fps(b) / 29.97) + 1536e3, b.seconds)] },
   { id: 'copy', short: 'TS copy', kind: 'video', name: 'MPEG-TS · copy', detail: 'Not encoded again, almost at once · cut on a key picture', size: (b) => [bytes(b.bps, b.seconds)] },
-  { id: 'm4a', short: 'M4A', kind: 'audio', name: 'M4A · AAC 256 kb/s', detail: 'Every track', size: (b) => [bytes(256e3 * tracks(b), b.seconds)] },
-  { id: 'mp3', short: 'MP3', kind: 'audio', name: 'MP3 · 192 kb/s', detail: 'The first track', size: (b) => [bytes(192e3, b.seconds)] },
-  { id: 'wav', short: 'WAV', kind: 'audio', name: 'WAV · 48 kHz 16 bits', detail: 'Every track', size: (b) => [bytes(1536e3 * tracks(b), b.seconds)] },
+  { id: 'm4a', short: 'M4A', kind: 'audio', name: 'M4A · AAC 256 kb/s', detail: 'Good quality, light', size: (b) => [bytes(256e3, b.seconds)] },
+  { id: 'mp3', short: 'MP3', kind: 'audio', name: 'MP3 · 192 kb/s', detail: 'Plays everywhere', size: (b) => [bytes(192e3, b.seconds)] },
+  { id: 'wav', short: 'WAV', kind: 'audio', name: 'WAV · 48 kHz 16 bits', detail: 'Not compressed, for editing', size: (b) => [bytes(1536e3, b.seconds)] },
   { id: 'jpg', short: 'JPEG', kind: 'image', name: 'JPEG', detail: 'High quality', size: (b) => [pixels(b) * 0.25] },
   { id: 'png', short: 'PNG', kind: 'image', name: 'PNG', detail: 'Lossless', size: (b) => [pixels(b) * 1.3] },
 ];

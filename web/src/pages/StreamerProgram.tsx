@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Headphones, Volume2, VolumeX, Wand2, X } from "lucide-react";
+import { GOOD_HIGH, GOOD_LOW, SILENT, TARGET, Verdict } from "../ui/Verdict";
 import { t, tc, tn } from "../i18n";
 import { api, can, useApp, useChanged } from "../store";
 import type { Recorder } from "../types";
@@ -115,28 +116,6 @@ export function ProgramLayer({ rec, prog }: { rec: Recorder; prog: ProgramApi })
 
 /** Where a meter's level is (a share of its height): dB from -60 to 0. */
 const vuShare = (db: number) => Math.max(0, Math.min(1, (db + 60) / 60));
-/**
- * A good level, for whom is not a sound engineer: peaks between these (dBFS), the band drawn on
- * the meters; above `LOUD`, too loud; at `CLIP`, saturated. AUTO puts a track's peaks at `TARGET`.
- * (What goes out is limited at -1 dBFS anyway: never saturated.)
- */
-const GOOD_LOW = -20;
-const GOOD_HIGH = -6;
-const LOUD = -3;
-const CLIP = -1;
-const TARGET = -9;
-const SILENT = -55;
-
-type Verdict = "silent" | "low" | "good" | "loud" | "clip";
-const verdictOf = (peak: number): Verdict => (peak <= SILENT ? "silent" : peak >= CLIP ? "clip" : peak > LOUD ? "loud" : peak < GOOD_LOW ? "low" : "good");
-const VERDICT_LABEL: Record<Verdict, string> = { silent: "Silent", low: "Too low", good: "Good", loud: "Too loud", clip: "Saturated" };
-
-/** Says how a level is, in words and a colour. */
-function Verdict({ peak }: { peak: number }) {
-  const v = verdictOf(peak);
-  return <span className={`pg-verdict ${v}`}>{t(VERDICT_LABEL[v])}</span>;
-}
-
 /** The meter's marks (dB). */
 const VU_MARKS = [0, -6, -12, -18, -24, -36, -48];
 

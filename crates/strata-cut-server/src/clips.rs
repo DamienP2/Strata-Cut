@@ -181,6 +181,28 @@ pub struct ClipRequest {
     /// The places it is sent to once made (Système › Envois des extraits).
     #[serde(default)]
     pub send_to: Vec<String>,
+    /// The sound track heard in the player (another language, the audio description): the one
+    /// the clip holds. None: every track (as before).
+    #[serde(default)]
+    pub track: Option<u32>,
+    /// The sound's level, dB (-20 to +12): raised, limited under -1 dBFS.
+    #[serde(default)]
+    pub gain: f32,
+}
+
+/// The clip's sound level: the most it may be lowered or raised (dB).
+pub const GAIN_RANGE: (f32, f32) = (-20.0, 12.0);
+
+/// The sound filters for a level (dB) added after the others: none at 0; raised, limited under
+/// -1 dBFS (no auto level: the limiter only catches the peaks).
+fn level_filter(gain: f32) -> String {
+    if gain.abs() < 0.05 {
+        String::new()
+    } else if gain > 0.0 {
+        format!(",volume={gain:.1}dB,alimiter=limit=0.891:level=0")
+    } else {
+        format!(",volume={gain:.1}dB")
+    }
 }
 
 /// Told of a clip made: the clip, the places chosen for it, who asked.
@@ -376,6 +398,12 @@ impl Clips {
         if format_of(req.kind, &req.format).is_none() {
             return Err("this format is not one of this kind of clip".into());
         }
+        if !req.gain.is_finite() || req.gain < GAIN_RANGE.0 || req.gain > GAIN_RANGE.1 {
+            return Err("the sound level is -20 to +12 dB".into());
+        }
+        if req.track.is_some_and(|t| t > 15) {
+            return Err("no such sound track".into());
+        }
         let name = req.name.trim().to_string();
         // A queue that stays short: each waiting job holds its recording back from the loop's trim.
         {
@@ -451,6 +479,14 @@ impl Clips {
         if kind == Kind::Audio && media.audio_tracks == 0 {
             return Err("this recording has no sound".into());
         }
+        // The track chosen (one the recording has), else every one.
+        let track = job.req.track.filter(|t| *t < media.audio_tracks.max(1));
+        let audio_map = match track {
+            Some(t) => format!("0:a:{t}"),
+            None => "0:a".into(),
+        };
+        // Its level: raised or lowered, never over -1 dBFS once raised.
+        let level = level_filter(job.req.gain);
         let (fmt, ext) = format_of(kind, &job.req.format).ok_or("this format is not one of this kind of clip")?;
         let part = dir.join(format!("{}.part.{ext}", job.id));
         let out = dir.join(format!("{}.{ext}", job.id));
@@ -466,7 +502,7 @@ impl Clips {
             args.extend(["-txt_format", "bitmap", "-txt_page", "subtitle"].map(String::from));
         }
         args.extend(["-i".into(), input]);
-        let sound = format!("{},atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS", crate::recorder::AUDIO_SYNC, start + dur);
+        let sound = format!("{},atrim=start={start:.6}:end={:.6},asetpts=PTS-STARTPTS{level}", crate::recorder::AUDIO_SYNC, start + dur);
         // The picture made smaller, deinterlaced (web, light), or kept as it is.
         let fit = |h: u32| format!("{}scale=-2:'min({h},ih)',format=yuv420p", if media.interlaced { "yadif," } else { "" });
         match (kind, fmt) {
@@ -476,7 +512,12 @@ impl Clips {
                 args = ["-hide_banner", "-nostdin", "-v", "error", "-progress", "pipe:1"].map(String::from).to_vec();
                 args.extend(["-ss".into(), format!("{from:.6}"), "-i".into(), format!("concat:{}", segs.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join("|"))]);
                 args.extend(["-t".into(), format!("{dur:.6}")]);
-                args.extend(["-map", "0:v:0", "-map", "0:a?", "-map", "0:s?", "-c", "copy", "-muxdelay", "0", "-f", "mpegts", "-y"].map(String::from));
+                args.extend(["-map".into(), "0:v:0".into(), "-map".into(), format!("{audio_map}?"), "-map".into(), "0:s?".into(), "-c".into(), "copy".into()]);
+                // A level asked: the sound made again (the picture stays as it is).
+                if !level.is_empty() {
+                    args.extend(["-af".into(), level.trim_start_matches(',').to_string(), "-c:a".into(), "aac".into(), "-b:a".into(), "256k".into()]);
+                }
+                args.extend(["-muxdelay", "0", "-f", "mpegts", "-y"].map(String::from));
             }
             (Kind::Video, _) => {
                 let scale = match fmt {
@@ -487,9 +528,9 @@ impl Clips {
                 if burn {
                     // The subtitles over the picture, on the source's timeline, then cut.
                     let (w, h) = (media.width.max(2), media.height.max(2));
-                    args.extend(["-filter_complex".into(), format!("[0:s:0]scale={w}:{h}[s];[0:v:0][s]overlay=eof_action=pass,trim=start={start:.6},setpts=PTS-STARTPTS{scale}[v]"), "-map".into(), "[v]".into(), "-map".into(), "0:a?".into()]);
+                    args.extend(["-filter_complex".into(), format!("[0:s:0]scale={w}:{h}[s];[0:v:0][s]overlay=eof_action=pass,trim=start={start:.6},setpts=PTS-STARTPTS{scale}[v]"), "-map".into(), "[v]".into(), "-map".into(), format!("{audio_map}?")]);
                 } else {
-                    args.extend(["-map", "0:v:0", "-map", "0:a?"].map(String::from));
+                    args.extend(["-map".into(), "0:v:0".into(), "-map".into(), format!("{audio_map}?")]);
                     args.extend(["-vf".into(), format!("trim=start={start:.6},setpts=PTS-STARTPTS{scale}")]);
                 }
                 args.extend(["-af".into(), sound]);
@@ -515,16 +556,18 @@ impl Clips {
                 }
                 args.push("-y".into());
             }
-            // The first track (the one heard), in MP3.
+            // The track heard (else the first), in MP3.
             (Kind::Audio, "mp3") => {
-                args.extend(["-map", "0:a:0", "-vn", "-af"].map(String::from));
+                args.extend(["-map".into(), format!("0:a:{}", track.unwrap_or(0)), "-vn".into(), "-af".into()]);
                 args.push(sound);
                 args.extend(["-c:a", "libmp3lame", "-b:a", "192k", "-y"].map(String::from));
             }
-            // Every track, side by side in one WAV (a WAV holds one stream).
+            // The track heard; else every track, side by side in one WAV (a WAV holds one stream).
             (Kind::Audio, "wav") => {
                 let n = media.audio_tracks.max(1) as usize;
-                if n > 1 {
+                if let Some(t) = track {
+                    args.extend(["-map".into(), format!("0:a:{t}"), "-af".into(), sound]);
+                } else if n > 1 {
                     let mut g: Vec<String> = (0..n).map(|k| format!("[0:a:{k}]{sound}[a{k}]")).collect();
                     g.push(format!("{}amerge=inputs={n}[a]", (0..n).map(|k| format!("[a{k}]")).collect::<String>()));
                     args.extend(["-filter_complex".into(), g.join(";"), "-map".into(), "[a]".into()]);
@@ -534,9 +577,9 @@ impl Clips {
                 }
                 args.extend(["-vn", "-c:a", "pcm_s16le", "-y"].map(String::from));
             }
-            // Every sound track, as they are recorded.
+            // The track heard (else every track), as recorded.
             (Kind::Audio, _) => {
-                args.extend(["-map", "0:a", "-vn", "-af"].map(String::from));
+                args.extend(["-map".into(), audio_map.clone(), "-vn".into(), "-af".into()]);
                 args.push(sound);
                 args.extend(["-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart", "-y"].map(String::from));
             }
@@ -626,9 +669,9 @@ impl Clips {
                 "light" => "H.264 720p · 2,5 Mb/s · AAC".into(),
                 "prores" => "ProRes 422 · PCM".into(),
                 "copy" => "MPEG-TS · copie".into(),
-                "m4a" => format!("AAC · {} × 2.0", media.audio_tracks.max(1)),
+                "m4a" => format!("AAC · {} × 2.0", if track.is_some() { 1 } else { media.audio_tracks.max(1) }),
                 "mp3" => "MP3 · 192 kb/s".into(),
-                "wav" => format!("WAV · {} canaux", media.audio_tracks.max(1) * 2),
+                "wav" => format!("WAV · {} canaux", if track.is_some() { 2 } else { media.audio_tracks.max(1) * 2 }),
                 "jpg" => format!("JPEG · {}×{}", media.width, media.height),
                 "png" => format!("PNG · {}×{}", media.width, media.height),
                 _ => "H.264 · AAC".into(),
@@ -702,6 +745,57 @@ pub fn routes() -> Router<Shared> {
         .route("/api/clips/{id}/thumb.jpg", get(thumb))
         .route("/api/jobs/{id}", delete(cancel))
         .route("/api/clips/space", get(space))
+        .route("/api/clips/peak", axum::routing::post(peak))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PeakQuery {
+    recorder: String,
+    run: String,
+    /// Source time of the first frame, seconds (as a clip's).
+    t: f64,
+    seconds: f64,
+    #[serde(default)]
+    track: u32,
+}
+
+/// The loudest peak (dBFS) of one sound track over a part of the loop (the Extraction's wand):
+/// null when there is no sound there. A part that begins before the recording: from its start.
+async fn peak(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(q): Json<PeakQuery>) -> ApiResult<Json<Value>> {
+    require(me.can_extract())?;
+    if !q.t.is_finite() || !q.seconds.is_finite() || q.seconds <= 0.0 {
+        return Err(bad("empty part"));
+    }
+    let rec = s.recorders.get(&q.recorder).ok_or_else(|| not_found("recorder"))?;
+    let found = {
+        let runs = rec.runs.read().unwrap();
+        runs.iter().find(|r| r.meta.id == q.run).and_then(|run| {
+            let media = run.meta.media.clone().unwrap_or_default();
+            if media.audio_tracks == 0 || q.track >= media.audio_tracks {
+                return None;
+            }
+            // At most half an hour measured (a few seconds of work).
+            let t0 = q.t.max(run.master.front()?.t0);
+            let t1 = (q.t + q.seconds).min(t0 + 1800.0);
+            let segs = run.covering(t0, t1)?;
+            let seg_t0 = segs.first()?.t0;
+            Some((segs.iter().map(|x| run.master_path(x.n)).collect::<Vec<_>>(), seg_t0, t0, t1))
+        })
+    };
+    let Some((paths, seg_t0, t0, t1)) = found else { return Ok(Json(json!({ "peak": null }))) };
+    // As a clip is cut: the files' times start again from 0 at the 33-bit wrap.
+    let base = (seg_t0 / crate::recorder::PTS_WRAP).floor() * crate::recorder::PTS_WRAP;
+    let input = format!("concat:{}", paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join("|"));
+    let filter = format!("{},atrim=start={:.6}:end={:.6},volumedetect", crate::recorder::AUDIO_SYNC, t0 - base, t1 - base);
+    let mut cmd = tokio::process::Command::new(&s.recorders.ffmpeg);
+    cmd.args(["-hide_banner", "-nostdin", "-copyts", "-i", &input, "-map", &format!("0:a:{}", q.track), "-vn", "-sn", "-af", &filter, "-f", "null", "-"]);
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
+    crate::recorder::background(&mut cmd);
+    let out = tokio::time::timeout(Duration::from_secs(60), cmd.output()).await.map_err(|_| bad("the measure took too long"))?.map_err(internal)?;
+    let said = String::from_utf8_lossy(&out.stderr);
+    let peak = said.lines().filter_map(|l| l.split("max_volume:").nth(1)).filter_map(|v| v.trim().trim_end_matches("dB").trim().parse::<f64>().ok()).next_back();
+    Ok(Json(json!({ "peak": peak.filter(|p| p.is_finite()) })))
 }
 
 /// The free space where clips are made (the Extraction says when one would not fit).
