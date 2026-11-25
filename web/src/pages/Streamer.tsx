@@ -204,6 +204,7 @@ function Center({ rec }: { rec: Recorder }) {
         <div className="ps-win air">
           <video ref={video} className="sc-video" playsInline style={received ? undefined : { visibility: 'hidden' }} />
           {!received && <span className="sc-onpic mid">{st?.state === 'starting' ? t('Connecting…') : t('Source stopped')}</span>}
+          {received && page.catcher}
           {received && page.mode === 'view' && <ProgramLayer rec={rec} prog={prog} />}
           {page.mode === 'view' && <OverlayEditor prog={prog} editable={run} onPlace={place} />}
           {page.over}

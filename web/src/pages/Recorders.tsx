@@ -1055,6 +1055,8 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
   const prog = (p: { name: string; start: number; end: number }) => `${clock(p.start, timezone).slice(0, 5)}–${clock(p.end, timezone).slice(0, 5)} ${p.name}`;
   return (
     <>
+      {/* A web page: no picture to try, no programme guide (it is seen and piloted in the Streamer). */}
+      {c.protocol !== 'page' && (
       <section className="sc-rm-sec">
         <h3>{t('Preview')}</h3>
         {card ? (
@@ -1100,6 +1102,7 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
           </div>
         )}
       </section>
+      )}
       <section className="sc-rm-sec">
         <h3>{t('Technical')}</h3>
         <dl className="sc-rm-info">
@@ -1111,6 +1114,7 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
           ))}
         </dl>
       </section>
+      {c.protocol !== 'page' && (
       <section className="sc-rm-sec">
         <h3>{t('Programme guide (EPG)')}</h3>
         {st?.onAir ? (
@@ -1138,6 +1142,7 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
           </p>
         )}
       </section>
+      )}
     </>
   );
 }

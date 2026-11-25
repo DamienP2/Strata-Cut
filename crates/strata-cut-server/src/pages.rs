@@ -95,6 +95,11 @@ pub struct Page {
     cdp: Mutex<Option<Arc<Cdp>>>,
     /// The page's pictures as they change (JPEG), for the direct views.
     frames: broadcast::Sender<Bytes>,
+    /// The last of them: given at once to a view that opens (a page that does not move sends none).
+    last: Mutex<Option<Bytes>>,
+    /// Its main frame is loading; its title.
+    loading: AtomicBool,
+    title: Mutex<String>,
     stop: watch::Sender<bool>,
 }
 
@@ -181,6 +186,9 @@ pub fn ensure(c: &RecorderConfig) -> Option<u16> {
         hosts: Mutex::new(HashMap::new()),
         cdp: Mutex::new(None),
         frames: broadcast::channel(4).0,
+        last: Mutex::new(None),
+        loading: AtomicBool::new(false),
+        title: Mutex::new(String::new()),
         stop: watch::channel(false).0,
     });
     running.insert(c.id.clone(), page.clone());
@@ -215,6 +223,12 @@ fn clamp(c: Crop, w: u32, h: u32) -> Crop {
 }
 
 impl Page {
+    /// A picture of the page: to the views, and kept for the next one to open.
+    fn shown(&self, jpeg: Bytes) {
+        *self.last.lock().unwrap() = Some(jpeg.clone());
+        let _ = self.frames.send(jpeg);
+    }
+
     fn save(&self) {
         let s = Saved { url: self.url.lock().unwrap().clone(), crop: Some(*self.crop.lock().unwrap()) };
         let _ = crate::paths::write_json(&self.dir.join("state.json"), &s, false);
@@ -833,9 +847,31 @@ async fn event(page: &Arc<Page>, cdp: &Arc<Cdp>, method: &str, p: &Value) {
                 };
             });
         }
+        // Its main frame loading (the page's own frames load too, said by their own id).
+        "Page.frameStartedLoading" if p["frameId"].as_str() == Some(cdp.main.lock().unwrap().as_str()) => page.loading.store(true, Ordering::Relaxed),
+        "Page.frameStoppedLoading" if p["frameId"].as_str() == Some(cdp.main.lock().unwrap().as_str()) => {
+            page.loading.store(false, Ordering::Relaxed);
+            // Its title, as the page wrote it (the target's own says its address until then).
+            let (page, c) = (page.clone(), cdp.clone());
+            tokio::spawn(async move {
+                if let Ok(r) = c.call_within("Runtime.evaluate", json!({ "expression": "document.title", "returnByValue": true }), true, 2).await {
+                    if let Some(t) = r["result"]["value"].as_str() {
+                        *page.title.lock().unwrap() = t.trim().chars().take(200).collect();
+                    }
+                }
+            });
+        }
+        // A title the page changes later (the target says it, or its address while it has none).
+        "Target.targetInfoChanged" if p["targetInfo"]["targetId"].as_str() == Some(cdp.main.lock().unwrap().as_str()) => {
+            let t = p["targetInfo"]["title"].as_str().unwrap_or("");
+            let url = p["targetInfo"]["url"].as_str().unwrap_or("");
+            if !t.is_empty() && !url.contains(t) && !page.loading.load(Ordering::Relaxed) {
+                *page.title.lock().unwrap() = t.chars().take(200).collect();
+            }
+        }
         "Page.screencastFrame" => {
             if let Some(data) = p["data"].as_str().and_then(base64_decode) {
-                let _ = page.frames.send(Bytes::from(data));
+                page.shown(Bytes::from(data));
             }
             let ack = json!({ "sessionId": p["sessionId"] });
             let c = cdp.clone();
@@ -920,6 +956,12 @@ async fn cast(page: Arc<Page>, cdp: Arc<Cdp>) {
         let wanted = page.frames.receiver_count() > 0;
         if wanted != cdp.casting.load(Ordering::Relaxed) {
             let r = if wanted {
+                // A picture at once (a still page sends none until it changes), then each change.
+                if let Ok(shot) = cdp.call("Page.captureScreenshot", json!({ "format": "jpeg", "quality": 70 }), true).await {
+                    if let Some(data) = shot["data"].as_str().and_then(base64_decode) {
+                        page.shown(Bytes::from(data));
+                    }
+                }
                 cdp.call("Page.startScreencast", json!({ "format": "jpeg", "quality": 70, "maxWidth": page.w, "maxHeight": page.h, "everyNthFrame": 1 }), true).await
             } else {
                 cdp.call("Page.stopScreencast", json!({}), true).await
@@ -998,7 +1040,7 @@ async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id)
     let c = rec.config();
     let f = Format::parse(&c.video_mode).unwrap_or(Format { width: 1920, height: 1080, interlaced: false, num: 25, den: 1 });
     Ok(Json(match pages().and_then(|p| p.get(&id)) {
-        Some(p) => json!({ "running": p.cdp.lock().unwrap().is_some(), "url": *p.url.lock().unwrap(), "crop": *p.crop.lock().unwrap(), "width": p.w, "height": p.h }),
+        Some(p) => json!({ "running": p.cdp.lock().unwrap().is_some(), "url": *p.url.lock().unwrap(), "title": *p.title.lock().unwrap(), "loading": p.loading.load(Ordering::Relaxed), "crop": *p.crop.lock().unwrap(), "width": p.w, "height": p.h }),
         None => {
             let saved: Saved = crate::paths::read_json(&s.data_dir.join("pages").join(&id).join("state.json")).unwrap_or_default();
             json!({ "running": false, "url": saved.url, "crop": saved.crop, "width": f.width, "height": f.height })
@@ -1044,7 +1086,8 @@ async fn nav(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id):
         "back" => cdp.call("Runtime.evaluate", json!({ "expression": "history.back()" }), true).await,
         "forward" => cdp.call("Runtime.evaluate", json!({ "expression": "history.forward()" }), true).await,
         "reload" => cdp.call("Page.reload", json!({}), true).await,
-        _ => return Err(bad("back, forward or reload")),
+        "stop" => cdp.call("Page.stopLoading", json!({}), true).await,
+        _ => return Err(bad("back, forward, reload or stop")),
     };
     r.map_err(bad)?;
     Ok(StatusCode::NO_CONTENT)
@@ -1105,11 +1148,19 @@ struct Inputs {
     events: Vec<Input>,
 }
 
-async fn input(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(i): Json<Inputs>) -> ApiResult<StatusCode> {
+/// The pointer as the page draws it there: a hand on a link, a bar in a field (CSS `cursor`).
+const CURSOR_AT: &str = "(() => { const e = document.elementFromPoint(__X__, __Y__); if (!e) return 'default'; let c = getComputedStyle(e).cursor; if (c === 'auto') c = e.closest('input:not([type=button]):not([type=submit]):not([type=checkbox]):not([type=radio]), textarea, [contenteditable=\"\"], [contenteditable=\"true\"]') ? 'text' : 'default'; return c; })()";
+
+/// What is done in the page; answers the pointer's look where the mouse is now.
+async fn input(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(i): Json<Inputs>) -> ApiResult<Json<Value>> {
     require(may(&me))?;
     let page = page_of(&s, &id)?;
     let cdp = page.cdp.lock().unwrap().clone().ok_or_else(|| bad("the page is starting: again in a moment"))?;
+    let mut pointer = None;
     for e in i.events.into_iter().take(200) {
+        if let Input::Mouse { x, y, .. } = &e {
+            pointer = Some((*x, *y));
+        }
         let (method, params) = match e {
             Input::Mouse { r#type, x, y, button, clicks, dx, dy, mods } => {
                 let t = match r#type.as_str() {
@@ -1128,7 +1179,18 @@ async fn input(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
         };
         let _ = cdp.call(method, params, true).await;
     }
-    Ok(StatusCode::NO_CONTENT)
+    let mut cursor = Value::Null;
+    if let Some((x, y)) = pointer {
+        let expr = CURSOR_AT.replace("__X__", &format!("{x:.0}")).replace("__Y__", &format!("{y:.0}"));
+        if let Ok(r) = cdp.call_within("Runtime.evaluate", json!({ "expression": expr, "returnByValue": true }), true, 1).await {
+            let c = r["result"]["value"].as_str().unwrap_or("default");
+            // A plain CSS cursor name only (never a url() of the page).
+            if c.chars().all(|ch| ch.is_ascii_lowercase() || ch == '-') && c.len() < 20 {
+                cursor = json!(c);
+            }
+        }
+    }
+    Ok(Json(json!({ "cursor": cursor })))
 }
 
 /// The page as it is now, as its pictures change (MJPEG: an image element shows it).
@@ -1136,6 +1198,15 @@ async fn live(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id)
     require(me.can("stream.view") || me.can("extract.view"))?;
     let page = page_of(&s, &id)?;
     let rx = page.frames.subscribe();
+    // The last picture at once: the view is never black while the page does not move.
+    let first = page.last.lock().unwrap().clone();
+    let part = |jpeg: &Bytes| {
+        let mut part = format!("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n", jpeg.len()).into_bytes();
+        part.extend_from_slice(jpeg);
+        part.extend_from_slice(b"\r\n");
+        Bytes::from(part)
+    };
+    let head = futures_util::stream::iter(first.as_ref().map(part).into_iter().map(Ok::<Bytes, std::io::Error>));
     let stream = futures_util::stream::unfold(rx, |mut rx| async move {
         loop {
             match rx.recv().await {
@@ -1150,7 +1221,7 @@ async fn live(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id)
             }
         }
     });
-    let mut r = Response::new(Body::from_stream(stream));
+    let mut r = Response::new(Body::from_stream(head.chain(stream)));
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("multipart/x-mixed-replace; boundary=frame"));
     r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(r)

@@ -44,7 +44,8 @@ export function ClipPreview({ recId, name, from, to, fps, timezone, sound, still
     const onPause = () => setPlaying(p.playing);
     v.addEventListener('play', onPlay);
     v.addEventListener('pause', onPause);
-    void p.seekWall(from.wall, !still);
+    // Shown from its IN, paused: played when asked (Space, ▶).
+    void p.seekWall(from.wall, false);
     return () => {
       v.removeEventListener('play', onPlay);
       v.removeEventListener('pause', onPause);

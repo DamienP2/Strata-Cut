@@ -633,11 +633,13 @@ function Editor({ rec }: { rec: Recorder }) {
 
   return (
     <>
-      <div className="sc-center">
+      {/* A web page has no programme guide: the picture takes its column too. */}
+      <div className={`sc-center ${rec.protocol === 'page' ? 'sc-wide' : ''}`}>
         {page.bar && <div className="sc-pagebar">{page.bar}</div>}
         <div className="sc-viewer-wrap">
           <div className="sc-viewer">
             <video ref={videoRef} className="sc-video" playsInline />
+            {page.catcher}
             {hole && (
               <div className="sc-hole">
                 <span className="sc-hole-ic">
@@ -785,7 +787,7 @@ function Editor({ rec }: { rec: Recorder }) {
           }
         />
       )}
-      <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={can.has(user, 'schedule.edit')} act={act} />
+      {rec.protocol !== 'page' && <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={can.has(user, 'schedule.edit')} act={act} />}
     </>
   );
 }
