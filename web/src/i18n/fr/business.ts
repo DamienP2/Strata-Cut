@@ -485,11 +485,7 @@ export const business: Record<string, string> = {
   'Every source already records all the time.': 'Toutes les sources enregistrent déjà en continu.',
   // Extraction, Streamer: the sources in two groups
   'Loop to cut in': 'Boucle à extraire',
-  'Nothing to cut': 'Rien à extraire',
-  'Picture available': 'Image disponible',
-  'No picture': 'Sans image',
-  'source|Stopped': 'Arrêtée',
-  'source|Programmed': 'Programmée',
+  'No source': 'Aucune source',
   'Source stopped': 'Source arrêtée',
   // NDI sources
   NDI: 'NDI',
