@@ -2,7 +2,7 @@
 // Typography: U+00A0 before ? ! : ; and inside « ».
 export const business: Record<string, string> = {
   Recorders: 'Sources',
-  Extraction: 'Extraction',
+  Extraction: 'Cut',
   Clips: 'Extraits',
   Clip: 'Extrait',
 
@@ -104,7 +104,7 @@ export const business: Record<string, string> = {
   'Loop emptied': 'Boucle vidée',
   'Next: {name}': 'Ensuite\u00a0: {name}',
   // Schedule
-  'Schedule': 'Régie',
+  'Schedule': 'Control Room',
   'Next slot: {when}': 'Prochain enregistrement\u00a0: {when}',
   'No slot to come': 'Aucun enregistrement à venir',
   'Programmed slot': 'Enregistrement programmé',
@@ -162,8 +162,8 @@ export const business: Record<string, string> = {
   'Stopped: it starts a minute before and stops at the end.': 'Arrêté\u00a0: il démarre une minute avant et s’arrête à la fin.',
   Tomorrow: 'Demain',
   Now: 'Maintenant',
-  'Click: watch it in Extraction': 'Clic\u00a0: le voir dans Extraction',
-  'Click: open it in Extraction': 'Clic\u00a0: l’ouvrir dans Extraction',
+  'Click: watch it in Extraction': 'Clic\u00a0: le voir dans Cut',
+  'Click: open it in Extraction': 'Clic\u00a0: l’ouvrir dans Cut',
   'Click: its details': 'Clic\u00a0: ses détails',
   'This moment is no longer in the loop': 'Ce moment n’est plus dans la boucle',
   'Extraction of “{name}” started': 'Extraction de «\u00a0{name}\u00a0» lancée',

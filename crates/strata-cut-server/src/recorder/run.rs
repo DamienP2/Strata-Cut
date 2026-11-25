@@ -1103,7 +1103,11 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                 // Programmed: the slot is over (or was removed).
                 // (Its settings as they are now: the recording mode may have changed meanwhile.)
                 if !cfg_rx.borrow().enabled && !m.wants(&rec.id, now_ms()) {
-                    tracing::info!("{}: end of the programmed slot (or of its last stream)", cfg.name);
+                    if cfg.protocol == super::Protocol::Pattern {
+                        tracing::info!("{}: no longer shown nor sent: stopped", cfg.name);
+                    } else {
+                        tracing::info!("{}: end of the programmed slot (or of its last stream)", cfg.name);
+                    }
                     stop_child(&mut child).await;
                     tokio::task::block_in_place(|| scan.scan(m, rec, &run_id, true));
                     break Outcome::Restart;

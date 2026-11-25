@@ -1,7 +1,7 @@
 /*
  * The sources on the left of Extraction and Streamer: one line each (picture, state dot, logo,
  * name), only the ones that can be chosen. Extraction: recording / a loop to cut in (stopped).
- * Streamer: on air, then the others received (no title).
+ * Streamer: on air, then the others received (no title), the test patterns with them.
  */
 import { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
@@ -32,17 +32,20 @@ export function SourceGroups({ kind, current, base, onAir }: { kind: 'extract' |
   const { recorders, status } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status })));
   const tick = useTick(30_000);
   const live = (r: Recorder) => status[r.id]?.state === 'recording';
+  // A test pattern: in the Streamer only, offered even before it is made (choosing it makes it).
+  const pattern = (r: Recorder) => r.protocol === 'pattern';
+  const cut = recorders.filter((r) => !pattern(r));
   const loop = (r: Recorder) => status[r.id]?.oldest != null;
   const air = (r: Recorder) => (onAir?.(r) ?? 0) > 0;
   const groups: Group[] = (
     kind === 'extract'
       ? [
-          { key: 'rec', label: t('Recording'), items: recorders.filter(live) },
-          { key: 'loop', label: t('Loop to cut in'), items: recorders.filter((r) => !live(r) && loop(r)) },
+          { key: 'rec', label: t('Recording'), items: cut.filter(live) },
+          { key: 'loop', label: t('Loop to cut in'), items: cut.filter((r) => !live(r) && loop(r)) },
         ]
       : [
           { key: 'air', label: t('On air'), items: recorders.filter((r) => live(r) && air(r)) },
-          { key: 'pic', items: recorders.filter((r) => live(r) && !air(r)) },
+          { key: 'pic', items: recorders.filter((r) => (live(r) || pattern(r)) && !air(r)) },
         ]
   ).filter((g) => g.items.length > 0);
   const dot = (r: Recorder, st?: RecorderStatus) => {

@@ -114,13 +114,15 @@ export function Extract({ recorder }: { recorder?: string }) {
   // The recorder asked, else the last one opened, else the first with something to show (it
   // records, or its loop holds something).
   const [last, setLast] = useDisplayPref<string | null>('extract.recorder', null);
-  const known = (x?: string | null) => !!x && recorders.some((r) => r.id === x);
+  // A test pattern is not recorded: nothing to cut in it.
+  const cuttable = recorders.filter((r) => r.protocol !== 'pattern');
+  const known = (x?: string | null) => !!x && cuttable.some((r) => r.id === x);
   const open = (x?: string | null) => known(x) && (status[x!]?.state === 'recording' || status[x!]?.oldest != null);
   // A source stopped with nothing recorded has nothing to show (greyed in the list): another,
   // once the states are known.
   const ready = Object.keys(status).length > 0;
-  const fallback = open(last) ? last! : recorders.find((r) => open(r.id))?.id;
-  const id = known(recorder) && (!ready || open(recorder) || !fallback) ? recorder : (fallback ?? recorders[0]?.id);
+  const fallback = open(last) ? last! : cuttable.find((r) => open(r.id))?.id;
+  const id = known(recorder) && (!ready || open(recorder) || !fallback) ? recorder : (fallback ?? cuttable[0]?.id);
   useEffect(() => {
     if (id && id !== recorder) void navigate(`/extract/${id}${location.search}`, true);
     if (id && id !== last) setLast(id);

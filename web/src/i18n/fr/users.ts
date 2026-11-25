@@ -79,7 +79,7 @@ export const users: Record<string, string> = {
   'No group': 'Aucun groupe',
   'What it may do': 'Ce qu’il peut faire',
   'Groups set by hand': 'Groupes choisis à la main',
-  'See the Régie': 'Voir la régie',
+  'See the Régie': 'Voir la Control Room',
   'Start and stop recordings': 'Lancer et arrêter les enregistrements',
   'Program recordings': 'Programmer des enregistrements',
   'Send to the file servers': 'Envoyer vers les serveurs de fichiers',

@@ -259,7 +259,19 @@ export function Clips() {
                 </colgroup>
                 <thead>
                   <tr>
-                    <th />
+                    <th>
+                      {/* Every clip shown, of every source. */}
+                      <input
+                        type="checkbox"
+                        checked={shown.length > 0 && shown.every((c) => picked.has(c.id))}
+                        aria-label={t('Select every clip')}
+                        data-tip={t('Select every clip')}
+                        ref={(el) => {
+                          if (el) el.indeterminate = shown.some((c) => picked.has(c.id)) && !shown.every((c) => picked.has(c.id));
+                        }}
+                        onChange={(e) => toggle(shown.map((c) => c.id), e.target.checked)}
+                      />
+                    </th>
                     <th>{t('Clip')}</th>
                     <th>{t('In')}</th>
                     <th>{t('Duration')}</th>

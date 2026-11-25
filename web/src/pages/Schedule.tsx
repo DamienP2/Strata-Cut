@@ -65,7 +65,8 @@ export function Schedule() {
   }, [load]);
 
   // Every recorder can be programmed: a stopped one records during its slots.
-  const programmed = recorders;
+  // A test pattern is not recorded (made live in the Streamer): not in the Régie.
+  const programmed = recorders.filter((r) => r.protocol !== 'pattern');
   const names = useMemo(dayNames, []);
   if (!slots) return <div className="loading">{t('Loading…')}</div>;
 
@@ -84,7 +85,7 @@ export function Schedule() {
           </>
         )}
       </div>
-      <SlotPanel slots={slots} recorders={recorders} names={names} timezone={timezone} admin={admin} only={only} setOnly={setOnly} onOpen={(slot) => setEdit({ slot })} onNew={() => setEdit({ slot: null })} />
+      <SlotPanel slots={slots} recorders={programmed} names={names} timezone={timezone} admin={admin} only={only} setOnly={setOnly} onOpen={(slot) => setEdit({ slot })} onNew={() => setEdit({ slot: null })} />
       {edit && <SlotModal slot={edit.slot} initial={edit.initial} recorders={programmed} preset={only} names={names} timezone={timezone} admin={admin} onClose={() => setEdit(null)} />}
     </div>
   );

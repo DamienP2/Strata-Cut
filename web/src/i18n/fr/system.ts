@@ -177,7 +177,7 @@ export const system: Record<string, string> = {
   'Blackmagic DeckLink cards': 'Cartes Blackmagic DeckLink',
   'The driver sees no card. Is it in place, and in a virtual machine passed through to it? After installing the driver, the server must be restarted.': 'Le pilote ne voit aucune carte. Est-elle en place et, dans une machine virtuelle, attribuée à la VM\u00a0? Après l’installation du pilote, le serveur doit être redémarré.',
   'Input {n}': 'Entrée {n}',
-  'Open it in Extraction': 'L’ouvrir dans Extraction',
+  'Open it in Extraction': 'L’ouvrir dans Cut',
   'Create a recorder': 'Créer une source',
   Busy: 'Occupée',
   'Name of the card': 'Nom de la carte',

@@ -71,6 +71,14 @@ function Center({ rec }: { rec: Recorder }) {
   // Preparing the output (picture, overlay, sound), and piloting a web page: each its right.
   const run = useApp((s) => can.has(s.auth?.user, 'stream.program'));
   const pilot = useApp((s) => can.has(s.auth?.user, 'stream.pilot'));
+  // A test pattern is made only while shown here (asked again every 10 s).
+  useEffect(() => {
+    if (rec.protocol !== 'pattern') return;
+    const ask = () => void api('POST', `/api/recorders/${rec.id}/demand`).catch(() => {});
+    ask();
+    const i = setInterval(ask, 10_000);
+    return () => clearInterval(i);
+  }, [rec.id, rec.protocol]);
   const prog = useProgram(rec.id);
   const video = useRef<HTMLVideoElement>(null);
   const audio = useAudioOut(video, 'streamer');

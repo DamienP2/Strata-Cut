@@ -35,6 +35,8 @@ pub fn routes() -> Router<Shared> {
         .route("/api/recorders/{id}", axum::routing::put(update).delete(delete))
         .route("/api/recorders/probe", post(probe))
         .route("/api/recorders/{id}/recording", post(set_recording))
+        .route("/api/recorders/{id}/demand", post(demand))
+        .route("/api/recorders/order", axum::routing::put(reorder))
         .route("/api/recorders/{id}/clear", post(clear))
         .route("/api/recorders/{id}/logo", get(logo_get).put(logo_put).delete(logo_delete).layer(axum::extract::DefaultBodyLimit::max(super::logo::MAX + 4096)))
         .route("/api/recorders/{id}/logo/url", post(logo_url))
@@ -272,10 +274,27 @@ struct Recording {
     loop_hours: Option<u32>,
 }
 
+/// The Streamer shows a test pattern (asked again every 10 s while it does).
+async fn demand(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
+    require(me.can("stream.view"))?;
+    s.recorders.demand(&id).map_err(|_| not_found("recorder"))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Système › Sources: the sources' order (everywhere they are listed).
+async fn reorder(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(ids): Json<Vec<String>>) -> ApiResult<StatusCode> {
+    require(me.is_admin())?;
+    s.recorders.reorder(&ids).map_err(bad)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Programmation: how a source is recorded (all the time, during its slots, not at all).
 async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Recording>) -> ApiResult<Json<Value>> {
     require(me.can("schedule.rec"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    if rec.config().protocol == super::Protocol::Pattern {
+        return Err(bad("a test pattern is not recorded: it is made live in the Streamer"));
+    }
     let mut c = rec.config();
     (c.enabled, c.slots_off) = match b.mode.as_str() {
         "continuous" => (true, false),

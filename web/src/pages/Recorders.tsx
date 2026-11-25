@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { Cable, CalendarClock, ChevronDown, Copy, Eraser, Globe, Grid3x3, ImagePlus, MonitorPlay, MoreHorizontal, Network, Pencil, Plus, RadioTower, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { Cable, CalendarClock, ChevronDown, Copy, Eraser, Globe, Grid3x3, GripVertical, ImagePlus, MonitorPlay, MoreHorizontal, Network, Pencil, Plus, RadioTower, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { RecLogo } from '../ui/RecLogo';
 import { ContentFlags } from '../ui/ContentFlags';
@@ -154,7 +154,11 @@ export function Recorders() {
     recording: recorders.filter((r) => status[r.id]?.state === 'recording').length,
     nosignal: recorders.filter((r) => r.enabled && ['nosignal', 'error'].includes(status[r.id]?.state ?? '')).length,
   };
+  // A kind of source only (its group's key), or all.
+  const [kind, setKind] = useDisplayPref<string>('recorders.kind', 'all');
+  const groupOf = (r: Recorder) => GROUPS.find((g) => g.protocols.includes(r.protocol))?.key ?? '';
   const shown = recorders.filter((r) => {
+    if (kind !== 'all' && groupOf(r) !== kind) return false;
     if (q && !`${r.name} ${sourceAddress(r)} ${r.protocol}`.toLowerCase().includes(q.toLowerCase())) return false;
     if (chip === 'recording') return status[r.id]?.state === 'recording';
     if (chip === 'nosignal') return r.enabled && ['nosignal', 'error'].includes(status[r.id]?.state ?? '');
@@ -162,6 +166,77 @@ export function Recorders() {
   });
   // Which destinations each source is sent to now.
   const streams = useStreams(3000);
+  // The groups in the order of their sources (the first of each), those still empty after.
+  const order = useMemo(() => {
+    const seen: string[] = [];
+    for (const r of recorders) {
+      const k = groupOf(r);
+      if (k && !seen.includes(k)) seen.push(k);
+    }
+    return [...seen, ...GROUPS.map((g) => g.key).filter((k) => !seen.includes(k))].map((k) => GROUPS.find((g) => g.key === k)!);
+  }, [recorders]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The loops emptied: of the stopped sources, or of all (a test pattern keeps none).
+  const purge = async (all: boolean) => {
+    const list = recorders.filter((r) => r.protocol !== 'pattern' && status[r.id]?.oldest != null && (all || status[r.id]?.state !== 'recording'));
+    if (list.length === 0) {
+      useApp.getState().toast(t('No loop to empty'), 'info');
+      return;
+    }
+    const ok = await confirmDialog({
+      title: all ? t('Empty the loops of all the sources?') : t('Empty the loops of the stopped sources?'),
+      message: `${list.map((r) => r.name).join(', ')}\n\n${t('Everything recorded so far is deleted; the recordings go on. The clips stay.')}`,
+      confirm: tn(list.length, 'Empty {n} loop', 'Empty {n} loops'),
+      danger: true,
+    });
+    if (!ok) return;
+    let failed = 0;
+    for (const r of list) {
+      try {
+        await api('POST', `/api/recorders/${r.id}/clear`);
+      } catch {
+        failed++;
+      }
+    }
+    useApp.getState().toast(failed ? t('{n} loops could not be emptied', { n: failed }) : tn(list.length, '{n} loop emptied', '{n} loops emptied'));
+  };
+  // Dragged to put in order: a source inside its kind, or a kind among the others.
+  const [drag, setDrag] = useState<{ card?: string; group?: string } | null>(null);
+  const [over, setOver] = useState<{ id: string; before: boolean } | null>(null);
+  const inGroup = (k: string) => recorders.filter((r) => groupOf(r) === k);
+  const saveOrder = async (ids: string[]) => {
+    const byId = new Map(recorders.map((r) => [r.id, r]));
+    useApp.setState({ recorders: ids.map((id) => byId.get(id)!).filter(Boolean) });
+    try {
+      await api('PUT', '/api/recorders/order', ids);
+    } catch (e) {
+      showError(e);
+      void reloadRecorders();
+    }
+  };
+  const dropCard = (target: Recorder, before: boolean) => {
+    const id = drag?.card;
+    if (!id || id === target.id) return;
+    const k = groupOf(target);
+    const list = inGroup(k).filter((r) => r.id !== id);
+    const at = list.findIndex((r) => r.id === target.id) + (before ? 0 : 1);
+    list.splice(at, 0, recorders.find((r) => r.id === id)!);
+    void saveOrder(order.flatMap((g) => (g.key === k ? list : inGroup(g.key))).map((r) => r.id));
+  };
+  const dropGroup = (target: string, before: boolean) => {
+    const from = drag?.group;
+    if (!from || from === target) return;
+    const keys = order.map((g) => g.key).filter((k) => k !== from);
+    keys.splice(keys.indexOf(target) + (before ? 0 : 1), 0, from);
+    void saveOrder(keys.flatMap((k) => inGroup(k)).map((r) => r.id));
+  };
+  const half = (e: React.DragEvent, dir: 'x' | 'y') => {
+    const b = e.currentTarget.getBoundingClientRect();
+    return dir === 'x' ? e.clientX < b.left + b.width / 2 : e.clientY < b.top + b.height / 2;
+  };
+  const endDrag = () => {
+    setDrag(null);
+    setOver(null);
+  };
   return (
     <>
       <div>
@@ -173,6 +248,19 @@ export function Recorders() {
             </p>
           </div>
           <div className="spacer" />
+          {admin && recorders.length > 0 && (
+            <button
+              className="btn"
+              onClick={(e) =>
+                openContextMenu(e, [
+                  { label: t('Of the stopped sources'), icon: <Eraser size={14} />, onClick: () => void purge(false) },
+                  { label: t('Of all the sources'), icon: <Eraser size={14} />, danger: true, onClick: () => void purge(true) },
+                ])
+              }
+            >
+              <Eraser size={14} /> {t('Empty the loops')} <ChevronDown size={12} />
+            </button>
+          )}
           {admin && (
             <button className="btn primary" onClick={() => setEdit({ rec: null })}>
               <Plus size={14} /> {t('New recorder')}
@@ -200,7 +288,21 @@ export function Recorders() {
             </div>
           </div>
         )}
-        {shown.length === 0 && (q || chip !== 'all') && (
+        {recorders.length > 0 && (
+          <div className="asr-chips src-kinds">
+            <button className={`asr-chip ${kind === 'all' ? 'on' : ''}`} onClick={() => setKind('all')}>
+              {t('All kinds')}
+            </button>
+            {order
+              .filter((g) => inGroup(g.key).length > 0)
+              .map((g) => (
+                <button key={g.key} className={`asr-chip ${kind === g.key ? 'on' : ''}`} onClick={() => setKind(kind === g.key ? 'all' : g.key)}>
+                  {g.icon} {t(g.label)} <span className="asr-chip-n">{inGroup(g.key).length}</span>
+                </button>
+              ))}
+          </div>
+        )}
+        {shown.length === 0 && (q || chip !== 'all' || kind !== 'all') && (
           <div className="empty big">
             <Search size={22} />
             <p>{t('No match')}</p>
@@ -213,13 +315,42 @@ export function Recorders() {
           </div>
         )}
         {/* By kind of source: each group with its count and its own « + ». */}
-        {GROUPS.map((g) => {
+        {order.map((g) => {
           const mine = shown.filter((r) => g.protocols.includes(r.protocol));
-          const adds = admin && !q && chip === 'all';
+          const adds = admin && !q && chip === 'all' && kind === 'all';
           if (!mine.length && !(adds && recorders.length === 0)) return null;
+          const dropHere = drag?.group && over?.id === `g:${g.key}`;
           return (
-            <section key={g.key} className="src-group">
+            <section
+              key={g.key}
+              className={`src-group ${drag?.group === g.key ? 'dragging' : ''} ${dropHere ? (over.before ? 'drop-before' : 'drop-after') : ''}`}
+              onDragOver={(e) => {
+                if (!drag?.group) return;
+                e.preventDefault();
+                setOver({ id: `g:${g.key}`, before: half(e, 'y') });
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (drag?.group) dropGroup(g.key, half(e, 'y'));
+                endDrag();
+              }}
+            >
               <header className="src-group-head">
+                {admin && (
+                  <span
+                    className="src-grip"
+                    draggable
+                    data-tip={t('Drag to put the kinds in order')}
+                    onDragStart={(e) => {
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', g.key);
+                      setDrag({ group: g.key });
+                    }}
+                    onDragEnd={endDrag}
+                  >
+                    <GripVertical size={14} />
+                  </span>
+                )}
                 <span className="src-group-ico">{g.icon}</span>
                 <h2>{t(g.label)}</h2>
                 <span className="src-group-n">{mine.length}</span>
@@ -232,7 +363,35 @@ export function Recorders() {
               </header>
               <div className="src-grid">
                 {mine.map((r) => (
-                  <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} streams={streams.filter((x) => x.source === r.id)} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
+                  <div
+                    key={r.id}
+                    className={`src-slot ${drag?.card === r.id ? 'dragging' : ''} ${drag?.card && over?.id === r.id ? (over.before ? 'drop-before' : 'drop-after') : ''}`}
+                    draggable={admin}
+                    onDragStart={(e) => {
+                      if ((e.target as HTMLElement).closest('button, input, a')) return e.preventDefault();
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', r.id);
+                      setDrag({ card: r.id });
+                    }}
+                    onDragEnd={endDrag}
+                    onDragOver={(e) => {
+                      // A source moves inside its kind only.
+                      const from = drag?.card ? recorders.find((x) => x.id === drag.card) : null;
+                      if (!from || groupOf(from) !== g.key) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setOver({ id: r.id, before: half(e, 'x') });
+                    }}
+                    onDrop={(e) => {
+                      if (!drag?.card) return;
+                      e.preventDefault();
+                      e.stopPropagation();
+                      dropCard(r, half(e, 'x'));
+                      endDrag();
+                    }}
+                  >
+                    <RecorderCard rec={r} st={status[r.id]} admin={admin} streams={streams.filter((x) => x.source === r.id)} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
+                  </div>
                 ))}
               </div>
             </section>
@@ -287,10 +446,12 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
     void reloadRecorders();
   };
 
+  // A test pattern: made live in the Streamer only, never recorded.
+  const live = rec.protocol === 'pattern';
   const more = (e: React.MouseEvent) =>
     openContextMenu(e, [
       { label: t('Duplicate'), icon: <Copy size={14} />, onClick: onDuplicate },
-      { label: t('Empty the loop'), icon: <Eraser size={14} />, disabled: !st?.oldest, onClick: () => void clearLoop() },
+      ...(live ? [] : [{ label: t('Empty the loop'), icon: <Eraser size={14} />, disabled: !st?.oldest, onClick: () => void clearLoop() }]),
       'sep',
       { label: t('Delete'), icon: <Trash2 size={14} />, danger: true, onClick: () => void remove() },
     ]);
@@ -323,7 +484,9 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
           <RecLogo rec={rec} size="sm" />
           <strong title={[sourceAddress(rec), fmt].filter(Boolean).join('\n')}>{rec.name}</strong>
           {rec.protocol === 'web' && <span className="src-badge">{badge(rec)}</span>}
-          {recording ? (
+          {live ? (
+            <span className={`sc-state ${recording ? 'ok' : ''}`}>{recording ? t('Live in the Streamer') : t('Streamer only')}</span>
+          ) : recording ? (
             <span className="sc-state rec">
               <span className="sc-rec" />
               REC
@@ -353,6 +516,7 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
         ) : (
           <span className="src-line dim" />
         )}
+        {!live && (
         <div className="src-loop" title={t('Loop')}>
           <span className="perf-bar tone-accent">
             <span className="perf-bar-fill" style={{ transform: `translateX(${fill - 100}%)` }} />
@@ -361,10 +525,11 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
             <b>{hours(have)}</b> / {rec.loopHours} h
           </span>
         </div>
+        )}
       </div>
       {admin && (
         <div className="src-actions">
-          {rec.enabled ? (
+          {live ? null : rec.enabled ? (
             <button type="button" className="btn small stop-btn" onClick={() => void stop()}>
               <Square size={10} /> {t('Stop')}
             </button>

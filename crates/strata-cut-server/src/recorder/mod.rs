@@ -263,6 +263,11 @@ impl RecorderConfig {
         if self.protocol == Protocol::Page && self.bitrate == 0.0 {
             self.bitrate = 6.0;
         }
+        // A test pattern is not recorded: made live while the Streamer shows it or sends it.
+        if self.protocol == Protocol::Pattern {
+            self.enabled = false;
+            self.slots_off = true;
+        }
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -474,6 +479,11 @@ pub fn only_host(url: &str) -> String {
 
 pub use crate::util::now_ms;
 
+/// A test pattern is made while the Streamer asked for it within this (it asks every 10 s).
+pub const DEMAND_MS: i64 = 30_000;
+/// What a test pattern keeps: the Streamer's player reads only the last seconds.
+const PATTERN_KEEP_MS: i64 = 120_000;
+
 /// One recorder: its settings, its live state and its loop.
 pub struct Rec {
     pub id: String,
@@ -537,6 +547,8 @@ pub struct Rec {
     pub streams: std::sync::atomic::AtomicU32,
     /// Wakes a recorder waiting for its next slot (a stream starts).
     pub wake: tokio::sync::Notify,
+    /// A test pattern: when the Streamer last asked for it (server ms).
+    pub demand: std::sync::atomic::AtomicI64,
 }
 
 impl Rec {
@@ -814,7 +826,8 @@ impl Manager {
         });
         web::keep_updated(data_dir.to_path_buf());
         let list: Vec<RecorderConfig> = crate::paths::read_json(&m.config_path()).unwrap_or_default();
-        for c in list {
+        for mut c in list {
+            c.normalize();
             m.add(c);
         }
         // Live state for the clients, and the loop trimmed.
@@ -1076,6 +1089,30 @@ impl Manager {
         self.recs.lock().unwrap().iter().find(|r| r.id == id).cloned()
     }
 
+    /// The Streamer shows a test pattern: it is made (and kept made a little while).
+    pub fn demand(&self, id: &str) -> Result<(), String> {
+        let r = self.get(id).ok_or("no such recorder")?;
+        if r.config().protocol != Protocol::Pattern {
+            return Ok(());
+        }
+        let was = now_ms() - r.demand.swap(now_ms(), std::sync::atomic::Ordering::Relaxed) >= DEMAND_MS;
+        if was {
+            r.wake.notify_one();
+        }
+        Ok(())
+    }
+
+    /// The recorders in this order (those not named keep theirs, after).
+    pub fn reorder(&self, ids: &[String]) -> Result<(), String> {
+        {
+            let mut recs = self.recs.lock().unwrap();
+            recs.sort_by_key(|r| ids.iter().position(|i| *i == r.id).unwrap_or(usize::MAX));
+        }
+        let saved = self.save();
+        self.list_changed();
+        saved.map_err(|e| e.to_string())
+    }
+
     /// Writes recorders.json; when the disk refuses (full), it is written again later,
     /// so that a recorder deleted meanwhile does not come back at the next start.
     fn save(&self) -> std::io::Result<()> {
@@ -1129,6 +1166,7 @@ impl Manager {
             taps: Mutex::new(Vec::new()),
             streams: 0.into(),
             wake: tokio::sync::Notify::new(),
+            demand: 0.into(),
         });
         rec.refresh_status();
         let handle = tokio::spawn(run::supervise(self.clone(), rec.clone()));
@@ -1175,7 +1213,7 @@ impl Manager {
     /// The recorder takes space: it records all the time, or it has slots programmed (a source
     /// never recorded takes none, whatever its slots).
     pub fn counts(&self, c: &RecorderConfig) -> bool {
-        c.enabled || (!c.slots_off && self.schedules.of(&c.id).iter().any(|s| s.enabled))
+        c.protocol != Protocol::Pattern && (c.enabled || (!c.slots_off && self.schedules.of(&c.id).iter().any(|s| s.enabled)))
     }
 
     /// A stopped recorder records during its slots, from a little before (the connection takes time).
@@ -1184,6 +1222,10 @@ impl Manager {
         if let Some(r) = self.get(id) {
             if r.streams.load(std::sync::atomic::Ordering::Relaxed) > 0 {
                 return true;
+            }
+            // A test pattern: while the Streamer shows it.
+            if r.config().protocol == Protocol::Pattern {
+                return now - r.demand.load(std::sync::atomic::Ordering::Relaxed) < DEMAND_MS;
             }
             if r.config().slots_off {
                 return false;
@@ -1364,9 +1406,12 @@ impl Manager {
         Value::Array(self.recs().iter().map(|r| serde_json::to_value(&*r.status.lock().unwrap()).unwrap_or_default()).collect())
     }
 
-    /// Removes what is older than the loop (except pinned segments).
+    /// Removes what is older than the loop (except pinned segments); a test pattern keeps only
+    /// what the Streamer's player needs.
     pub fn trim(&self, rec: &Rec) {
-        let cutoff = (now_ms() - rec.config().loop_hours as i64 * 3_600_000) as f64;
+        let c = rec.config();
+        let keep = if c.protocol == Protocol::Pattern { PATTERN_KEEP_MS } else { c.loop_hours as i64 * 3_600_000 };
+        let cutoff = (now_ms() - keep) as f64;
         self.trim_before(rec, cutoff);
     }
 

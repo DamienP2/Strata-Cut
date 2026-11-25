@@ -1698,3 +1698,19 @@ th .gr-ico, .gr-opt .gr-ico { width: 22px; height: 22px; border-radius: 6px; }
 .rl-table .rl-admin td:first-child { color: var(--text-3); }
 .rl-table .rl-none { color: var(--text-3); }
 .rl-table th.rl-role { white-space: nowrap; }
+
+/* Sources: put in order by dragging (a source inside its kind, a kind among the others). */
+.src-kinds { margin: 8px 0 2px; }
+.src-kinds .asr-chip svg { width: 12px; height: 12px; vertical-align: -2px; }
+.src-grip { display: inline-grid; place-items: center; width: 18px; height: 22px; margin-left: -4px; color: var(--text-3); cursor: grab; border-radius: 5px; }
+.src-grip:hover { color: var(--text); background: var(--panel-2); }
+.src-slot { position: relative; min-width: 0; }
+.src-slot[draggable='true'] { cursor: grab; }
+.src-slot.dragging, .src-group.dragging { opacity: 0.4; }
+.src-slot.drop-before::before, .src-slot.drop-after::after { content: ''; position: absolute; top: 4px; bottom: 4px; width: 3px; border-radius: 2px; background: var(--accent); }
+.src-slot.drop-before::before { left: -6px; }
+.src-slot.drop-after::after { right: -6px; }
+.src-group { position: relative; }
+.src-group.drop-before::before, .src-group.drop-after::after { content: ''; position: absolute; left: 0; right: 0; height: 3px; border-radius: 2px; background: var(--accent); }
+.src-group.drop-before::before { top: -10px; }
+.src-group.drop-after::after { bottom: -10px; }
