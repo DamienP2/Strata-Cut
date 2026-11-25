@@ -1565,3 +1565,18 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .xc-dst.on .xc-cb { background: var(--accent); border-color: var(--accent); }
 @media (max-width: 900px) { .sc-xmodal-body { grid-template-columns: 1fr; } .sc-xmodal-side { max-height: none; } }
 .sc-edit .sc-center.sc-wide { grid-column: span 2; }
+/* The place's folder: checked as it is written, chosen among those there. */
+.snd-folder { display: flex; gap: 8px; }
+.snd-folder input { flex: 1; min-width: 0; }
+.snd-check { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--text-3); }
+.snd-check.ok { color: var(--pvw); }
+.snd-check.warn { color: var(--warn); }
+.snd-check.bad { color: var(--live); }
+.snd-browse { margin-top: 8px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--panel-2); overflow: hidden; }
+.snd-browse-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.snd-browse-head code { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snd-browse-list { max-height: 200px; overflow: auto; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+.snd-browse-list .muted { display: inline-flex; align-items: center; gap: 6px; padding: 6px; }
+.snd-dir { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.snd-dir:hover { background: var(--panel-3); }
+.snd-dir svg { color: var(--accent-2); flex: none; }

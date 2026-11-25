@@ -692,6 +692,114 @@ impl Transfer<'_> {
         Ok((out.status.success() && !failed, text))
     }
 
+    /// The folders in a folder there (`dir`: from the share, the login's folder, the root; the
+    /// server's folder itself for « dir »): None when it is not there.
+    async fn list(&self, dir: &str) -> Result<Option<Vec<String>>, String> {
+        let t = self.target;
+        let mut names: Vec<String> = match t.kind.as_str() {
+            "dir" => {
+                let mut rd = match tokio::fs::read_dir(dir).await {
+                    Ok(rd) => rd,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                    Err(e) => return Err(format!("cannot read this folder: {e}")),
+                };
+                let mut out = Vec::new();
+                while let Ok(Some(e)) = rd.next_entry().await {
+                    if e.file_type().await.is_ok_and(|f| f.is_dir()) {
+                        out.push(e.file_name().to_string_lossy().into_owned());
+                    }
+                }
+                out
+            }
+            "smb" => {
+                let (ok, said) = self.smb(dir, "ls").await?;
+                if said.contains("NT_STATUS_OBJECT_NAME_NOT_FOUND") || said.contains("NT_STATUS_OBJECT_PATH_NOT_FOUND") || said.contains("NT_STATUS_NOT_A_DIRECTORY") {
+                    return Ok(None);
+                }
+                if !ok {
+                    return Err(explain("smb", None, &said));
+                }
+                // « name   D   0  Mon Nov 24 10:00:00 2026 »: the attributes after the name.
+                said.lines()
+                    .filter_map(|l| {
+                        let l = l.trim_end();
+                        if !l.chars().any(|c| c.is_ascii_digit()) {
+                            return None;
+                        }
+                        let parts: Vec<&str> = l.split("  ").map(str::trim).filter(|x| !x.is_empty()).collect();
+                        (parts.len() >= 3 && parts[1].contains('D')).then(|| parts[0].to_string())
+                    })
+                    .collect()
+            }
+            "webdav" => {
+                let url = self.url(dir, "");
+                let (code, said) = self.curl_out(&["-sS".into(), "-X".into(), "PROPFIND".into(), "-H".into(), "Depth: 1".into(), url.clone()]).await?;
+                if code == Some(22) && said.contains("404") {
+                    return Ok(None);
+                }
+                if code != Some(0) {
+                    return Err(explain("webdav", code, &said));
+                }
+                // Each answer: its address, and whether it is a collection (a folder).
+                let own = url.split_once("://").and_then(|(_, r)| r.split_once('/')).map(|(_, p)| format!("/{p}")).unwrap_or_default();
+                said.split("response>")
+                    .filter(|r| r.contains("collection"))
+                    .filter_map(|r| {
+                        let a = r.find("href>")? + 5;
+                        let b = r[a..].find('<')? + a;
+                        let href = r[a..b].trim().trim_end_matches('/');
+                        let path = href.split_once("://").and_then(|(_, r)| r.split_once('/')).map(|(_, p)| format!("/{p}")).unwrap_or_else(|| href.to_string());
+                        (path.trim_end_matches('/') != own.trim_end_matches('/')).then(|| decode(path.rsplit('/').next().unwrap_or("")))
+                    })
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            }
+            kind => {
+                // FTP and SFTP: the folder's listing, « ls -l » style (a « d » first: a folder).
+                let (code, said) = self.curl_out(&["-sS".into(), self.url(dir, "")]).await?;
+                if matches!(code, Some(9) | Some(78)) {
+                    return Ok(None);
+                }
+                if code != Some(0) {
+                    return Err(explain(kind, code, &said));
+                }
+                said.lines()
+                    .filter(|l| l.starts_with('d'))
+                    .filter_map(|l| l.split_whitespace().nth(8).map(|_| l.split_whitespace().skip(8).collect::<Vec<_>>().join(" ")))
+                    .collect()
+            }
+        };
+        names.retain(|n| n != "." && n != ".." && !n.starts_with('.'));
+        names.sort_by_key(|n| n.to_lowercase());
+        names.dedup();
+        Ok(Some(names))
+    }
+
+    /// curl as `curl`, what it writes (not its progress) answered with its exit code.
+    async fn curl_out(&self, args: &[String]) -> Result<(Option<i32>, String), String> {
+        let t = self.target;
+        let quote = |v: &str| v.replace('\\', "\\\\").replace('"', "\\\"");
+        let conf = if t.user.is_empty() { if t.kind == "ftp" { "user = \"anonymous:\"\n".to_string() } else { String::new() } } else { format!("user = \"{}:{}\"\n", quote(&t.user), quote(&t.password)) };
+        let file = self.secret_file(&conf).await?;
+        let home = self.temp.join("home");
+        let _ = tokio::fs::create_dir_all(home.join(".ssh")).await;
+        if t.kind == "sftp" {
+            self.know_host(false).await?;
+        }
+        let mut cmd = Command::new("curl");
+        cmd.env("HOME", &home).arg("--config").arg(&file.0).args(["--connect-timeout", "10", "--max-time", "20", "--fail"]).args(args).stdin(Stdio::null()).kill_on_drop(true);
+        if t.kind == "ftp" && t.tls == "explicit" {
+            cmd.arg("--ssl-reqd");
+        }
+        if t.kind == "ftp" && t.tls != "none" {
+            cmd.arg("--insecure");
+        }
+        let out = cmd.output().await.map_err(|e| format!("cannot start curl: {e}"))?;
+        let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+        Ok((out.status.code(), text))
+    }
+
     /// Is a file of that name there?
     async fn exists(&self, dir: &str, name: &str) -> Result<bool, String> {
         let t = self.target;
@@ -824,6 +932,25 @@ impl Transfer<'_> {
     }
 }
 
+/// « %20 » and the like, back to their characters.
+fn decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn smb_path(dir: &str, name: &str) -> String {
     if dir.is_empty() { name.to_string() } else { format!("{}\\{name}", dir.replace('/', "\\")) }
 }
@@ -901,6 +1028,7 @@ pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/api/send-targets", get(list_targets).post(create_target))
         .route("/api/send-targets/test", post(test_target))
+        .route("/api/send-targets/browse", post(browse))
         .route("/api/send-targets/{id}", put(update_target).delete(delete_target))
         .route("/api/sends", get(list_sends).post(send))
         .route("/api/sends/{id}/retry", post(retry))
@@ -1024,6 +1152,38 @@ async fn test_target(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json
     Ok(Json(json!({ "ok": true, "ms": ms })))
 }
 
+#[derive(Deserialize)]
+struct Browse {
+    target: Target,
+    /// The folder to look in (as the place's folder is written); none: the place's own.
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// A folder there, as in the form: whether it is there (else it is made at the first send), and
+/// the folders in it (to choose one).
+async fn browse(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<Browse>) -> ApiResult<Json<Value>> {
+    require(me.is_admin())?;
+    let mut t = b.target;
+    t.normalize();
+    let old = s.sends.target(&t.id);
+    keep_password(&mut t, old.as_ref()).map_err(bad)?;
+    let path = b.path.unwrap_or_else(|| t.path.clone());
+    if path.split(['/', '\\']).any(|p| p == "..") {
+        return Err(bad("no « .. » in the folders"));
+    }
+    t.path = path.clone();
+    t.validate().map_err(bad)?;
+    let (_tx, rx) = watch::channel(false);
+    let tr = Transfer { target: &t, temp: s.data_dir.join("sends"), stop: rx };
+    let dir = if t.kind == "dir" { path.clone() } else { path.trim_matches('/').to_string() };
+    let r = tokio::time::timeout(Duration::from_secs(30), tr.list(&dir)).await.map_err(|_| bad("no answer from the server (address, port or firewall)"))?;
+    match r.map_err(bad)? {
+        Some(folders) => Ok(Json(json!({ "exists": true, "path": path, "folders": folders }))),
+        None => Ok(Json(json!({ "exists": false, "path": path, "folders": [] }))),
+    }
+}
+
 /// The sends of the clips this account sees (and whether each is its own).
 async fn list_sends(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<Value> {
     if !me.can("clips.view") {
@@ -1141,6 +1301,12 @@ mod tests {
         assert!(keep_password(&mut same, Some(&old)).is_ok() && same.password == "secret");
         let mut other = Target { password: MASKED.into(), host: "evil".into(), ..old.clone() };
         assert!(keep_password(&mut other, Some(&old)).is_err());
+    }
+
+    #[test]
+    fn names_decoded() {
+        assert_eq!(decode("Plateau%201%2F%C3%A9"), "Plateau 1/é");
+        assert_eq!(decode("50%"), "50%");
     }
 
     #[test]

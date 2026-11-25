@@ -4,7 +4,7 @@
  * maker; a clip goes there when asked, or by itself (every new clip, or those of some sources).
  */
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Check, MoreHorizontal, Pencil, Plug, Plus, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronLeft, Folder, FolderSearch, MoreHorizontal, Pencil, Plug, Plus, Trash2, Upload, X } from 'lucide-react';
 import { api, useApp } from '../store';
 import { t, tn } from '../i18n';
 import { PageHead } from '../pages/SidePage';
@@ -15,7 +15,7 @@ import { Field } from './ui';
 import { MASKED } from '../streams';
 import { blankTarget, KIND_TAG, useSendTargets, type SendKind, type SendTarget } from '../sends';
 import { loadGroups, useGroups } from '../pages/Groups';
-import { showError } from '../ui/serverError';
+import { errorText, showError } from '../ui/serverError';
 
 const KINDS: { kind: SendKind; label: string; sub: string }[] = [
   { kind: 'smb', label: 'NAS share', sub: 'SMB / Windows' },
@@ -212,18 +212,11 @@ function SendModal({ target, onClose }: { target: SendTarget; onClose: () => voi
               <input value={x.host} placeholder={x.kind === 'smb' ? 'nas-montage' : 'server.example.org'} spellCheck={false} onChange={(e) => set({ host: e.target.value })} />
             </Field>
           ) : (
-            <Field label={t('Folder of the server')}>
-              <input value={x.path} placeholder="/mnt/nas/rushs" spellCheck={false} onChange={(e) => set({ path: e.target.value })} />
-            </Field>
+            <FolderField x={x} set={set} can={x.path.trim().startsWith('/')} />
           )}
           {x.kind === 'smb' && (
             <Field label={t('Share (SMB)')}>
               <input value={x.share} placeholder="Rushs" spellCheck={false} onChange={(e) => set({ share: e.target.value })} />
-            </Field>
-          )}
-          {remote && (
-            <Field label={t('Folder there')}>
-              <input value={x.path} placeholder={x.kind === 'sftp' ? '/var/www/videos' : x.kind === 'smb' ? 'Strata' : 'depot'} spellCheck={false} onChange={(e) => set({ path: e.target.value })} />
             </Field>
           )}
           {remote && (
@@ -249,6 +242,7 @@ function SendModal({ target, onClose }: { target: SendTarget; onClose: () => voi
               <Field label={t('Password')}>
                 <input type="password" value={x.password} autoComplete="new-password" onFocus={() => x.password === MASKED && set({ password: '' })} onChange={(e) => set({ password: e.target.value })} />
               </Field>
+              <FolderField x={x} set={set} can={!!x.host.trim() && (x.kind !== 'smb' || !!x.share.trim())} />
             </>
           )}
           <Field label={t('Sub-folder')} group className="span2">
@@ -260,6 +254,11 @@ function SendModal({ target, onClose }: { target: SendTarget; onClose: () => voi
                 </button>
               ))}
             </div>
+            {unknownTokens(x.folder).length > 0 && (
+              <span className="snd-check warn">
+                <AlertTriangle size={12} /> {t('Unknown: {list}. The words in braces are {tokens}.', { list: unknownTokens(x.folder).join(', '), tokens: TOKENS.join(' ') })}
+              </span>
+            )}
             <span className="snd-preview">→ {preview(x)}</span>
           </Field>
           <Field label={t('A file of that name there')} group>
@@ -315,5 +314,137 @@ function SendModal({ target, onClose }: { target: SendTarget; onClose: () => voi
         </footer>
       </form>
     </div>
+  );
+}
+
+/** The words in braces of a sub-folder that are not ones it knows. */
+function unknownTokens(folder: string): string[] {
+  return [...new Set(folder.match(/\{[^}]*\}/g) ?? [])].filter((k) => !TOKENS.includes(k));
+}
+
+/** A folder as written: « / » only, none doubled, none at its end (but the root). */
+function tidy(p: string, kind: SendKind): string {
+  let v = p.trim().replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  if (v.length > 1) v = v.replace(/\/$/, '');
+  if (kind === 'dir' && v && !v.startsWith('/')) v = `/${v}`;
+  return v;
+}
+
+interface Look {
+  busy: boolean;
+  exists?: boolean;
+  folders?: string[];
+  error?: string;
+}
+
+/** The folder there: checked as it is written (once the server and the account are given), and
+ * chosen among the folders there (« Parcourir »). */
+function FolderField({ x, set, can }: { x: SendTarget; set: (p: Partial<SendTarget>) => void; can: boolean }) {
+  const [look, setLook] = useState<Look>({ busy: false });
+  const [browse, setBrowse] = useState<(Look & { path: string }) | null>(null);
+  const ask = (path: string) => api<{ exists: boolean; folders: string[] }>('POST', '/api/send-targets/browse', { target: x, path });
+  // Checked a moment after it is written (or the server, the account changed).
+  const key = JSON.stringify([x.kind, x.host, x.port, x.share, x.user, x.password, x.tls, x.path]);
+  useEffect(() => {
+    if (!can) return setLook({ busy: false });
+    let dead = false;
+    setLook({ busy: true });
+    const timer = window.setTimeout(() => {
+      ask(x.path).then(
+        (r) => !dead && setLook({ busy: false, exists: r.exists, folders: r.folders }),
+        (e) => !dead && setLook({ busy: false, error: errorText(e) }),
+      );
+    }, 800);
+    return () => {
+      dead = true;
+      clearTimeout(timer);
+    };
+  }, [key, can]); // eslint-disable-line react-hooks/exhaustive-deps
+  const open = (path: string) => {
+    setBrowse((b) => ({ path, busy: true, folders: b?.path === path ? b.folders : [] }));
+    ask(path).then(
+      (r) => setBrowse({ path, busy: false, exists: r.exists, folders: r.folders }),
+      (e) => setBrowse({ path, busy: false, error: errorText(e) }),
+    );
+  };
+  const root = x.kind === 'dir' ? '/' : '';
+  const join = (a: string, n: string) => (a && a !== '/' ? `${a.replace(/\/$/, '')}/${n}` : `${a}${n}`);
+  const up = (p: string) => {
+    const i = p.replace(/\/$/, '').lastIndexOf('/');
+    return i <= 0 ? (p.startsWith('/') ? '/' : root) : p.slice(0, i);
+  };
+  return (
+    <Field label={x.kind === 'dir' ? t('Folder of the server') : t('Folder there')} group className="span2">
+      <div className="snd-folder">
+        <input
+          value={x.path}
+          placeholder={x.kind === 'dir' ? '/mnt/nas/rushs' : x.kind === 'sftp' ? '/var/www/videos' : x.kind === 'smb' ? 'Strata' : 'depot'}
+          spellCheck={false}
+          onChange={(e) => set({ path: e.target.value })}
+          onBlur={() => x.path !== tidy(x.path, x.kind) && set({ path: tidy(x.path, x.kind) })}
+        />
+        <button type="button" className="btn" disabled={!can} onClick={() => (browse ? setBrowse(null) : open(x.path || root))}>
+          <FolderSearch size={14} /> {t('Browse')}
+        </button>
+      </div>
+      {can && (
+        <span className={`snd-check ${look.busy ? '' : look.error ? 'bad' : look.exists ? 'ok' : look.exists === false ? 'warn' : ''}`}>
+          {look.busy ? (
+            <>
+              <span className="pt-spin" /> {t('Checking the folder…')}
+            </>
+          ) : look.error ? (
+            <>
+              <X size={12} /> {t(look.error)}
+            </>
+          ) : look.exists ? (
+            <>
+              <Check size={12} /> {t('Folder found')} · {tn(look.folders?.length ?? 0, '{n} folder in it', '{n} folders in it')}
+            </>
+          ) : look.exists === false ? (
+            <>
+              <AlertTriangle size={12} /> {t('This folder is not there yet: it is made at the first send.')}
+            </>
+          ) : null}
+        </span>
+      )}
+      {browse && (
+        <div className="snd-browse">
+          <div className="snd-browse-head">
+            <button type="button" className="icon-btn ghost" disabled={browse.path === root || browse.path === '' || browse.busy} title={t('Folder above')} onClick={() => open(up(browse.path))}>
+              <ChevronLeft size={14} />
+            </button>
+            <code>{browse.path || t('(the start folder)')}</code>
+            <span className="spacer" />
+            <button
+              type="button"
+              className="btn small primary"
+              disabled={browse.busy || !!browse.error}
+              onClick={() => {
+                set({ path: browse.path });
+                setBrowse(null);
+              }}
+            >
+              {t('Choose this folder')}
+            </button>
+          </div>
+          <div className="snd-browse-list">
+            {browse.busy && browse.folders?.length === 0 && (
+              <span className="muted">
+                <span className="pt-spin" /> {t('Reading the folder…')}
+              </span>
+            )}
+            {browse.error && <span className="snd-check bad">{t(browse.error)}</span>}
+            {!browse.busy && !browse.error && browse.exists === false && <span className="snd-check warn">{t('This folder is not there yet: it is made at the first send.')}</span>}
+            {!browse.busy && !browse.error && browse.exists && browse.folders?.length === 0 && <span className="muted">{t('No folder in it.')}</span>}
+            {browse.folders?.map((n) => (
+              <button key={n} type="button" className="snd-dir" onClick={() => open(join(browse.path, n))}>
+                <Folder size={14} /> {n}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </Field>
   );
 }
