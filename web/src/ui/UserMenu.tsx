@@ -10,6 +10,7 @@ import { api, useApp, type PublicUser } from '../store';
 import { useMenuKeys } from './menuKeys';
 import { openShortcuts } from './Shortcuts';
 import { showError } from './serverError';
+import { groupName, loadGroups, useGroups } from '../pages/Groups';
 
 const THEME_LABEL: Record<Theme, string> = { dark: 'Dark', light: 'Light', system: 'System' };
 
@@ -18,9 +19,14 @@ export const initial = (u: Pick<PublicUser, 'displayName' | 'username'>) => (dis
 
 export function UserMenu({ named = false }: { named?: boolean }) {
   const user = useApp((s) => s.auth?.user);
+  // Its groups, by name (asked when the menu opens).
+  const groups = useGroups((s) => s.groups);
   const lang = useLang((s) => s.lang);
   const theme = useTheme((s) => s.theme);
   const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (open && !groups) void loadGroups();
+  }, [open, groups]);
   const btn = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const close = useRef((focus: boolean) => {
@@ -81,7 +87,7 @@ export function UserMenu({ named = false }: { named?: boolean }) {
             <span className="avatar">{initial(user)}</span>
             <div>
               <b>{displayName(user)}</b>
-              <small>{tc('role', user.role)}</small>
+              <small>{user.role === 'admin' ? tc('role', 'admin') : (groups ?? []).filter((g) => user.groups?.includes(g.id)).map(groupName).join(' · ') || t('No group')}</small>
             </div>
           </div>
           <div className="menu-sep" />

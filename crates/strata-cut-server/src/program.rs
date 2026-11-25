@@ -604,7 +604,7 @@ async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
 
 /// The settings (not what is on air, nor where the overlay is: CUT and AUTO say that).
 async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, Json(mut p): Json<Program>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.run"))?;
+    require(me.can("stream.program"))?;
     s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     p.normalize().map_err(bad)?;
     let programs = &s.streams.programs;
@@ -642,7 +642,7 @@ struct OverlayAt {
 }
 
 async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, Json(t): Json<Take>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.run"))?;
+    require(me.can("stream.program"))?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let programs = &s.streams.programs;
     let was = programs.get(&source);

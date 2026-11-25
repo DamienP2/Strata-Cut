@@ -1,97 +1,102 @@
 /*
- * Système › Accès › Rôles: what each role may do, function by function. The admins may do
- * everything; the operators, streamers and readers get what is ticked (saved at once).
+ * Système › Accès › Autorisations: what each group may do, function by function (a column a
+ * group, saved at once). The admins may do everything, the Système pages alone.
  */
-import { useEffect, useState } from 'react';
-import { Check } from 'lucide-react';
-import { t, tc } from '../i18n';
-import { api, useApp, useChanged, type Role } from '../store';
+import { useEffect } from 'react';
+import { Check, ShieldCheck } from 'lucide-react';
+import { t } from '../i18n';
+import { api, useApp, useChanged } from '../store';
 import { PageHead } from '../pages/SidePage';
-import { ROLE_ICON } from '../pages/Users';
+import { GroupIcon, groupName, loadGroups, loadPerms, partsOf, useGroups, usePerms, type Group } from '../pages/Groups';
 import { showError } from '../ui/serverError';
 
-interface Perm {
-  key: string;
-  part: string;
-  label: string;
-}
-interface Table {
-  perms: Perm[];
-  roles: Record<string, string[]>;
-}
-
-const EDITABLE: Role[] = ['operator', 'streamer', 'viewer'];
+/** What only the admins do (shown, never given). */
+const ADMIN_ONLY = ['Sources, destinations and file servers', 'Users, groups and rights', 'Server, storage, hardware, maintenance'];
 
 export function Roles() {
-  const [table, setTable] = useState<Table | null>(null);
-  const load = () => void api<Table>('GET', '/api/roles').then(setTable, showError);
-  useChanged('roles', load);
-  useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const groups = useGroups((s) => s.groups);
+  const perms = usePerms((s) => s.perms);
+  useEffect(() => {
+    void loadGroups();
+    void loadPerms();
+  }, []);
+  useChanged('groups', () => void loadGroups());
 
-  const toggle = async (role: Role, perm: string, on: boolean) => {
-    if (!table) return;
-    const list = new Set(table.roles[role] ?? []);
-    if (on) list.add(perm);
-    else list.delete(perm);
-    const roles = { ...table.roles, [role]: [...list] };
-    setTable({ ...table, roles });
+  const toggle = async (g: Group, perm: string, on: boolean) => {
+    const rights = on ? [...g.rights, perm] : g.rights.filter((p) => p !== perm);
+    useGroups.setState({ groups: (groups ?? []).map((x) => (x.id === g.id ? { ...x, rights } : x)) });
     try {
-      setTable(await api<Table>('PUT', '/api/roles', roles));
+      await api('PUT', `/api/groups/${g.id}`, { name: g.name, members: g.members, rights });
       useApp.getState().toast(t('Rights saved'));
     } catch (e) {
       showError(e);
-      load();
     }
+    void loadGroups();
   };
 
-  // The rights by part of the app, in order.
-  const parts: [string, Perm[]][] = [];
-  for (const p of table?.perms ?? []) {
-    const last = parts[parts.length - 1];
-    if (last && last[0] === p.part) last[1].push(p);
-    else parts.push([p.part, [p]]);
-  }
-  const roles: Role[] = ['admin', ...EDITABLE];
-
+  const cols = groups ?? [];
   return (
     <>
-      <PageHead title={t('Roles')} />
-      {table && (
-        <table className="user-table rl-table">
-          <thead>
-            <tr>
-              <th />
-              {roles.map((r) => {
-                const Icon = ROLE_ICON[r];
-                return (
-                  <th key={r} className="rl-role">
-                    <Icon size={14} /> {tc('role', r)}
+      <PageHead title={t('Rights')} />
+      {groups && perms && (
+        <div className="rl-wrap">
+          <table className="user-table rl-table">
+            <thead>
+              <tr>
+                <th />
+                <th className="rl-role">
+                  <span className="gr-ico admin">
+                    <ShieldCheck size={13} />
+                  </span>{' '}
+                  {t('Administrators')}
+                </th>
+                {cols.map((g) => (
+                  <th key={g.id} className="rl-role">
+                    <GroupIcon g={g} size={13} /> {groupName(g)}
                   </th>
-                );
-              })}
-            </tr>
-          </thead>
-          {parts.map(([part, perms]) => (
-            <tbody key={part}>
-              <tr className="rl-part">
-                <td colSpan={roles.length + 1}>{t(part)}</td>
+                ))}
               </tr>
-              {perms.map((p) => (
-                <tr key={p.key}>
-                  <td>{t(p.label)}</td>
+            </thead>
+            {partsOf(perms).map(([part, list]) => (
+              <tbody key={part}>
+                <tr className="rl-part">
+                  <td colSpan={cols.length + 2}>{t(part)}</td>
+                </tr>
+                {list.map((p) => (
+                  <tr key={p.key}>
+                    <td>{t(p.label)}</td>
+                    <td className="rl-cell">
+                      <Check size={14} className="rl-always" />
+                    </td>
+                    {cols.map((g) => (
+                      <td key={g.id} className="rl-cell">
+                        <input type="checkbox" checked={g.rights.includes(p.key)} aria-label={`${groupName(g)} · ${t(p.label)}`} onChange={(e) => void toggle(g, p.key, e.target.checked)} />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            ))}
+            <tbody>
+              <tr className="rl-part">
+                <td colSpan={cols.length + 2}>{t('System')}</td>
+              </tr>
+              {ADMIN_ONLY.map((l) => (
+                <tr key={l} className="rl-admin">
+                  <td>{t(l)}</td>
                   <td className="rl-cell">
                     <Check size={14} className="rl-always" />
                   </td>
-                  {EDITABLE.map((r) => (
-                    <td key={r} className="rl-cell">
-                      <input type="checkbox" checked={(table.roles[r] ?? []).includes(p.key)} onChange={(e) => void toggle(r, p.key, e.target.checked)} />
+                  {cols.map((g) => (
+                    <td key={g.id} className="rl-cell rl-none">
+                      —
                     </td>
                   ))}
                 </tr>
               ))}
             </tbody>
-          ))}
-        </table>
+          </table>
+        </div>
       )}
     </>
   );

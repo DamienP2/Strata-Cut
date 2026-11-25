@@ -51,7 +51,7 @@ export const SYSTEM: Group[] = [
     sections: [
       { id: 'users', label: 'Users', icon: UsersIcon, admin: true, page: page(() => import('./Users'), 'Users') },
       { id: 'groups', label: 'Groups', icon: UsersRound, admin: true, page: page(() => import('./Groups'), 'Groups') },
-      { id: 'roles', label: 'Roles', icon: KeyRound, admin: true, page: page(() => import('../settings/Roles'), 'Roles') },
+      { id: 'roles', label: 'Rights', icon: KeyRound, admin: true, page: page(() => import('../settings/Roles'), 'Roles') },
       { id: 'security', label: 'Security', icon: Lock, admin: true, page: page(() => import('../settings/Security'), 'Security') },
     ],
   },

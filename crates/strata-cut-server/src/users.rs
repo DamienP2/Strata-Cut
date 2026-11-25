@@ -24,7 +24,14 @@ struct UserBody {
     username: String,
     #[serde(default)]
     display_name: String,
-    role: Role,
+    /// An admin (else what its groups give). None: the role given, as before.
+    #[serde(default)]
+    admin: Option<bool>,
+    #[serde(default)]
+    role: Option<Role>,
+    /// The groups it is in (None: left as they are).
+    #[serde(default)]
+    groups: Option<Vec<String>>,
     #[serde(default)]
     disabled: bool,
     /// Empty: random (SSO on) on creation; unchanged on edit.
@@ -32,6 +39,29 @@ struct UserBody {
     password: String,
     #[serde(default)]
     role_fixed: bool,
+}
+
+/// The role kept for an account: admin or not (a former role stays as it was: it only says which
+/// base group the directory puts it in).
+fn role_of(b: &UserBody, was: Role) -> Role {
+    match (b.admin, b.role) {
+        (Some(true), _) => Role::Admin,
+        (Some(false), _) if was == Role::Admin => Role::Viewer,
+        (Some(false), _) => was,
+        (None, Some(r)) => r,
+        (None, None) => was,
+    }
+}
+
+/// Its groups set; told to every client (the rights may have changed).
+fn set_groups(s: &Shared, id: &str, groups: &Option<Vec<String>>) -> Result<(), String> {
+    if let Some(g) = groups {
+        if crate::groups::set_member(id, g)? {
+            s.changed("groups");
+            s.changed("roles");
+        }
+    }
+    Ok(())
 }
 
 fn no_such(e: String) -> (StatusCode, String) {
@@ -48,9 +78,12 @@ async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResul
 async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<UserBody>) -> ApiResult<Json<PublicUser>> {
     require(me.is_admin())?;
     let sso = s.config.load().security.sso.active();
+    let role = role_of(&b, Role::Viewer);
     let password = if b.password.is_empty() && sso { auth::random_password() } else { b.password };
     let a = s.auth.clone();
-    let user = blocking(move || a.add(NewUser { username: b.username, display_name: b.display_name, role: b.role, disabled: b.disabled, password: Some(password), role_fixed: b.role_fixed, sso: String::new() })).await?.map_err(bad)?;
+    let groups = b.groups.clone();
+    let user = blocking(move || a.add(NewUser { username: b.username, display_name: b.display_name, role, disabled: b.disabled, password: Some(password), role_fixed: b.role_fixed, sso: String::new() })).await?.map_err(bad)?;
+    set_groups(&s, &user.id, &groups).map_err(bad)?;
     tracing::info!("{} created the account {} ({})", me.username, user.username, user.role.as_str());
     s.changed("users");
     Ok(Json(user.public()))
@@ -59,6 +92,8 @@ async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): 
 async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, Path(id): Path<String>, Json(b): Json<UserBody>) -> ApiResult<Json<PublicUser>> {
     require(me.is_admin())?;
     let a = s.auth.clone();
+    let groups = b.groups.clone();
+    let uid = id.clone();
     let user = blocking(move || -> Result<auth::User, String> {
         let username = b.username.trim().to_string();
         auth::validate_username(&username)?;
@@ -69,7 +104,7 @@ async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, Path(id):
             u.username = username;
             let dn = b.display_name.trim();
             u.display_name = if dn.is_empty() { u.username.clone() } else { dn.to_string() };
-            u.role = b.role;
+            u.role = role_of(&b, u.role);
             u.disabled = b.disabled;
             u.role_fixed = b.role_fixed;
             Ok(())
@@ -78,6 +113,7 @@ async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, Path(id):
     })
     .await?
     .map_err(no_such)?;
+    set_groups(&s, &uid, &groups).map_err(bad)?;
     tracing::info!("{} changed the account {}", me.username, user.username);
     s.changed("users");
     Ok(Json(user.public()))

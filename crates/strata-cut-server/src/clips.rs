@@ -124,9 +124,9 @@ impl Clip {
         self.share.all || self.share.groups.iter().any(|g| groups.contains(g))
     }
 
-    /// An account sees its clips, those shared with it; an admin sees them all.
+    /// An account sees its clips, those shared with it; an admin (or who may see them all), all.
     pub(crate) fn visible(&self, me: &crate::auth::User, groups: &[String]) -> bool {
-        me.is_admin() || self.mine(me) || self.shared_with(groups)
+        me.can("clips.all") || self.mine(me) || self.shared_with(groups)
     }
 }
 
@@ -876,6 +876,10 @@ async fn share(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
 
 async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(req): Json<ClipRequest>) -> ApiResult<(StatusCode, Json<Value>)> {
     require(me.can_extract())?;
+    // Sent to the file servers chosen: only who may send.
+    if !req.send_to.is_empty() && !me.can("extract.send") {
+        return Err((StatusCode::FORBIDDEN, "you do not have the rights for this".into()));
+    }
     let job = s.clips.queue(req, me.name(), &me.id).map_err(bad)?;
     Ok((StatusCode::ACCEPTED, Json(serde_json::to_value(job).unwrap_or_default())))
 }

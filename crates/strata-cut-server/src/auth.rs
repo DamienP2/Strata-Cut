@@ -106,9 +106,10 @@ impl User {
     pub fn is_admin(&self) -> bool {
         self.role == Role::Admin
     }
-    /// May this account do this (`crate::roles::PERMS`)? An admin may do everything.
+    /// May this account do this (`crate::roles::PERMS`)? An admin may do everything; the others
+    /// what their groups give.
     pub fn can(&self, perm: &str) -> bool {
-        crate::roles::allowed(self.role, perm)
+        self.is_admin() || crate::groups::allows(&self.id, perm)
     }
     /// Makes clips.
     pub fn can_extract(&self) -> bool {
@@ -150,8 +151,10 @@ pub struct PublicUser {
     pub theme: String,
     pub sso: bool,
     pub role_fixed: bool,
-    /// What its role lets it do (the interface shows only that).
+    /// What its groups let it do (an admin: everything); the interface shows only that.
     pub perms: Vec<String>,
+    /// The groups it is in.
+    pub groups: Vec<String>,
 }
 
 impl From<&User> for PublicUser {
@@ -166,7 +169,8 @@ impl From<&User> for PublicUser {
             theme: u.theme.clone(),
             sso: !u.sso.is_empty(),
             role_fixed: u.role_fixed,
-            perms: crate::roles::of(u.role),
+            perms: if u.is_admin() { crate::roles::all() } else { crate::groups::rights_of(&u.id) },
+            groups: crate::groups::of_id(&u.id),
         }
     }
 }

@@ -274,7 +274,7 @@ struct Recording {
 
 /// Programmation: how a source is recorded (all the time, during its slots, not at all).
 async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Recording>) -> ApiResult<Json<Value>> {
-    require(me.can("schedule.edit"))?;
+    require(me.can("schedule.rec"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut c = rec.config();
     (c.enabled, c.slots_off) = match b.mode.as_str() {

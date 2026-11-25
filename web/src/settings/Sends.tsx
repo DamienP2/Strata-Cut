@@ -14,7 +14,7 @@ import { openContextMenu } from '../ui/ContextMenu';
 import { Field } from './ui';
 import { MASKED } from '../streams';
 import { blankTarget, KIND_TAG, useSendTargets, type SendKind, type SendTarget } from '../sends';
-import { loadGroups, useGroups } from '../pages/Groups';
+import { groupName, loadGroups, useGroups } from '../pages/Groups';
 import { errorText, showError } from '../ui/serverError';
 
 const KINDS: { kind: SendKind; label: string; sub: string }[] = [
@@ -288,7 +288,7 @@ function SendModal({ target, onClose }: { target: SendTarget; onClose: () => voi
                 {groups.length === 0 && <span className="muted">{t('No group yet: an admin makes them in Système › Groupes.')}</span>}
                 {groups.map((g) => (
                   <button key={g.id} type="button" className={x.groups.includes(g.id) ? 'on' : ''} onClick={() => set({ groups: toggleIn(x.groups, g.id) })}>
-                    {g.name}
+                    {groupName(g)}
                   </button>
                 ))}
               </div>

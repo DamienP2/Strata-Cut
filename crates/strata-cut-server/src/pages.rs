@@ -1021,9 +1021,9 @@ pub fn routes() -> Router<Shared> {
         .route("/api/pages/{id}/live", get(live))
 }
 
-/// Who may browse, reframe and pilot a page: who runs the lives, or extracts.
+/// Who may browse, reframe and pilot a page: who pilots them in the Streamer, or extracts.
 fn may(me: &crate::auth::User) -> bool {
-    me.can("stream.run") || me.can("extract.cut")
+    me.can("stream.pilot") || me.can("extract.cut")
 }
 
 fn page_of(s: &Shared, id: &str) -> ApiResult<Arc<Page>> {

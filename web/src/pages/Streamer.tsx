@@ -68,7 +68,9 @@ export function Streamer({ source }: { source?: string }) {
 /** The programme of the source: the picture as it goes out, what is on air, the sound. */
 function Center({ rec }: { rec: Recorder }) {
   const { st, timezone } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone })));
-  const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
+  // Preparing the output (picture, overlay, sound), and piloting a web page: each its right.
+  const run = useApp((s) => can.has(s.auth?.user, 'stream.program'));
+  const pilot = useApp((s) => can.has(s.auth?.user, 'stream.pilot'));
   const prog = useProgram(rec.id);
   const video = useRef<HTMLVideoElement>(null);
   const audio = useAudioOut(video, 'streamer');
@@ -121,7 +123,7 @@ function Center({ rec }: { rec: Recorder }) {
   const shown = useRef<number | null>(null);
   const received = st?.state === 'recording';
   // A web page: its browser's bar, its reframing, its piloting.
-  const page = usePageTools(rec.id, rec.protocol === 'page', run && received);
+  const page = usePageTools(rec.id, rec.protocol === 'page', pilot && received);
   // Only what is received now is shown: a stopped source shows nothing (not what is left of
   // its last recording).
   useEffect(() => {

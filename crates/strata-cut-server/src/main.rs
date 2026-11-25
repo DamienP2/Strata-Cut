@@ -265,8 +265,8 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     update::startup_guard(&data_dir);
     update::confirm_after(data_dir.clone(), Duration::from_secs(60));
     update::spawn_auto_check(data_dir.clone());
-    roles::load(&data_dir);
     let auth = Arc::new(auth::Auth::load(&data_dir)); // outside the loop: sessions survive
+    groups::load(&data_dir, &auth.users());
     if auth.needs_setup() {
         let port = args.bind.map(|b| b.port()).unwrap_or(8080);
         tracing::warn!("no user yet: open http://localhost:{port}/ on this machine, or run `{BIN} user add admin`");
@@ -283,10 +283,10 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
     let sends = sends::Sends::start(&data_dir, events.clone(), clips.clone());
     {
         // A clip made: sent to the places that take them all, and to those chosen for it.
-        let (to, users, dir) = (sends.clone(), auth.clone(), data_dir.clone());
+        let (to, users) = (sends.clone(), auth.clone());
         let _ = clips.made.set(Box::new(move |clip, chosen, by| {
             let maker = users.get(by);
-            let groups = crate::groups::of_in(&dir, by);
+            let groups = crate::groups::of_id(by);
             to.clip_made(clip, chosen, maker.as_ref(), &groups);
         }));
         let gone = sends.clone();

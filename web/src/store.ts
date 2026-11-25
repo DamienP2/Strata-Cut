@@ -17,8 +17,10 @@ export interface PublicUser {
   theme: string;
   sso: boolean;
   roleFixed: boolean;
-  /** What its role lets it do (Système › Accès › Rôles): "extract.cut", "stream.run"… */
+  /** What its groups let it do (Système › Accès › Autorisations): "extract.cut", "stream.run"… */
   perms?: string[];
+  /** The groups it is in. */
+  groups?: string[];
 }
 
 export interface AuthState {

@@ -110,7 +110,7 @@ struct Named {
 }
 
 async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Named>, body: Bytes) -> ApiResult<Json<Image>> {
-    require(me.can("stream.run"))?;
+    require(me.can("stream.program"))?;
     if body.len() > MAX {
         return Err(bad("an image is 10 MB at most"));
     }
@@ -156,7 +156,7 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
 }
 
 async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
-    require(me.can("stream.run"))?;
+    require(me.can("stream.program"))?;
     let data_dir = s.data_dir.clone();
     let gone = crate::api::blocking(move || -> Result<Option<Image>, String> {
         let _g = LOCK.lock().unwrap();

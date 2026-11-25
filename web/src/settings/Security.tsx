@@ -1,7 +1,7 @@
 /* Système › Accès › Sécurité: sign-in through the company directory (OpenID Connect). */
 import { useEffect, useState } from 'react';
 import { CircleCheck, Copy, KeyRound, PlugZap, Plus, X } from 'lucide-react';
-import { t, tc } from '../i18n';
+import { t } from '../i18n';
 import { api, ROLES, useApp, type Role } from '../store';
 import { PageHead } from '../pages/SidePage';
 import { Dropdown } from '../ui/Dropdown';
@@ -35,6 +35,10 @@ interface TestResult {
   keys: number | unknown[];
 }
 
+/** What the directory gives: the admins' rights, or a base group. */
+const ROLE_GROUP: Record<Role, string> = { admin: 'Administrators', operator: 'Operators', streamer: 'Streamers', viewer: 'Viewers' };
+const roleLabel = (r: Role) => t(ROLE_GROUP[r]);
+
 export function Security() {
   const { cfg, setCfg, dirty, saving, save, discard } = useServerConfig();
   const [test, setTest] = useState<{ busy: boolean; ok?: TestResult; error?: string; raw?: string }>({ busy: false });
@@ -61,7 +65,8 @@ export function Security() {
   };
 
   const keys = (k: number | unknown[] | undefined) => (Array.isArray(k) ? k.length : (k ?? 0));
-  const roleOptions = ROLES.map((r) => ({ value: r, label: tc('role', r) }));
+  // A directory group gives an account the admins' rights, or puts it in a base group.
+  const roleOptions = ROLES.map((r) => ({ value: r, label: roleLabel(r) }));
 
   return (
     <>
@@ -133,7 +138,7 @@ export function Security() {
                 <Field label={t('No known group')} group>
                   <Segmented
                     value={sso.defaultRole ?? 'none'}
-                    options={[{ value: 'none', label: t('Refused') }, ...ROLES.map((r) => ({ value: r, label: tc('role', r) }))]}
+                    options={[{ value: 'none', label: t('Refused') }, ...roleOptions]}
                     onChange={(v) => set({ defaultRole: v === 'none' ? null : (v as Role) })}
                   />
                 </Field>

@@ -513,6 +513,17 @@ async fn callback(State(s): State<Shared>, headers: HeaderMap, Query(q): Query<C
         Err(e) if e == "noGroup" || e == "disabled" => return fail(&e, ""),
         Err(e) => return fail("failed", &e),
     };
+    // The directory's role: its base group (unless the account's are set by hand).
+    if !user.role_fixed {
+        match crate::groups::set_base(&user.id, user.role) {
+            Ok(true) => {
+                s.changed("groups");
+                s.changed("roles");
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!("cannot put {} in its group: {e}", user.username),
+        }
+    }
     s.changed("users");
     tracing::info!("{} signed in with {}", user.username, cfg.button_name());
     let token = s.auth.open_session(&user.id);

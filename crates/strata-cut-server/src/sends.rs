@@ -200,10 +200,11 @@ impl Target {
         v
     }
 
-    /// May this account send there (when it wants)?
+    /// May this account send there (when it wants)? It must be allowed to send at all.
     fn usable_by(&self, me: &User, groups: &[String]) -> bool {
         me.is_admin()
-            || match self.who.as_str() {
+            || me.can("extract.send")
+                && match self.who.as_str() {
                 "groups" => self.groups.iter().any(|g| groups.contains(g)),
                 "extract" => me.can("extract.cut"),
                 _ => false,
@@ -1226,7 +1227,7 @@ struct SendBody {
 }
 
 async fn send(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<SendBody>) -> ApiResult<Json<Value>> {
-    require(me.can("clips.view"))?;
+    require(me.can("clips.view") && me.can("extract.send"))?;
     let groups = crate::groups::of(&s, &me.id);
     let target = s.sends.target(&b.target).ok_or_else(|| not_found("place"))?;
     if !target.usable_by(&me, &groups) {

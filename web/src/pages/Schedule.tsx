@@ -40,6 +40,8 @@ export function Schedule() {
   const { recorders, user, timezone, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, timezone: s.timezone, toast: s.toast })));
   // Starting, stopping, programming: as the role allows.
   const admin = can.has(user, 'schedule.edit');
+  // REC / Stop on a source: its own right (programming is another).
+  const canRec = can.has(user, 'schedule.rec');
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [only, setOnly] = useDisplayPref<string | null>('schedule.recorder', null);
   const [edit, setEdit] = useState<{ slot: Slot | null; initial?: Partial<Slot> } | null>(null);
@@ -78,7 +80,7 @@ export function Schedule() {
         ) : (
           <>
             <TzWarning timezone={timezone} admin={admin} />
-            <Calendar recorders={programmed} slots={slots} timezone={timezone} admin={admin} onOpen={(slot) => setEdit({ slot })} onNew={(initial) => setEdit({ slot: null, initial })} />
+            <Calendar recorders={programmed} slots={slots} timezone={timezone} admin={admin} canRec={canRec} onOpen={(slot) => setEdit({ slot })} onNew={(initial) => setEdit({ slot: null, initial })} />
           </>
         )}
       </div>
@@ -692,7 +694,7 @@ function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
   );
 }
 
-function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
+function Calendar({ recorders, slots, timezone, admin, canRec, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; canRec: boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
   // 6 h by default (from an hour ago), 12 h, a day, a week.
   const [view, setView] = useDisplayPref<View>('schedule.view', '6h');
   const [anchor, setAnchor] = useState(() => anchorFor(view, serverNow(), timezone));
@@ -856,7 +858,7 @@ function Calendar({ recorders, slots, timezone, admin, onOpen, onNew }: { record
           const guide = guides[r.id] ?? [];
           return (
             <div key={r.id} className="sc-cal-row">
-              <SourceHead rec={r} admin={admin} />
+              <SourceHead rec={r} admin={canRec} />
               <div
                 className={`sc-cal-lane ${admin ? 'edit' : ''}`}
                 onPointerDown={(e) => {

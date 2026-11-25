@@ -14,7 +14,7 @@ import { RecLogo } from '../ui/RecLogo';
 import { clock, day, duration, fpsOf, size, timecode } from '../tc';
 import type { Clip } from '../types';
 import { ClipPlayer } from './ClipPlayer';
-import { loadGroups, useGroups, type Group } from './Groups';
+import { groupName, loadGroups, useGroups, type Group } from './Groups';
 import { showError } from '../ui/serverError';
 import { openContextMenu } from '../ui/ContextMenu';
 import { KIND_TAG, sendClips, sendStateText, useSends, useSendTargets, type SendJob } from '../sends';
@@ -496,7 +496,7 @@ function ShareModal({ clips, groups, onClose, onDone }: { clips: Clip[]; groups:
                   <UsersRound size={11} />
                 </span>
                 <span className="sc-member-name">
-                  <strong>{g.name}</strong>
+                  <strong>{groupName(g)}</strong>
                 </span>
               </label>
             ))}
