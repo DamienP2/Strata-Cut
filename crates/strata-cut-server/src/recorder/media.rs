@@ -263,9 +263,13 @@ async fn delete(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Recording {
     /// "continuous", "slots" or "off".
     mode: String,
+    /// The loop's length (hours) chosen with REC.
+    #[serde(default)]
+    loop_hours: Option<u32>,
 }
 
 /// Programmation: how a source is recorded (all the time, during its slots, not at all).
@@ -279,6 +283,12 @@ async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, Ur
         "off" => (false, true),
         _ => return Err(bad("the recording is continuous, by slots or off")),
     };
+    if let Some(h) = b.loop_hours {
+        if !(1..=168).contains(&h) {
+            return Err(bad("the loop is 1 to 168 hours"));
+        }
+        c.loop_hours = h;
+    }
     // Recording from now on (all the time, or a programmed recording on now): is there room for it?
     guard_start(&s, &rec, &c)?;
     s.recorders.update(&id, c).map(Json).map_err(bad)

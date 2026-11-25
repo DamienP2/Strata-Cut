@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, Copy, Square, Eraser, ImagePlus, Pencil, Plus, RadioTower, Search, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { Cable, CalendarClock, ChevronDown, Copy, Eraser, Globe, Grid3x3, ImagePlus, MonitorPlay, MoreHorizontal, Network, Pencil, Plus, RadioTower, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { RecLogo } from '../ui/RecLogo';
 import { ContentFlags } from '../ui/ContentFlags';
@@ -17,6 +17,8 @@ import type { Protocol, Recorder, RecorderStatus } from '../types';
 import { clockOf, MASKED, useStreams, type StreamInfo } from '../streams';
 import { explainGuard } from '../ui/guard';
 import { showError } from '../ui/serverError';
+import { gb, loopBytes, recWithLoop, type Space } from '../ui/RecLoop';
+import { openContextMenu } from '../ui/ContextMenu';
 
 const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
   { value: 'udp', label: 'UDP', detail: 'udp://' },
@@ -32,6 +34,10 @@ const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
 ];
 /** A web page's formats (as the server films them). */
 export const PAGE_FORMATS = ['1080p25', '1080p50', '1080p2997', '1080p5994', '720p50', '720p5994'];
+/** What changes as a source becomes another kind: each kind's defaults, what can be kept kept. */
+function switchTo(c: Recorder, v: Protocol): Partial<Recorder> {
+  return { protocol: v as Protocol, ...(v === 'web' || v === 'hls' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}), ...(v === 'pattern' ? { pattern: c.pattern || 'smpte', videoMode: PATTERN_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080i50', bitrate: c.bitrate >= 1 && c.bitrate <= 200 ? c.bitrate : 8 } : {}), ...(v === 'ndi' ? { mode: 'caller' as const, url: c.protocol === 'ndi' ? c.url : '', bitrate: c.bitrate >= 5 && c.bitrate <= 200 ? c.bitrate : 25 } : {}), ...(v === 'page' ? { ...PAGE_PRESET, videoMode: PAGE_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080p25', bitrate: c.bitrate >= 1 && c.bitrate <= 50 ? c.bitrate : 6 } : {}), ...(c.protocol === 'ndi' && v !== 'ndi' ? { url: '' } : {}) };
+}
 /** A new web page source, as made by « Add a web source ». */
 const PAGE_PRESET: Partial<Recorder> = { protocol: 'page', mode: 'caller', url: '', videoMode: '1080p25', bitrate: 6, audioChannels: 2 };
 
@@ -93,15 +99,7 @@ async function reloadRecorders() {
   }
 }
 
-/** Bytes a full loop takes (as the server counts it: proxies and 5 % included). */
-/** Bitrate assumed for a source not measured yet, Mb/s (as the server). */
-const DEFAULT_MBPS = 8;
-export const loopNeed = (mbps: number, hours: number) => ((mbps > 0 ? mbps : DEFAULT_MBPS) + 1.5) * 1e6 / 8 * 3600 * hours * 1.05;
-/** Loop lengths on the slider (hours), and the ones a button gives at once. */
-const LOOP_STEPS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 18, 20, 24, 30, 36, 48, 60, 72, 96, 120, 144, 168];
-const LOOP_PRESETS = [3, 6, 12, 24];
 
-const stepOf = (h: number) => LOOP_STEPS.reduce((best, v, i) => (Math.abs(v - h) < Math.abs(LOOP_STEPS[best] - h) ? i : best), 0);
 
 /** "23 h 41" */
 function hours(ms: number): string {
@@ -117,6 +115,21 @@ function useTick(ms: number) {
     return () => clearInterval(i);
   }, [ms]);
   return n;
+}
+
+/** The page's groups, by kind of source; a new one in a group is of its first kind. */
+const GROUPS: { key: string; label: string; icon: React.ReactNode; protocols: Protocol[] }[] = [
+  { key: 'card', label: 'SDI / HDMI inputs', icon: <Cable size={14} />, protocols: ['decklink'] },
+  { key: 'ndi', label: 'NDI', icon: <Network size={14} />, protocols: ['ndi'] },
+  { key: 'net', label: 'Network streams', icon: <RadioTower size={14} />, protocols: ['srt', 'rtmp', 'udp', 'rtp'] },
+  { key: 'web', label: 'Online videos', icon: <MonitorPlay size={14} />, protocols: ['web', 'hls'] },
+  { key: 'page', label: 'Web pages', icon: <Globe size={14} />, protocols: ['page'] },
+  { key: 'pattern', label: 'Test patterns', icon: <Grid3x3 size={14} />, protocols: ['pattern'] },
+];
+
+/** A new source of this kind, with its kind's defaults. */
+function presetFor(p: Protocol, name: string): Partial<Recorder> {
+  return { ...switchTo(blank, p), name };
 }
 
 export function Recorders() {
@@ -187,59 +200,51 @@ export function Recorders() {
             </div>
           </div>
         )}
-        <div className="project-grid">
-          {shown.filter((r) => r.protocol !== 'page').map((r) => (
-            <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} streams={streams.filter((x) => x.source === r.id)} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
-          ))}
-          {shown.length === 0 && (q || chip !== 'all') && (
-            <div className="empty big">
-              <Search size={22} />
-              <p>{t('No match')}</p>
-            </div>
-          )}
-          {shown.length === 0 && !admin && !q && chip === 'all' && (
-            <div className="empty big">
-              <RadioTower size={22} />
-              <p>{t('No recorder')}</p>
-            </div>
-          )}
-          {admin && !q && chip === 'all' && (
-            <button className="project-new" onClick={() => setEdit({ rec: null })}>
-              <Plus size={22} />
-              <span>{t('New recorder')}</span>
-            </button>
-          )}
-        </div>
-        {/* The web pages: a browser of the server each, its page chosen in the Streamer and the Extraction. */}
-        {(shown.some((r) => r.protocol === 'page') || (admin && !q && chip === 'all')) && (
-          <>
-            <div className="asr-group-head">{t('Web pages')}</div>
-            <div className="project-grid">
-              {shown.filter((r) => r.protocol === 'page').map((r) => (
-                <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} streams={streams.filter((x) => x.source === r.id)} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
-              ))}
-              {admin && !q && chip === 'all' && (
-                <button className="project-new" onClick={() => setEdit({ rec: null, preset: { ...PAGE_PRESET, name: `Web ${recorders.filter((r) => r.protocol === 'page').length + 1}` } })}>
-                  <Plus size={22} />
-                  <span>{t('Add a web source')}</span>
-                </button>
-              )}
-            </div>
-          </>
+        {shown.length === 0 && (q || chip !== 'all') && (
+          <div className="empty big">
+            <Search size={22} />
+            <p>{t('No match')}</p>
+          </div>
         )}
+        {shown.length === 0 && !admin && !q && chip === 'all' && (
+          <div className="empty big">
+            <RadioTower size={22} />
+            <p>{t('No recorder')}</p>
+          </div>
+        )}
+        {/* By kind of source: each group with its count and its own « + ». */}
+        {GROUPS.map((g) => {
+          const mine = shown.filter((r) => g.protocols.includes(r.protocol));
+          const adds = admin && !q && chip === 'all';
+          if (!mine.length && !(adds && recorders.length === 0)) return null;
+          return (
+            <section key={g.key} className="src-group">
+              <header className="src-group-head">
+                <span className="src-group-ico">{g.icon}</span>
+                <h2>{t(g.label)}</h2>
+                <span className="src-group-n">{mine.length}</span>
+                <span className="src-group-line" />
+                {adds && (
+                  <button type="button" className="btn small ghost" onClick={() => setEdit({ rec: null, preset: presetFor(g.protocols[0], g.key === 'page' ? `Web ${recorders.filter((r) => r.protocol === 'page').length + 1}` : '') })}>
+                    <Plus size={13} /> {t('Add')}
+                  </button>
+                )}
+              </header>
+              <div className="src-grid">
+                {mine.map((r) => (
+                  <RecorderCard key={r.id} rec={r} st={status[r.id]} admin={admin} streams={streams.filter((x) => x.source === r.id)} onEdit={() => setEdit({ rec: r })} onDuplicate={() => setEdit({ rec: null, from: r })} />
+                ))}
+              </div>
+            </section>
+          );
+        })}
       </div>
       {edit && <RecorderModal rec={edit.rec} from={edit.from} preset={edit.preset} onClose={() => setEdit(null)} />}
     </>
   );
 }
 
-/** How a source is recorded (set in Programmation). */
-export function recordingMode(r: Recorder): 'continuous' | 'slots' | 'off' {
-  return r.enabled ? 'continuous' : r.slotsOff ? 'off' : 'slots';
-}
-
 const STATE_LABEL: Record<string, string> = { recording: 'Recording', nosignal: 'No signal', starting: 'Connecting…', off: 'Stopped', error: 'Error', waiting: 'Programmed' };
-const RECORDING_LABEL: Record<string, string> = { continuous: 'Continuous', slots: 'Slots', off: 'Not recorded (source)' };
 const STATE_TONE: Record<string, string> = { recording: 'ok', nosignal: 'warn', starting: 'warn', off: '', error: 'bad', waiting: 'plan' };
 
 function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: Recorder; st?: RecorderStatus; admin: boolean; streams: StreamInfo[]; onEdit: () => void; onDuplicate: () => void }) {
@@ -249,17 +254,16 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
   const state = st?.state ?? 'off';
   const recording = state === 'recording';
   useEffect(() => setImg(true), [tick]);
-  const now = serverNow();
   const have = st?.oldest && st.newest ? st.newest - st.oldest : 0;
   const fill = Math.min(100, (have / (rec.loopHours * 3_600_000)) * 100);
   const m = st?.media;
   const fmt = [scanFormat(m), m ? CODECS[m.codec] ?? m.codec.toUpperCase() : '', recording && st?.bitrate ? bitrate(st.bitrate, locale()) : ''].filter(Boolean).join(' · ');
 
-  // REC: records all the time; Stop: only during its slots (as in Programmation).
-  const setRecording = async (mode: 'continuous' | 'slots') => {
-    if (mode === 'slots' && !(await confirmDialog({ title: t('Stop recording “{name}”?', { name: rec.name }), message: t('What it recorded stays in its loop.'), confirm: t('Stop'), danger: true }))) return;
+  // REC: records all the time, with the loop chosen then; Stop: only during its slots (as in the Régie).
+  const stop = async () => {
+    if (!(await confirmDialog({ title: t('Stop recording “{name}”?', { name: rec.name }), message: t('What it recorded stays in its loop.'), confirm: t('Stop'), danger: true }))) return;
     try {
-      await api('POST', `/api/recorders/${rec.id}/recording`, { mode });
+      await api('POST', `/api/recorders/${rec.id}/recording`, { mode: 'slots' });
     } catch (e) {
       if (!explainGuard(e)) showError(e);
     }
@@ -283,34 +287,42 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
     void reloadRecorders();
   };
 
+  const more = (e: React.MouseEvent) =>
+    openContextMenu(e, [
+      { label: t('Duplicate'), icon: <Copy size={14} />, onClick: onDuplicate },
+      { label: t('Empty the loop'), icon: <Eraser size={14} />, disabled: !st?.oldest, onClick: () => void clearLoop() },
+      'sep',
+      { label: t('Delete'), icon: <Trash2 size={14} />, danger: true, onClick: () => void remove() },
+    ]);
+  // One line under the name: the programme on air, else the slot, else the next one.
+  const info = st?.onAir
+    ? { icon: <Tv size={11} />, name: st.onAir.name, time: `${clock(st.onAir.start, timezone).slice(0, 5)}–${clock(st.onAir.end, timezone).slice(0, 5)}`, dim: false }
+    : !rec.enabled && st?.slot
+      ? { icon: <CalendarClock size={11} />, name: st.slot.name || t('Programmed slot'), time: t('until {h}', { h: clock(st.slot.end, timezone).slice(0, 5) }), dim: false }
+      : !rec.enabled && st?.nextSlot
+        ? { icon: <CalendarClock size={11} />, name: st.nextSlot.name || t('Programmed slot'), time: `${day(st.nextSlot.start, timezone, locale())} ${clock(st.nextSlot.start, timezone).slice(0, 5)}`, dim: true }
+        : st?.next
+          ? { icon: <Tv size={11} />, name: t('Next: {name}', { name: st.next.name }), time: clock(st.next.start, timezone).slice(0, 5), dim: true }
+          : null;
+
   return (
-    <article className="project-card">
-      <div className="sc-thumb">
+    <article className={`src-card ${recording ? 'rec' : ''}`}>
+      <div className="src-thumb">
         {img && state !== 'off' ? <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${recording ? tick : 0}`} alt="" onError={() => setImg(false)} /> : <div className="sc-pic lost" />}
-        {state === 'nosignal' && (
-          <span className="sc-onpic lostmsg">
-            <WifiOff size={14} /> {t('No signal')}
+        {(state === 'nosignal' || state === 'error') && (
+          <span className="src-onpic bad" data-tip={state === 'error' ? t('Error') : t('No signal')}>
+            {state === 'error' ? <TriangleAlert size={14} /> : <WifiOff size={14} />}
           </span>
         )}
-        {state === 'starting' && <span className="sc-onpic mid">{(rec.protocol === 'rtmp' || rec.protocol === 'srt') && rec.mode === 'listener' ? t('Waiting for the source') : rec.protocol === 'decklink' ? t('Opening the card…') : t('Connecting…')}</span>}
-        {state === 'error' && (
-          <span className="sc-onpic lostmsg">
-            <TriangleAlert size={14} /> {t('Error')}
-          </span>
-        )}
-        {state === 'waiting' && (
-          <span className="sc-onpic mid">
-            <CalendarClock size={14} /> {st?.nextSlot ? t('Next slot: {when}', { when: `${day(st.nextSlot.start, timezone, locale())} ${clock(st.nextSlot.start, timezone).slice(0, 5)}` }) : t('No slot to come')}
-          </span>
-        )}
-        {rec.protocol === 'web' && <span className="sc-onpic tr">{badge(rec)}</span>}
+        {state === 'starting' && <span className="src-onpic" data-tip={(rec.protocol === 'rtmp' || rec.protocol === 'srt') && rec.mode === 'listener' ? t('Waiting for the source') : t('Connecting…')}><span className="src-spin" /></span>}
         {recording && <ContentFlags st={st} />}
       </div>
-      <div className="project-body">
-        <div className="sc-card-title">
+      <div className="src-body">
+        <div className="src-title">
           <span className={`nav-dot ${recording ? 'ok' : state === 'off' || state === 'waiting' ? '' : state === 'error' ? 'bad' : 'warn'}`} />
-          <RecLogo rec={rec} />
+          <RecLogo rec={rec} size="sm" />
           <strong title={[sourceAddress(rec), fmt].filter(Boolean).join('\n')}>{rec.name}</strong>
+          {rec.protocol === 'web' && <span className="src-badge">{badge(rec)}</span>}
           {recording ? (
             <span className="sc-state rec">
               <span className="sc-rec" />
@@ -320,96 +332,55 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
             <span className={`sc-state ${STATE_TONE[state] ?? ''}`}>{t(STATE_LABEL[state] ?? 'Stopped')}</span>
           )}
         </div>
-        {streams.length > 0 && (
-          <div className="sc-onair-line">
-            <span className="sc-rec" />
-            {tn(streams.length, 'Sent to {n} destination', 'Sent to {n} destinations')}
-            {streams[0].liveSince ? ` · ${clockOf(serverNow() - streams[0].liveSince)}` : ''}
-          </div>
-        )}
-        <div className="sc-recmode">
-          {t('Recording mode')}&nbsp;:{' '}
-          {/* Programmed with nothing to come: it does not record, say so rather than "Programmed". */}
-          <b>{recordingMode(rec) === 'slots' && !st?.slot && !st?.nextSlot ? t('None programmed') : t(RECORDING_LABEL[recordingMode(rec)])}</b>
-          {recordingMode(rec) === 'slots' && st?.nextSlot && !st.slot ? ` · ${t('next: {when}', { when: `${clock(st.nextSlot.start, timezone).slice(0, 5)} ${st.nextSlot.name}` })}` : ''}
+        <div className="src-sub">
+          <span className="src-addr">{sourceAddress(rec) || fmt}</span>
         </div>
-        {/* The alerts (reception, server load, disk space, why no signal) go to Système › Santé, not here. */}
-        {st?.onAir && (
-          <div className="sc-epg-now" title={st.next ? t('Next: {name}', { name: `${clock(st.next.start, timezone).slice(0, 5)} ${st.next.name}` }) : undefined}>
-            <Tv size={12} />
-            <span className="sc-epg-name">{st.onAir.name}</span>
-            <span className="sc-epg-time">
-              {clock(st.onAir.start, timezone).slice(0, 5)}–{clock(st.onAir.end, timezone).slice(0, 5)}
-            </span>
-            <span className="sc-epg-bar">
-              <span style={{ width: `${Math.min(100, Math.max(0, ((now - st.onAir.start) / (st.onAir.end - st.onAir.start)) * 100))}%` }} />
-            </span>
-          </div>
-        )}
-        {!st?.onAir && st?.next && (
-          <div className="sc-epg-now dim">
-            <Tv size={12} />
-            <span className="sc-epg-name">
-              {t('Next: {name}', { name: st.next.name })}
-            </span>
-            <span className="sc-epg-time">{clock(st.next.start, timezone).slice(0, 5)}</span>
-          </div>
-        )}
-        {state === 'error' && st?.message && (
-          <span className="sc-errline" title={st.message}>
-            <TriangleAlert size={12} /> {t(st.message)}
+        {state === 'error' && st?.message ? (
+          <span className="src-line bad" title={st.message}>
+            <TriangleAlert size={11} /> <span className="src-line-name">{t(st.message)}</span>
           </span>
+        ) : streams.length > 0 ? (
+          <span className="src-line air">
+            <span className="sc-rec" />
+            <span className="src-line-name">{tn(streams.length, 'Sent to {n} destination', 'Sent to {n} destinations')}</span>
+            {streams[0].liveSince ? <span className="src-line-time">{clockOf(serverNow() - streams[0].liveSince)}</span> : null}
+          </span>
+        ) : info ? (
+          <span className={`src-line ${info.dim ? 'dim' : ''}`}>
+            {info.icon} <span className="src-line-name">{info.name}</span>
+            <span className="src-line-time">{info.time}</span>
+          </span>
+        ) : (
+          <span className="src-line dim" />
         )}
-        {/* Programmed slots: a stopped recorder records during them (a running one goes on anyway). */}
-        {!rec.enabled && st?.slot ? (
-          <div className="sc-slot-now">
-            <CalendarClock size={12} />
-            <span className="sc-epg-name">{st.slot.name || t('Programmed slot')}</span>
-            <span className="sc-epg-time">{t('until {h}', { h: clock(st.slot.end, timezone).slice(0, 5) })}</span>
-          </div>
-        ) : !rec.enabled && st?.nextSlot ? (
-          <div className="sc-slot-now dim">
-            <CalendarClock size={12} />
-            <span className="sc-epg-name">{st.nextSlot.name || t('Programmed slot')}</span>
-            <span className="sc-epg-time">
-              {day(st.nextSlot.start, timezone, locale())} {clock(st.nextSlot.start, timezone).slice(0, 5)}–{clock(st.nextSlot.end, timezone).slice(0, 5)}
-            </span>
-          </div>
-        ) : null}
-        <div className="sc-loop">
-          <div className="sc-loop-head">
-            <span>{t('Loop')} <b>{hours(have)}</b> {t('of {h} h', { h: rec.loopHours })}</span>
-            <span>{fill >= 99.5 ? t('full') : `${Math.round(fill)} %`}</span>
-          </div>
+        <div className="src-loop" title={t('Loop')}>
           <span className="perf-bar tone-accent">
             <span className="perf-bar-fill" style={{ transform: `translateX(${fill - 100}%)` }} />
+          </span>
+          <span className="src-loop-v">
+            <b>{hours(have)}</b> / {rec.loopHours} h
           </span>
         </div>
       </div>
       {admin && (
-        <div className="sc-card-foot sc-card-icons">
-          <button className="icon-btn ghost" data-tip={t('Edit')} aria-label={t('Edit')} onClick={onEdit}>
-            <Pencil size={15} />
-          </button>
-          <button className="icon-btn ghost" data-tip={t('Duplicate')} aria-label={t('Duplicate')} onClick={onDuplicate}>
-            <Copy size={15} />
-          </button>
-          <button className="icon-btn ghost" data-tip={t('Empty the loop')} aria-label={t('Empty the loop')} disabled={!st?.oldest} onClick={() => void clearLoop()}>
-            <Eraser size={15} />
-          </button>
-          <div className="spacer" />
+        <div className="src-actions">
           {rec.enabled ? (
-            <button type="button" className="btn small stop-btn" onClick={() => void setRecording('slots')}>
+            <button type="button" className="btn small stop-btn" onClick={() => void stop()}>
               <Square size={10} /> {t('Stop')}
             </button>
           ) : (
-            <button type="button" className="btn small sc-cal-start" onClick={() => void setRecording('continuous')}>
-              <span className="sc-rec" /> REC
+            <button type="button" className="btn small sc-cal-start" data-tip={t('Record all the time: choose the loop')} onClick={(e) => recWithLoop(e, rec, (st?.measured ?? 0) / 1e6)}>
+              <span className="sc-rec" /> REC <ChevronDown size={11} className="src-caret" />
             </button>
           )}
-          <button className="icon-btn ghost danger" data-tip={t('Delete')} aria-label={t('Delete')} onClick={() => void remove()}>
-            <Trash2 size={15} />
-          </button>
+          <div className="src-icons">
+            <button className="icon-btn ghost" data-tip={t('Edit')} aria-label={t('Edit')} onClick={onEdit}>
+              <Pencil size={14} />
+            </button>
+            <button className="icon-btn ghost" data-tip={t('More')} aria-label={t('More')} onClick={more}>
+              <MoreHorizontal size={14} />
+            </button>
+          </div>
         </div>
       )}
     </article>
@@ -419,10 +390,7 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
 // Declarative: a new source does not record by itself (REC in Programmation).
 const blank: Recorder = { id: '', name: '', protocol: 'srt', url: '', mode: 'listener', port: 9000, path: 'live/stream', latency: 500, passphrase: '', iface: '', loopHours: 24, bitrate: 10, enabled: false };
 
-interface Space {
-  capacity: number | null;
-  recorders: { id: string; enabled: boolean; need: number | null }[];
-}
+
 
 function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; from?: Recorder; preset?: Partial<Recorder>; onClose: () => void }) {
   const { recorders, status } = useApp(useShallow((s) => ({ recorders: s.recorders, status: s.status })));
@@ -486,11 +454,10 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
   // The loop's space: reserved from the bitrate (the measured one if higher), against what the disk gives the loops.
   // The bitrate measured (else the one of former settings, else 8 Mb/s, as the server).
   const measured = rec ? (status[rec.id]?.measured ?? 0) / 1e6 : 0;
-  const need = c.enabled ? loopNeed(measured || c.bitrate, c.loopHours) : 0;
+  const need = c.enabled ? loopBytes(measured || c.bitrate, c.loopHours) : 0;
   const others = space ? space.recorders.filter((r) => r.enabled && r.id !== rec?.id).reduce((a, r) => a + (r.need ?? 0), 0) : 0;
   const left = space?.capacity != null ? Math.max(0, space.capacity - others) : null;
   const tooBig = left !== null && need > left;
-  const gb = (b: number) => `${(b / 1e9).toLocaleString(locale(), { maximumFractionDigits: b < 1e10 ? 1 : 0 })} ${lang() === 'fr' ? 'Go' : 'GB'}`;
 
   // The logo: a file dropped or chosen, an address, or removed; sent once the recorder is saved.
   const [logo, setLogo] = useState<LogoChange>(null);
@@ -534,7 +501,7 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
             <input value={c.name} autoFocus onChange={(e) => set({ name: e.target.value })} />
           </Field>
           <Field label={t('Source')} group>
-            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: t(p.detail) }))} onChange={(v) => set({ protocol: v as Protocol, ...(v === 'web' || v === 'hls' ? { mode: 'caller' as const, url: c.url.startsWith('http') ? c.url : '' } : {}), ...(v === 'decklink' ? { bitrate: c.bitrate >= 5 && c.bitrate <= 200 && c.protocol === 'decklink' ? c.bitrate : 25, device: c.device ?? 0, connection: c.connection ?? 'auto', videoMode: c.videoMode ?? 'auto', audioInput: c.audioInput ?? 'auto', audioChannels: c.audioChannels ?? 2 } : {}), ...(v === 'pattern' ? { pattern: c.pattern || 'smpte', videoMode: PATTERN_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080i50', bitrate: c.bitrate >= 1 && c.bitrate <= 200 ? c.bitrate : 8 } : {}), ...(v === 'ndi' ? { mode: 'caller' as const, url: c.protocol === 'ndi' ? c.url : '', bitrate: c.bitrate >= 5 && c.bitrate <= 200 ? c.bitrate : 25 } : {}), ...(v === 'page' ? { ...PAGE_PRESET, videoMode: PAGE_FORMATS.includes(c.videoMode ?? '') ? c.videoMode : '1080p25', bitrate: c.bitrate >= 1 && c.bitrate <= 50 ? c.bitrate : 6 } : {}), ...(c.protocol === 'ndi' && v !== 'ndi' ? { url: '' } : {}) })} />
+            <Dropdown value={c.protocol} options={PROTOCOLS.map((p) => ({ value: p.value, label: t(p.label), detail: t(p.detail) }))} onChange={(v) => set(switchTo(c, v as Protocol))} />
           </Field>
           {(c.protocol === 'rtmp' || c.protocol === 'srt') && (
             <Field label={t('Mode')} group>
@@ -655,19 +622,6 @@ function RecorderModal({ rec, from, preset, onClose }: { rec: Recorder | null; f
             </>
           )}
           <LogoField rec={rec} change={logo} onChange={setLogo} />
-          <Field label={t('Loop length')} group className="span2">
-            <div className="sc-looplen">
-              <input type="range" min={0} max={LOOP_STEPS.length - 1} step={1} value={stepOf(c.loopHours)} aria-label={t('Loop length')} onChange={(e) => set({ loopHours: LOOP_STEPS[Number(e.target.value)] })} />
-              <b className="sc-looplen-v">{c.loopHours} h</b>
-              <div className="sc-looplen-presets">
-                {LOOP_PRESETS.map((h) => (
-                  <button key={h} type="button" className={`btn small ${c.loopHours === h ? 'on' : ''}`} onClick={() => set({ loopHours: h })}>
-                    {h} h
-                  </button>
-                ))}
-              </div>
-            </div>
-          </Field>
         </div>
         <aside className="sc-rm-side">
           <RecorderSide c={c} rec={rec} st={rec ? status[rec.id] : undefined} dl={dl} detected={detected} onFormat={setDetected} probe={probe} />
@@ -1050,7 +1004,6 @@ function RecorderSide({ c, rec, st, dl, detected, onFormat, probe }: { c: Record
     rows.push([t('State'), t(STATE_LABEL[st.state] ?? 'Stopped')]);
     if (st.state === 'recording' && st.bitrate) rows.push([t('Bitrate received'), bitrate(st.bitrate, locale())]);
   }
-  rows.push([t('Loop'), `${c.loopHours} h`]);
   const ts = c.protocol === 'udp' || c.protocol === 'rtp' || c.protocol === 'srt';
   const prog = (p: { name: string; start: number; end: number }) => `${clock(p.start, timezone).slice(0, 5)}–${clock(p.end, timezone).slice(0, 5)} ${p.name}`;
   return (

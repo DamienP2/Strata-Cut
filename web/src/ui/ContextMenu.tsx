@@ -17,8 +17,15 @@ export interface MenuItem {
   disabled?: boolean;
   /** Key shown on the right (`.ux1-cap`). */
   keys?: string;
+  /** A figure on the right (a size…), orange with `warn`. */
+  side?: string;
+  warn?: boolean;
 }
-export type MenuEntry = MenuItem | 'sep';
+/** A line of text, not clickable (a title, a figure under the items). */
+export interface MenuNote {
+  note: string;
+}
+export type MenuEntry = MenuItem | MenuNote | 'sep';
 
 export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuEntry[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -76,6 +83,10 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
       {items.map((it, i) =>
         it === 'sep' ? (
           <div key={i} className="menu-sep" />
+        ) : 'note' in it ? (
+          <div key={i} className="menu-note">
+            {it.note}
+          </div>
         ) : (
           <button
             key={i}
@@ -91,6 +102,7 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
             {it.icon}
             <span>{it.label}</span>
             {it.keys && <span className="ux1-cap">{it.keys}</span>}
+            {it.side && <span className={`menu-side ${it.warn ? 'warn' : ''}`}>{it.side}</span>}
           </button>
         ),
       )}

@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, Check, ChevronLeft, ChevronRight, Pause, Play, Plus, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, Pause, Play, Plus, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { Empty } from '../ui/Empty';
 import { api, can, serverEvents, serverNow, useApp } from '../store';
 import { locale, t, tc } from '../i18n';
@@ -21,6 +21,7 @@ import { ContentFlags } from '../ui/ContentFlags';
 import type { Programme, Recorder, Slot } from '../types';
 import { explainGuard } from '../ui/guard';
 import { showError } from '../ui/serverError';
+import { recWithLoop } from '../ui/RecLoop';
 
 /** 1 = Monday … 7 = Sunday: their short names in the interface's language. */
 function dayNames(): string[] {
@@ -634,7 +635,7 @@ const recMode = (r: Recorder): RecMode => (r.enabled ? 'continuous' : r.slotsOff
 function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
   const st = useApp((s) => s.status[rec.id]);
   const [busy, setBusy] = useState(false);
-  const setMode = async (mode: 'continuous' | 'slots') => {
+  const setMode = async (mode: 'slots') => {
     if (mode === 'slots' && !(await confirmDialog({ title: t('Stop recording “{name}”?', { name: rec.name }), message: t('What it recorded stays in its loop.'), confirm: t('Stop'), danger: true }))) return;
     setBusy(true);
     try {
@@ -683,8 +684,8 @@ function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
             <Square size={9} /> {t('Stop')}
           </button>
         ) : (
-          <button type="button" className="sc-head-rec" disabled={busy} data-tip={t('Record all the time')} onClick={() => void setMode('continuous')}>
-            <span className="sc-rec" /> REC
+          <button type="button" className="sc-head-rec" disabled={busy} data-tip={t('Record all the time: choose the loop')} onClick={(e) => recWithLoop(e, rec, (st?.measured ?? 0) / 1e6)}>
+            <span className="sc-rec" /> REC <ChevronDown size={11} className="src-caret" />
           </button>
         ))}
     </div>

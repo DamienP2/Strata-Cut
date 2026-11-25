@@ -1580,3 +1580,45 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .snd-dir { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .snd-dir:hover { background: var(--panel-3); }
 .snd-dir svg { color: var(--accent-2); flex: none; }
+
+/* Système › Sources: grouped by kind, compact cards (V25). */
+.src-group { margin-top: 20px; }
+.src-group-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; color: var(--text-2); }
+.src-group-ico { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: var(--panel-2); color: var(--text-3); }
+.src-group-head h2 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.src-group-n { font-size: 11px; color: var(--text-3); background: var(--panel-2); border-radius: 999px; padding: 1px 7px; font-variant-numeric: tabular-nums; }
+.src-group-line { flex: 1; height: 1px; background: var(--line); }
+.src-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 8px; }
+.src-card { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 10px 8px 8px; border-radius: 11px; background: var(--panel); border: 1px solid var(--line); min-width: 0; }
+.src-card:hover { border-color: var(--line-2); }
+.src-card.rec { border-color: color-mix(in srgb, var(--live) 28%, var(--line)); }
+.src-thumb { position: relative; width: 112px; aspect-ratio: 16 / 9; border-radius: 7px; overflow: hidden; background: #05060a; }
+.src-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.src-thumb .sc-pic { position: absolute; inset: 0; }
+.src-onpic { position: absolute; left: 5px; bottom: 5px; width: 20px; height: 20px; border-radius: 5px; display: grid; place-items: center; background: rgba(0, 0, 0, 0.65); color: var(--text-2); }
+.src-onpic.bad { color: var(--warn); }
+.src-spin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.25); border-top-color: var(--text); animation: spin 0.8s linear infinite; }
+.src-body { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.src-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.src-title strong { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-badge { flex: none; font-size: 10.5px; color: var(--text-3); }
+.src-sub { display: flex; min-width: 0; font: 11px var(--mono); color: var(--text-3); }
+.src-addr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-line { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-2); min-width: 0; height: 16px; }
+.src-line.dim { color: var(--text-3); }
+.src-line.air { color: color-mix(in srgb, var(--live) 70%, var(--text)); }
+.src-line.air .sc-rec { width: 6px; height: 6px; }
+.src-line.bad { color: var(--live); }
+.src-line-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-line-time { flex: none; font-variant-numeric: tabular-nums; color: var(--text-3); }
+.src-loop { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.src-loop .perf-bar { flex: 1; height: 4px; }
+.src-loop-v { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.src-loop-v b { color: var(--text-2); font-weight: 600; }
+.src-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.src-icons { display: flex; gap: 2px; }
+.src-icons .icon-btn { width: 26px; height: 26px; }
+.src-caret { opacity: 0.6; margin-left: -2px; }
+.menu-note { padding: 6px 10px 5px; font-size: 11px; color: var(--text-3); }
+.menu-side { margin-left: auto; padding-left: 14px; font-size: 11.5px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.menu-side.warn { color: var(--warn); }

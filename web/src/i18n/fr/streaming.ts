@@ -293,4 +293,13 @@ export const streaming: Record<string, string> = {
   Opacity: 'Opacité',
   Centre: 'Recentrer',
   'Original size': 'Taille d\'origine',
+  'SDI / HDMI inputs': 'Entrées SDI / HDMI',
+  'Network streams': 'Flux réseau',
+  'Online videos': 'Vidéos en ligne',
+  'Test patterns': 'Mires',
+  'Record with a loop of': 'Enregistrer avec une boucle de',
+  '{h} h': '{h} h',
+  'Record all the time: choose the loop': 'Enregistrer en continu : choisir la boucle',
+  'Add': 'Ajouter',
+  '{left} free for the loops': '{left} libres pour les boucles',
 };
