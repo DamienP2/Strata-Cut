@@ -1,5 +1,5 @@
 /*
- * Système › Flux › Envois des extraits: the places clips are put (a NAS's share, SFTP, FTP/FTPS,
+ * Système › Flux › Serveurs de fichiers: the places clips are put (a NAS's share, SFTP, FTP/FTPS,
  * WebDAV, a folder of the server), each in a sub-folder made of the clip's source, date, kind,
  * maker; a clip goes there when asked, or by itself (every new clip, or those of some sources).
  */
@@ -43,7 +43,7 @@ export function Sends() {
   const auto = (list ?? []).filter((x) => x.auto).length;
   return (
     <>
-      <PageHead title={t('Clip sending')} sub={list ? `${tn(list.length, '{n} place', '{n} places')} · ${tn(auto, '{n} automatic', '{n} automatic')}` : undefined}>
+      <PageHead title={t('File servers')} sub={list ? `${tn(list.length, '{n} place', '{n} places')} · ${tn(auto, '{n} automatic', '{n} automatic')}` : undefined}>
         <button className="btn primary" onClick={() => setEdit(blankTarget())}>
           <Plus size={14} /> {t('New place')}
         </button>

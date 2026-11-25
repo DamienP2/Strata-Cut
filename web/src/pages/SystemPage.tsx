@@ -43,7 +43,7 @@ export const SYSTEM: Group[] = [
     sections: [
       { id: 'sources', label: 'Sources', icon: RadioTower, admin: true, page: page(() => import('./Recorders'), 'Recorders') },
       { id: 'destinations', label: 'Destinations', icon: Radio, admin: true, page: page(() => import('../settings/Destinations'), 'Destinations') },
-      { id: 'sends', label: 'Clip sending', icon: Upload, admin: true, page: page(() => import('../settings/Sends'), 'Sends') },
+      { id: 'sends', label: 'File servers', icon: Upload, admin: true, page: page(() => import('../settings/Sends'), 'Sends') },
     ],
   },
   {

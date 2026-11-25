@@ -1,5 +1,5 @@
 /*
- * Sending the clips (Système › Envois des extraits): the places, the sends of the clips this
+ * Sending the clips (Système › Serveurs de fichiers): the places, the sends of the clips this
  * account sees, and the menu « Envoyer vers » of the Extraits page.
  */
 import { useCallback, useEffect, useState } from 'react';

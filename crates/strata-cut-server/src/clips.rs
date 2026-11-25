@@ -178,7 +178,7 @@ pub struct ClipRequest {
     /// them as they are).
     #[serde(default)]
     pub subtitles: bool,
-    /// The places it is sent to once made (Système › Envois des extraits).
+    /// The places it is sent to once made (Système › Serveurs de fichiers).
     #[serde(default)]
     pub send_to: Vec<String>,
     /// The sound track heard in the player (another language, the audio description): the one

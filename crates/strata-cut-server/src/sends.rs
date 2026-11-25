@@ -1,4 +1,4 @@
-//! Sending the clips (Système › Envois des extraits): the places clips are put — a NAS's share
+//! Sending the clips (Système › Serveurs de fichiers): the places clips are put — a NAS's share
 //! (SMB 2/3, by `smbclient`), SFTP, FTP or FTPS, WebDAV (by `curl`), a folder of the server (a NAS
 //! mounted there) — each in a sub-folder made of the clip's source, date, kind, maker.
 //!
