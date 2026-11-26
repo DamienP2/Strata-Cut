@@ -46,6 +46,7 @@ interface RecorderUse {
   expected: number;
   bitrate: number;
   bytes: number;
+  loopBytes?: number;
   need: number | null;
   spaceLimited: boolean;
   clips: number;
@@ -307,7 +308,8 @@ export function Storage() {
             </thead>
             <tbody>
               {recs.map((r) => {
-                const fill = r.need ? pctOf(r.bytes, r.need) : 0;
+                // The loop alone (what programmed slots recorded before it is kept apart).
+                const fill = r.need ? pctOf(r.loopBytes ?? r.bytes, r.need) : 0;
                 const share = pctOf(r.bytes + r.clipBytes, total);
                 return (
                   <tr key={r.id} className={r.enabled ? '' : 'dim'}>

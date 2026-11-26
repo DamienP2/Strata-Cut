@@ -407,7 +407,9 @@ function RecorderCard({ rec, st, admin, streams, onEdit, onDuplicate }: { rec: R
   const state = st?.state ?? 'off';
   const recording = state === 'recording';
   useEffect(() => setImg(true), [tick]);
-  const have = st?.oldest && st.newest ? st.newest - st.oldest : 0;
+  // The loop alone (what programmed slots recorded before it is kept apart).
+  const from = st && st.loopFrom !== undefined ? st.loopFrom : st?.oldest;
+  const have = from && st?.newest ? st.newest - from : 0;
   const fill = Math.min(100, (have / (rec.loopHours * 3_600_000)) * 100);
   const m = st?.media;
   const fmt = [scanFormat(m), m ? CODECS[m.codec] ?? m.codec.toUpperCase() : '', recording && st?.bitrate ? bitrate(st.bitrate, locale()) : ''].filter(Boolean).join(' · ');

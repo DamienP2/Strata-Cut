@@ -84,6 +84,9 @@ export interface RecorderStatus {
   /** The loop: oldest and newest recorded instants, ms; null when empty. */
   oldest: number | null;
   newest: number | null;
+  /** The loop alone (what programmed slots recorded before it is kept apart): its oldest instant, and its bytes. */
+  loopFrom?: number | null;
+  loopBytes?: number;
   bytes: number;
   /** The loop is shorter than asked: the disk limits removed its oldest part. */
   spaceLimited: boolean;

@@ -742,7 +742,7 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
                     // What its programmed slots recorded, kept longer than its loop.
                     "programmedBytes": held.0, "programmed": held.1,
                     "id": r.id, "name": c.name, "enabled": c.enabled, "loopHours": c.loop_hours,
-                    "expected": c.bitrate, "bitrate": st.bitrate, "bytes": st.bytes,
+                    "expected": c.bitrate, "bitrate": st.bitrate, "bytes": st.bytes, "loopBytes": st.loop_bytes,
                     "need": m.need_of(&c, st.measured), "oldest": st.oldest, "newest": st.newest,
                     "spaceLimited": st.space_limited,
                     // Its clips: how many, and their bytes.

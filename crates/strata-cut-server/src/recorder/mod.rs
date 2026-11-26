@@ -401,6 +401,10 @@ pub struct Status {
     pub oldest: Option<i64>,
     pub newest: Option<i64>,
     pub bytes: u64,
+    /// The loop alone (without what programmed slots recorded before it, kept longer): its
+    /// oldest instant, and its bytes.
+    pub loop_from: Option<i64>,
+    pub loop_bytes: u64,
     /// The loop is shorter than asked: the disk limits removed its oldest part.
     pub space_limited: bool,
     /// The last bitrate measured while recording, bit/s (the loop's space follows it).
@@ -502,6 +506,9 @@ pub struct Rec {
     pub no_audio: std::sync::atomic::AtomicBool,
     /// When the disk limits last removed some of its loop, ms.
     pub space_trimmed: std::sync::atomic::AtomicI64,
+    /// What its programmed slots recorded (server times, ms), kept longer than its loop (as the
+    /// last trim saw them).
+    pub kept: Mutex<Vec<(f64, f64)>>,
     /// Starts a new run now (the loops' folder changed).
     pub new_run: tokio::sync::Notify,
     /// The programme guide of the source (DVB EIT), when it carries one.
@@ -631,7 +638,16 @@ impl Rec {
         let runs = self.runs.read().unwrap();
         let oldest = runs.iter().filter_map(Run::first_wall).reduce(f64::min).map(|w| w as i64);
         let newest = runs.iter().filter_map(Run::last_wall).reduce(f64::max).map(|w| w as i64);
-        let bytes = runs.iter().map(Run::bytes).sum();
+        let bytes: u64 = runs.iter().map(Run::bytes).sum();
+        // The loop alone: what programmed slots recorded before it stays apart (proxies counted
+        // in the same share as the originals).
+        let cutoff = (now_ms() - self.config().loop_hours as i64 * 3_600_000) as f64;
+        let kept = self.kept.lock().unwrap().clone();
+        let beyond = |seg: &index::Seg| seg.wall1() < cutoff && kept_in(&kept, seg);
+        let segs = || runs.iter().flat_map(|r| r.master.iter());
+        let loop_from = segs().filter(|x| !beyond(x)).map(|x| x.wall0).reduce(f64::min).map(|w| w as i64);
+        let (all, apart) = segs().fold((0u64, 0u64), |(a, b), x| (a + x.bytes, b + if beyond(x) { x.bytes } else { 0 }));
+        let loop_bytes = if all > 0 { bytes - (bytes as f64 * apart as f64 / all as f64) as u64 } else { bytes };
         // Bitrate over the last segments of the live run.
         let bitrate = runs.iter().rev().find(|r| r.live).map(|r| {
             let tail: Vec<_> = r.master.iter().rev().take(5).collect();
@@ -645,6 +661,8 @@ impl Rec {
         s.oldest = oldest;
         s.newest = newest;
         s.bytes = bytes;
+        s.loop_from = loop_from;
+        s.loop_bytes = loop_bytes;
         s.bitrate = if s.state == State::Recording { bitrate.unwrap_or(0) } else { 0 };
         if s.bitrate > 0 {
             s.measured = s.bitrate;
@@ -675,7 +693,7 @@ impl Rec {
             s.frozen_since = c.frozen.filter(|_| live);
             s.silent_since = c.silent.filter(|_| live);
         }
-        let short = matches!((oldest, newest), (Some(a), Some(b)) if ((b - a) as f64) < cfg.loop_hours as f64 * 3_600_000.0 * 0.98);
+        let short = matches!((loop_from, newest), (Some(a), Some(b)) if ((b - a) as f64) < cfg.loop_hours as f64 * 3_600_000.0 * 0.98);
         s.space_limited = cut > 0 && now_ms() - cut < 15 * 60_000 && short;
         if media.is_some() {
             s.media = media;
@@ -1193,13 +1211,14 @@ impl Manager {
         let extra_audio = runs.iter().rev().find_map(|r| r.meta.media.as_ref()).map(|m| m.audio_tracks.saturating_sub(1).min(PREVIEW_EXTRA)).unwrap_or(0);
         let rec = Arc::new(Rec {
             id: c.id.clone(),
-            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None, lost: 0, damaged: 0, preview_lag: 0, preview_dropped: false, black_since: None, frozen_since: None, silent_since: None }),
+            status: Mutex::new(Status { id: c.id.clone(), state: State::Off, since: now_ms(), message: String::new(), media: None, bitrate: 0, oldest: None, newest: None, bytes: 0, loop_from: None, loop_bytes: 0, space_limited: false, measured: 0, on_air: None, next: None, slot: None, next_slot: None, lost: 0, damaged: 0, preview_lag: 0, preview_dropped: false, black_since: None, frozen_since: None, silent_since: None }),
             cfg: watch::channel(c).0,
             runs: RwLock::new(runs),
             stop: watch::channel(false).0,
             dir: Mutex::new(dir),
             no_audio: false.into(),
             space_trimmed: 0.into(),
+            kept: Mutex::new(Vec::new()),
             new_run: tokio::sync::Notify::new(),
             epg: Mutex::new(guide),
             epg_found: Mutex::new(found),
@@ -1471,6 +1490,7 @@ impl Manager {
         let cutoff = (now_ms() - keep) as f64;
         let kept = self.programmed(&rec.id);
         self.trim_before(rec, cutoff, &kept);
+        *rec.kept.lock().unwrap() = kept;
     }
 
     /// Empties the loop: everything recorded so far goes, what its programmed slots recorded too
