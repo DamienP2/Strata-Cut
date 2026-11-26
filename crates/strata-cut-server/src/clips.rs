@@ -22,6 +22,7 @@ use crate::{
     api::{bad, internal, new_id, not_found, require, ApiResult},
     auth::CurrentUser,
     config::ServerConfig,
+    program::Route,
     recorder::{now_ms, Manager, Pin},
     state::{Audience, Events, Shared},
 };
@@ -199,6 +200,16 @@ pub struct ClipRequest {
     /// The sound's level, dB (-20 to +12): raised, limited under -1 dBFS.
     #[serde(default)]
     pub gain: f32,
+    /// Its channels (as they are, the left or the right on both, both mixed).
+    #[serde(default)]
+    pub route: Route,
+    /// Its left and right each at its own level (dB, -20 to +12), instead of `gain`.
+    #[serde(default)]
+    pub split: bool,
+    #[serde(default)]
+    pub gain_l: f32,
+    #[serde(default)]
+    pub gain_r: f32,
 }
 
 /// The clip's sound level: the most it may be lowered or raised (dB).
@@ -214,6 +225,23 @@ fn level_filter(gain: f32) -> String {
     } else {
         format!(",volume={gain:.1}dB")
     }
+}
+
+/// The sound filters of a clip: its channels (each at its level when apart), then its level.
+fn sound_filter(req: &ClipRequest) -> String {
+    let split = req.split && req.route.both();
+    if req.route == Route::Stereo && !split {
+        return level_filter(req.gain);
+    }
+    // A mono track made stereo first (its channel on both).
+    let [a, b, c, d] = crate::program::matrix(req.route, split, 0.0, req.gain_l as f64, req.gain_r as f64);
+    let pan = format!(",aformat=channel_layouts=stereo,pan=stereo|c0={a:.5}*c0+{b:.5}*c1|c1={c:.5}*c0+{d:.5}*c1");
+    if !split {
+        return pan + &level_filter(req.gain);
+    }
+    // Apart: raised on either side, limited under -1 dBFS.
+    let raised = req.gain_l > 0.05 || req.gain_r > 0.05;
+    pan + if raised { ",alimiter=limit=0.891:level=0" } else { "" }
 }
 
 /// Told of a clip made: the clip, the places chosen for it, who asked.
@@ -409,7 +437,7 @@ impl Clips {
         if format_of(req.kind, &req.format).is_none() {
             return Err("this format is not one of this kind of clip".into());
         }
-        if !req.gain.is_finite() || req.gain < GAIN_RANGE.0 || req.gain > GAIN_RANGE.1 {
+        if [req.gain, req.gain_l, req.gain_r].iter().any(|g| !g.is_finite() || *g < GAIN_RANGE.0 || *g > GAIN_RANGE.1) {
             return Err("the sound level is -20 to +12 dB".into());
         }
         if req.track.is_some_and(|t| t > 15) {
@@ -496,8 +524,8 @@ impl Clips {
             Some(t) => format!("0:a:{t}"),
             None => "0:a".into(),
         };
-        // Its level: raised or lowered, never over -1 dBFS once raised.
-        let level = level_filter(job.req.gain);
+        // Its channels and level: raised or lowered, never over -1 dBFS once raised.
+        let level = sound_filter(&job.req);
         let (fmt, ext) = format_of(kind, &job.req.format).ok_or("this format is not one of this kind of clip")?;
         let part = dir.join(format!("{}.part.{ext}", job.id));
         let out = dir.join(format!("{}.{ext}", job.id));
@@ -771,8 +799,9 @@ struct PeakQuery {
     track: u32,
 }
 
-/// The loudest peak (dBFS) of one sound track over a part of the loop (the Extraction's wand):
-/// null when there is no sound there. A part that begins before the recording: from its start.
+/// The loudest peak (dBFS) of one sound track over a part of the loop (the Extraction's wand), and
+/// of each of its two channels (a mono track: the same on both): null when there is no sound
+/// there. A part that begins before the recording: from its start.
 async fn peak(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(q): Json<PeakQuery>) -> ApiResult<Json<Value>> {
     require(me.can_extract() && crate::groups::sees_source(&me, &q.recorder))?;
     if !q.t.is_finite() || !q.seconds.is_finite() || q.seconds <= 0.0 {
@@ -794,19 +823,28 @@ async fn peak(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(q): Js
             Some((segs.iter().map(|x| run.master_path(x.n)).collect::<Vec<_>>(), seg_t0, t0, t1))
         })
     };
-    let Some((paths, seg_t0, t0, t1)) = found else { return Ok(Json(json!({ "peak": null }))) };
+    let Some((paths, seg_t0, t0, t1)) = found else { return Ok(Json(json!({ "peak": null, "peaks": null }))) };
     // As a clip is cut: the files' times start again from 0 at the 33-bit wrap.
     let base = (seg_t0 / crate::recorder::PTS_WRAP).floor() * crate::recorder::PTS_WRAP;
     let input = format!("concat:{}", paths.iter().map(|p| p.to_string_lossy()).collect::<Vec<_>>().join("|"));
-    let filter = format!("{},atrim=start={:.6}:end={:.6},volumedetect", crate::recorder::AUDIO_SYNC, t0 - base, t1 - base);
+    let filter = format!("{},atrim=start={:.6}:end={:.6},astats=measure_overall=none:measure_perchannel=Peak_level", crate::recorder::AUDIO_SYNC, t0 - base, t1 - base);
     let mut cmd = tokio::process::Command::new(&s.recorders.ffmpeg);
     cmd.args(["-hide_banner", "-nostdin", "-copyts", "-i", &input, "-map", &format!("0:a:{}", q.track), "-vn", "-sn", "-af", &filter, "-f", "null", "-"]);
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
     crate::recorder::background(&mut cmd);
     let out = tokio::time::timeout(Duration::from_secs(60), cmd.output()).await.map_err(|_| bad("the measure took too long"))?.map_err(internal)?;
-    let said = String::from_utf8_lossy(&out.stderr);
-    let peak = said.lines().filter_map(|l| l.split("max_volume:").nth(1)).filter_map(|v| v.trim().trim_end_matches("dB").trim().parse::<f64>().ok()).next_back();
-    Ok(Json(json!({ "peak": peak.filter(|p| p.is_finite()) })))
+    let peaks = channel_peaks(&String::from_utf8_lossy(&out.stderr));
+    let Some(&left) = peaks.first() else { return Ok(Json(json!({ "peak": null, "peaks": null }))) };
+    let right = peaks.get(1).copied().unwrap_or(left);
+    Ok(Json(json!({ "peak": left.max(right), "peaks": [left, right] })))
+}
+
+/// Each channel's peak (dBFS) said by FFmpeg's astats, in order (silence: -90).
+fn channel_peaks(said: &str) -> Vec<f64> {
+    said.lines()
+        .filter_map(|l| l.split("Peak level dB:").nth(1))
+        .map(|v| v.trim().parse::<f64>().ok().filter(|p| p.is_finite()).unwrap_or(-90.0).max(-90.0))
+        .collect()
 }
 
 /// The free space where clips are made (the Extraction says when one would not fit).
@@ -967,6 +1005,26 @@ async fn purge(c: Arc<Clips>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_clip_on_its_channels() {
+        let req = |route, split, gain, gain_l, gain_r| ClipRequest { route, split, gain, gain_l, gain_r, ..Default::default() };
+        assert_eq!(sound_filter(&req(Route::Stereo, false, 0.0, 0.0, 0.0)), "");
+        assert_eq!(sound_filter(&req(Route::Stereo, false, -3.0, 0.0, 0.0)), ",volume=-3.0dB");
+        assert_eq!(sound_filter(&req(Route::Left, false, 0.0, 0.0, 0.0)), ",aformat=channel_layouts=stereo,pan=stereo|c0=1.00000*c0+0.00000*c1|c1=1.00000*c0+0.00000*c1");
+        // Apart, one raised: limited.
+        let f = sound_filter(&req(Route::Stereo, true, 0.0, 0.0, 6.0));
+        assert!(f.contains("c1=0.00000*c0+1.99526*c1") && f.ends_with("alimiter=limit=0.891:level=0"), "{f}");
+        // One channel heard: its levels apart are not used, its level is.
+        let f = sound_filter(&req(Route::Right, true, 2.0, -20.0, -20.0));
+        assert!(f.contains("c0=0.00000*c0+1.00000*c1") && f.contains("volume=2.0dB"), "{f}");
+    }
+
+    #[test]
+    fn peaks_of_each_channel() {
+        let said = "[Parsed_astats_2 @ 0x1] Channel: 1\n[Parsed_astats_2 @ 0x1] Peak level dB: -6.5\n[Parsed_astats_2 @ 0x1] Channel: 2\n[Parsed_astats_2 @ 0x1] Peak level dB: -inf\n";
+        assert_eq!(channel_peaks(said), vec![-6.5, -90.0]);
+    }
 
     #[test]
     fn who_sees_a_clip() {

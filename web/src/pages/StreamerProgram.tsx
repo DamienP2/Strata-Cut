@@ -14,8 +14,9 @@ import type { Recorder } from "../types";
 import { DefaultSlate, Gallery, pictureUrl } from "./StreamerSlate";
 import { trackLabel } from "../audioLabel";
 import { showError } from "../ui/serverError";
+import { bothHeard, ChannelPick, heard, type Channels } from "../ui/Channels";
 
-export interface Track {
+export interface Track extends Partial<Channels> {
   on: boolean;
   gain: number;
 }
@@ -161,9 +162,10 @@ const gainShare = (db: number) => (db + 40) / 52;
  * the picture shows: as a meter shows them (a peak falls back at 60 dB a second: a sound that stops
  * is seen to stop at once), and the highest of each track over its last readings.
  */
-function useLevels(recId: string, n: number, shown: () => number | null): { lv: number[][]; recent: (k: number, readings: number) => number } {
+function useLevels(recId: string, n: number, shown: () => number | null): { lv: number[][]; recent: (k: number, readings: number) => [number, number] } {
   const [lv, setLv] = useState<number[][]>([]);
-  const history = useRef<number[][]>([]);
+  // Each track's last readings: the peak of its left and of its right.
+  const history = useRef<[number, number][][]>([]);
   useEffect(() => {
     if (n === 0) return;
     let on = true;
@@ -177,7 +179,7 @@ function useLevels(recId: string, n: number, shown: () => number | null): { lv: 
           if (!on) return;
           r.tracks.forEach((tr, k) => {
             const h = (history.current[k] ??= []);
-            h.push(Math.max(-90, ...tr));
+            h.push([tr[0] ?? -90, tr[1] ?? tr[0] ?? -90]);
             if (h.length > 100) h.shift();
           });
           // A peak falls back at 6 dB a reading (60 dB a second).
@@ -195,7 +197,10 @@ function useLevels(recId: string, n: number, shown: () => number | null): { lv: 
       window.clearInterval(i);
     };
   }, [recId, n]);
-  const recent = (k: number, readings: number) => Math.max(-90, ...(history.current[k] ?? []).slice(-readings));
+  const recent = (k: number, readings: number): [number, number] => {
+    const last = (history.current[k] ?? []).slice(-readings);
+    return [Math.max(-90, ...last.map((x) => x[0])), Math.max(-90, ...last.map((x) => x[1]))];
+  };
   return { lv, recent };
 }
 
@@ -243,14 +248,19 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
     next[k] = { ...next[k], ...x };
     prog.set({ tracks: next });
   };
-  // AUTO: the track's peaks of the last 10 s brought to the target.
+  // AUTO: the track's peaks of the last 10 s brought to the target (each channel apart: each).
   const auto = (k: number) => {
-    const peak = recent(k, 100);
+    const tr = trackOf(p, k);
+    const [l, r] = recent(k, 100);
+    const to = (peak: number) => Math.max(-40, Math.min(12, Math.round(TARGET - peak)));
+    const apart = !!tr.split && bothHeard(tr.route ?? "stereo");
+    const peak = tr.route === "left" ? l : tr.route === "right" ? r : Math.max(l, r);
     if (peak <= SILENT) {
       toast(t("This track is silent: nothing to set"), "info");
       return;
     }
-    setTrack(k, { gain: Math.max(-40, Math.min(12, Math.round(TARGET - peak))) });
+    if (apart) setTrack(k, { gainL: l <= SILENT ? 0 : to(l), gainR: r <= SILENT ? 0 : to(r) });
+    else setTrack(k, { gain: to(peak) });
   };
   // What goes out, as heard: the loudest track on, at its level, on the channels chosen; none
   // under the image.
@@ -261,10 +271,11 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
       const tr = trackOf(p, k);
       const lv = levels[k];
       if (!tr.on || !lv?.length) return;
-      // Its left and right (a mono track: the same; more channels: the first two, near enough).
-      const [l, r] = [lv[0], lv[1] ?? lv[0]];
+      // Its left and right as it sends them (a mono track: the same; more channels: the first
+      // two, near enough), on the output's channels.
+      const [l, r] = heard(lv, tr, tr.gain);
       const src = p.channels === "l" ? l : p.channels === "r" ? r : p.channels === "mono" ? Math.max(l, r) - 3 : c === 0 ? l : r;
-      best = Math.max(best, src + tr.gain);
+      best = Math.max(best, src);
     });
     return best <= -90 ? -90 : Math.min(-1, best + p.master);
   });
@@ -272,7 +283,7 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
   let outPeak = -90;
   tracks.forEach((_, k) => {
     const tr = trackOf(p, k);
-    if (tr.on) outPeak = Math.max(outPeak, recent(k, 30) + tr.gain);
+    if (tr.on) outPeak = Math.max(outPeak, ...heard(recent(k, 30), tr, tr.gain));
   });
   outPeak = outPeak <= -90 ? -90 : outPeak + p.master;
   return (
@@ -282,28 +293,56 @@ export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: Prog
           {n === 0 && <span className="muted pg-nosound">{t("No sound")}</span>}
           {tracks.map((lang, k) => {
             const tr = trackOf(p, k);
-            // As it goes into the mix: the source's level with this track's.
-            // Each of its channels (none measured yet: two).
-            const lv = (levels[k]?.length ? levels[k] : [-90, -90]).map((db) => (db <= -90 ? -90 : db + tr.gain));
-            const peak = recent(k, 30) + tr.gain;
+            // As it goes into the mix: the source's level on this track's channels, at its level(s).
+            // Each of its channels (none measured yet: two; more than two, as they are).
+            const route = tr.route ?? "stereo";
+            const apart = !!tr.split && bothHeard(route);
+            const raw = levels[k]?.length ? levels[k] : [-90, -90];
+            const lv = raw.length > 2 && route === "stereo" && !apart ? raw.map((db) => (db <= -90 ? -90 : db + tr.gain)) : heard(raw, tr, tr.gain);
+            const peak = Math.max(...heard(recent(k, 30), tr, tr.gain));
             const solo = monitor.solo === k;
             const label = trackLabel(lang, prog.state?.kinds?.[k]);
             return (
-              <div key={k} className={`pg-strip ${tr.on ? "" : "off"}`} style={lv.length > 2 ? { width: 76 + (lv.length - 2) * 6 } : undefined}>
-                <span className="pg-strip-name" title={[label.full, lv.length > 2 ? tn(lv.length, "{n} channel", "{n} channels") : ""].filter(Boolean).join(" · ")}>
+              <div key={k} className={`pg-strip ${tr.on ? "" : "off"} ${apart ? "split" : ""}`} style={lv.length > 2 ? { width: 76 + (lv.length - 2) * 6 } : undefined}>
+                <span className="pg-strip-name" title={[label.full, raw.length > 2 ? tn(raw.length, "{n} channel", "{n} channels") : ""].filter(Boolean).join(" · ")}>
                   {k + 1}
                   <small>{label.short}</small>
                 </span>
+                <ChannelPick value={{ route, split: apart }} disabled={!run} onChange={(c) => setTrack(k, c)} />
                 {tr.on ? <Verdict peak={peak} /> : <span className="pg-verdict off">{tc("track", "Off")}</span>}
-                <span className="pg-strip-body">
-                  <Fader value={tr.gain} min={-40} max={12} step={1} disabled={!run || !tr.on} label={t("Track {n}", { n: k + 1 })} onChange={(gain) => setTrack(k, { gain })} onReset={() => setTrack(k, { gain: 0 })} />
-                  <Scale marks={GAIN_MARKS} share={gainShare} fader />
-                  <Vu levels={lv} />
-                </span>
-                <b className="pg-db">
-                  {tr.gain > 0 ? "+" : ""}
-                  {tr.gain}
-                </b>
+                {apart ? (
+                  <span className="pg-strip-body">
+                    <Scale marks={GAIN_MARKS} share={gainShare} fader />
+                    {(["gainL", "gainR"] as const).map((g, c) => (
+                      <span key={g} className="pg-split-col">
+                        <Fader value={tr[g] ?? 0} min={-40} max={12} step={1} disabled={!run || !tr.on} label={`${t("Track {n}", { n: k + 1 })} · ${c ? t("R") : t("L")}`} onChange={(v) => setTrack(k, { [g]: v })} onReset={() => setTrack(k, { [g]: 0 })} />
+                        <i>{c ? t("R") : t("L")}</i>
+                      </span>
+                    ))}
+                    <Vu levels={lv} />
+                  </span>
+                ) : (
+                  <span className="pg-strip-body">
+                    <Fader value={tr.gain} min={-40} max={12} step={1} disabled={!run || !tr.on} label={t("Track {n}", { n: k + 1 })} onChange={(gain) => setTrack(k, { gain })} onReset={() => setTrack(k, { gain: 0 })} />
+                    <Scale marks={GAIN_MARKS} share={gainShare} fader />
+                    <Vu levels={lv} />
+                  </span>
+                )}
+                {apart ? (
+                  <b className="pg-db two">
+                    {(["gainL", "gainR"] as const).map((g, c) => (
+                      <span key={g}>
+                        <i>{c ? t("R") : t("L")}</i> {(tr[g] ?? 0) > 0 ? "+" : ""}
+                        {tr[g] ?? 0}
+                      </span>
+                    ))}
+                  </b>
+                ) : (
+                  <b className="pg-db">
+                    {tr.gain > 0 ? "+" : ""}
+                    {tr.gain}
+                  </b>
+                )}
                 <span className="pg-strip-tools">
                   <button type="button" className={`pg-tool ${solo ? "on" : ""}`} aria-pressed={solo} data-tip={solo ? t("Back to the output in the headphones") : t("Hear alone in the headphones")} onClick={() => monitor.setSolo(solo ? null : k)}>
                     <Headphones size={12} />

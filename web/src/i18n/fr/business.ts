@@ -519,7 +519,6 @@ export const business: Record<string, string> = {
   'Plays everywhere': 'Lu partout',
   'Not compressed, for editing': 'Non compressé, pour le montage',
   Level: 'Niveau',
-  'Sound level of the clip': 'Niveau général de l’extrait',
   'High quality': 'Haute qualité',
   'Lossless': 'Sans perte',
   'This clip may not fit': 'Cet extrait risque de ne pas tenir',

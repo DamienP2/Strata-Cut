@@ -2,14 +2,55 @@
 // measure it (VU-meters, before the volume), set its volume, and play short
 // grains when the playhead moves by hand (scrubbing).
 
+/** Two channels to two (factors: left from left, left from right, right from left, right from right). */
+export type Matrix = [number, number, number, number];
+const asMatrix = (m: number | Matrix): Matrix => (typeof m === 'number' ? [m, 0, 0, m] : m);
+
+/** A sound's two channels (a mono one: on both) to the two out, each at its factor. */
+class Router {
+  readonly input: GainNode;
+  readonly output: ChannelMergerNode;
+  private readonly gains: GainNode[];
+  constructor(
+    private readonly ctx: AudioContext,
+    m: Matrix,
+  ) {
+    this.input = ctx.createGain();
+    this.input.channelCount = 2;
+    this.input.channelCountMode = 'explicit';
+    this.input.channelInterpretation = 'speakers';
+    const split = ctx.createChannelSplitter(2);
+    this.output = ctx.createChannelMerger(2);
+    this.input.connect(split);
+    this.gains = m.map((v) => {
+      const g = ctx.createGain();
+      g.gain.value = v;
+      return g;
+    });
+    split.connect(this.gains[0], 0).connect(this.output, 0, 0);
+    split.connect(this.gains[1], 1).connect(this.output, 0, 0);
+    split.connect(this.gains[2], 0).connect(this.output, 0, 1);
+    split.connect(this.gains[3], 1).connect(this.output, 0, 1);
+  }
+
+  set(m: Matrix) {
+    this.gains.forEach((g, i) => g.gain.setTargetAtTime(m[i], this.ctx.currentTime, 0.015));
+  }
+
+  disconnect() {
+    this.input.disconnect();
+    this.output.disconnect();
+  }
+}
+
 export class AudioOut {
   readonly ctx: AudioContext;
   /** Everything heard goes here first (measured), then through the volume. */
   private readonly bus: GainNode;
-  /** The element's own sound, at its track's level (the Streamer's faders). */
-  private readonly main: GainNode;
-  /** Other sound tracks heard with it (the Streamer's tracks on), each at its level. */
-  private readonly others = new Map<HTMLMediaElement, { src: MediaElementAudioSourceNode; gain: GainNode }>();
+  /** The element's own sound, on its channels at its level (the Streamer's tracks, the Cut's level). */
+  private readonly main: Router;
+  /** Other sound tracks heard with it (the Streamer's tracks on), each on its channels at its level. */
+  private readonly others = new Map<HTMLMediaElement, { src: MediaElementAudioSourceNode; route: Router }>();
   private readonly volume: GainNode;
   /** The Streamer's programme as heard: its level (with the image's fade) and its channels. */
   private readonly program: GainNode;
@@ -24,7 +65,7 @@ export class AudioOut {
   constructor(media: HTMLMediaElement, gain = 1) {
     this.ctx = new AudioContext();
     this.bus = this.ctx.createGain();
-    this.main = this.ctx.createGain();
+    this.main = new Router(this.ctx, [1, 0, 0, 1]);
     this.volume = this.ctx.createGain();
     this.volume.gain.value = gain;
     const split = this.ctx.createChannelSplitter(2);
@@ -34,7 +75,8 @@ export class AudioOut {
       return a;
     });
     this.data = new Float32Array(2048);
-    this.ctx.createMediaElementSource(media).connect(this.main).connect(this.bus);
+    this.ctx.createMediaElementSource(media).connect(this.main.input);
+    this.main.output.connect(this.bus);
     this.bus.connect(split);
     split.connect(this.meters[0], 0);
     split.connect(this.meters[1], 1);
@@ -53,30 +95,30 @@ export class AudioOut {
     merge.connect(this.volume).connect(this.ctx.destination);
   }
 
-  /** The level of the element's own sound (a factor). */
-  setMain(gain: number) {
-    this.main.gain.setTargetAtTime(gain, this.ctx.currentTime, 0.015);
+  /** The element's own sound: its level (a factor), or its channels each at its factor. */
+  setMain(m: number | Matrix) {
+    this.main.set(asMatrix(m));
   }
 
-  /** The other tracks heard with it, each at its level (a factor): those not given are left. */
-  setOthers(levels: Map<HTMLMediaElement, number>) {
+  /** The other tracks heard with it, each at its level or on its channels: those not given are left. */
+  setOthers(levels: Map<HTMLMediaElement, number | Matrix>) {
     for (const [el, o] of this.others) {
       if (levels.has(el)) continue;
-      o.gain.disconnect();
+      o.route.disconnect();
       o.src.disconnect();
       this.others.delete(el);
     }
-    for (const [el, gain] of levels) {
+    for (const [el, m] of levels) {
       let o = this.others.get(el);
       if (!o) {
         const src = this.ctx.createMediaElementSource(el);
-        const g = this.ctx.createGain();
-        g.gain.value = gain;
-        src.connect(g).connect(this.bus);
-        o = { src, gain: g };
+        const route = new Router(this.ctx, asMatrix(m));
+        src.connect(route.input);
+        route.output.connect(this.bus);
+        o = { src, route };
         this.others.set(el, o);
       }
-      o.gain.gain.setTargetAtTime(gain, this.ctx.currentTime, 0.015);
+      o.route.set(asMatrix(m));
     }
   }
 

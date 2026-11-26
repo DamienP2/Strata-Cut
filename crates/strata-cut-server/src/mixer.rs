@@ -421,7 +421,8 @@ impl Mixer {
 /// image).
 #[derive(Clone, Copy)]
 struct Levels {
-    tracks: [f32; TRACKS],
+    /// Each track's channels to the two out (`program::matrix`).
+    tracks: [[f32; 4]; TRACKS],
     master: f32,
     under: f32,
 }
@@ -429,10 +430,12 @@ struct Levels {
 impl Levels {
     fn of(p: &Program) -> Levels {
         let db = |v: f64| 10f64.powf(v / 20.0) as f32;
-        let mut tracks = [0f32; TRACKS];
+        let mut tracks = [[0f32; 4]; TRACKS];
         for (k, g) in tracks.iter_mut().enumerate() {
             let t = p.track(k);
-            *g = if t.on { db(t.gain) } else { 0.0 };
+            if t.on {
+                *g = t.matrix().map(|x| x as f32);
+            }
         }
         Levels { tracks, master: db(p.master), under: 1.0 }
     }
@@ -449,8 +452,8 @@ impl Default for Limiter {
     }
 }
 
-/// A frame's sound (interleaved stereo): the tracks at their level (from `a`'s to `b`'s over the
-/// frame: no click), on the channels chosen, the master, the programme's level, then never above
+/// A frame's sound (interleaved stereo): the tracks at their level and on their channels (from
+/// `a`'s to `b`'s over the frame: no click), on the output's channels, the master, the programme's level, then never above
 /// -1 dBFS (down at once, back up in 50 ms).
 fn mix(sound: &[Vec<f32>], a: &Levels, b: &Levels, channels: &str, lim: &mut Limiter) -> Vec<f32> {
     let len = sound.first().map_or(0, Vec::len);
@@ -458,13 +461,15 @@ fn mix(sound: &[Vec<f32>], a: &Levels, b: &Levels, channels: &str, lim: &mut Lim
     let mut out = vec![0f32; len];
     for (k, s) in sound.iter().enumerate() {
         let (g0, g1) = (a.tracks[k], b.tracks[k]);
-        if g0 == 0.0 && g1 == 0.0 {
+        if g0.iter().chain(&g1).all(|g| *g == 0.0) {
             continue;
         }
         for i in 0..n {
-            let g = g0 + (g1 - g0) * (i as f32 / n as f32);
-            out[2 * i] += s[2 * i] * g;
-            out[2 * i + 1] += s[2 * i + 1] * g;
+            let x = i as f32 / n as f32;
+            let g: [f32; 4] = std::array::from_fn(|j| g0[j] + (g1[j] - g0[j]) * x);
+            let (l, r) = (s[2 * i], s[2 * i + 1]);
+            out[2 * i] += l * g[0] + r * g[1];
+            out[2 * i + 1] += l * g[2] + r * g[3];
         }
     }
     let release = 1.0 - (-1.0f32 / (0.05 * RATE as f32)).exp();
@@ -729,20 +734,45 @@ mod tests {
         sound[0] = vec![0.5; n * 2];
         sound[1] = vec![0.8; n * 2];
         let mut lim = Limiter::default();
-        let mut lv = Levels { tracks: [0.0; TRACKS], master: 1.0, under: 1.0 };
-        lv.tracks[0] = 1.0;
+        let mut lv = Levels { tracks: [[0.0; 4]; TRACKS], master: 1.0, under: 1.0 };
+        lv.tracks[0] = [1.0, 0.0, 0.0, 1.0];
         let out = mix(&sound, &lv, &lv, "lr", &mut lim);
         assert!(out.iter().all(|x| (x - 0.5).abs() < 1e-6));
         // Both on, +6 dB: limited to -1 dBFS.
-        lv.tracks = [0.0; TRACKS];
-        lv.tracks[0] = 2.0;
-        lv.tracks[1] = 1.0;
+        lv.tracks = [[0.0; 4]; TRACKS];
+        lv.tracks[0] = [2.0, 0.0, 0.0, 2.0];
+        lv.tracks[1] = [1.0, 0.0, 0.0, 1.0];
         let out = mix(&sound, &lv, &lv, "lr", &mut lim);
         assert!(out.iter().all(|x| *x <= LIMIT + 1e-6));
         // Under the image: none.
         let under = Levels { under: 0.0, ..lv };
         let out = mix(&sound, &under, &under, "lr", &mut lim);
         assert!(out.iter().all(|x| *x == 0.0));
+    }
+
+    #[test]
+    fn a_track_on_its_channels() {
+        use crate::program::{Route, Track};
+        let n = 4;
+        let mut sound = vec![vec![0f32; n * 2]; TRACKS];
+        // Left 0.4, right 0.2.
+        sound[0] = (0..n * 2).map(|i| if i % 2 == 0 { 0.4 } else { 0.2 }).collect();
+        let at = |t: Track| {
+            let mut lv = Levels { tracks: [[0.0; 4]; TRACKS], master: 1.0, under: 1.0 };
+            lv.tracks[0] = t.matrix().map(|x| x as f32);
+            let out = mix(&sound, &lv, &lv, "lr", &mut Limiter::default());
+            (out[0], out[1])
+        };
+        let near = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 1e-4 && (a.1 - b.1).abs() < 1e-4;
+        assert!(near(at(Track::default()), (0.4, 0.2)));
+        assert!(near(at(Track { route: Route::Left, ..Default::default() }), (0.4, 0.4)));
+        assert!(near(at(Track { route: Route::Right, ..Default::default() }), (0.2, 0.2)));
+        assert!(near(at(Track { route: Route::Mono, ..Default::default() }), (0.3, 0.3)));
+        // Each its own level: the right raised by 6 dB.
+        let r6 = 10f32.powf(6.0 / 20.0);
+        assert!(near(at(Track { split: true, gain_r: 6.0, ..Default::default() }), (0.4, 0.2 * r6)));
+        // One channel heard: its levels apart are not used.
+        assert!(near(at(Track { route: Route::Left, split: true, gain_l: -40.0, ..Default::default() }), (0.4, 0.4)));
     }
 
     #[test]

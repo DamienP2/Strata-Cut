@@ -1,7 +1,8 @@
 /*
- * Extraction: the sound's level (heard, and in the clip). A button in the transport (a small
- * meter, the level) opens it: how the level is (as in the Streamer), the meters, the fader, and
- * the wand that sets it by itself.
+ * Cut: the sound's channels and level (heard, and in the clip). A button in the transport (a
+ * small meter, the level) opens it: how the level is (as in the Streamer), the channels, the
+ * meters, the fader (one each for the left and the right when apart), and the wand that sets it
+ * by itself.
  */
 import { useEffect, useRef, useState } from 'react';
 import { Wand2 } from 'lucide-react';
@@ -9,6 +10,7 @@ import type { AudioOut } from '../audio';
 import { locale, t } from '../i18n';
 import { useApp } from '../store';
 import { SILENT, TARGET, Verdict } from './Verdict';
+import { bothHeard, ChannelPick, heard, routeShort, type Channels } from './Channels';
 
 export const LEVEL_MIN = -20;
 export const LEVEL_MAX = 12;
@@ -61,13 +63,16 @@ function useBars(out: AudioOut | null, bars: React.RefObject<(HTMLElement | null
 }
 
 /**
- * `measure`: the loudest peak of the part marked (before the level), dB; null: none to measure.
- * Asked again as `measureKey` changes, while open.
+ * `measure`: the loudest peaks of the part marked, of its left and of its right (before the
+ * level), dB; null: none to measure. Asked again as `measureKey` changes, while open.
  */
-export function ClipLevel({ out, gain, onGain, measure, measureKey }: { out: AudioOut | null; gain: number; onGain: (g: number) => void; measure: () => Promise<number | null>; measureKey: string }) {
+export function ClipLevel({ out, gain, onGain, channels, onChannels, measure, measureKey }: { out: AudioOut | null; gain: number; onGain: (g: number) => void; channels: Channels; onChannels: (c: Partial<Channels>) => void; measure: () => Promise<[number, number] | null>; measureKey: string }) {
   const toast = useApp((s) => s.toast);
   const [open, setOpen] = useState(false);
-  const [peak, setPeak] = useState<number | null>(null);
+  const [peaks, setPeaks] = useState<[number, number] | null>(null);
+  const apart = channels.split && bothHeard(channels.route);
+  // As the clip will be: on its channels, at its level(s).
+  const peak = peaks && Math.max(...heard(peaks, channels, gain));
   const [busy, setBusy] = useState(false);
   // Opened above the button, toward where there is room.
   const [side, setSide] = useState<'left' | 'right'>('right');
@@ -82,7 +87,7 @@ export function ClipLevel({ out, gain, onGain, measure, measureKey }: { out: Aud
   useEffect(() => {
     if (!open) return;
     let dead = false;
-    void measured.current().then((p) => !dead && setPeak(p), () => !dead && setPeak(null));
+    void measured.current().then((p) => !dead && setPeaks(p), () => !dead && setPeaks(null));
     return () => {
       dead = true;
     };
@@ -90,7 +95,8 @@ export function ClipLevel({ out, gain, onGain, measure, measureKey }: { out: Aud
   // Closed by a click elsewhere or Escape.
   useEffect(() => {
     if (!open) return;
-    const away = (e: PointerEvent) => !wrap.current?.contains(e.target as Node) && setOpen(false);
+    // (Its channels' menu stands apart, over it.)
+    const away = (e: PointerEvent) => !wrap.current?.contains(e.target as Node) && !(e.target as Element).closest?.('.ch-menu') && setOpen(false);
     const key = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
@@ -103,18 +109,22 @@ export function ClipLevel({ out, gain, onGain, measure, measureKey }: { out: Aud
       document.removeEventListener('keydown', key, true);
     };
   }, [open]);
-  const set = (g: number) => onGain(Math.max(LEVEL_MIN, Math.min(LEVEL_MAX, Math.round(g * 2) / 2)));
-  // The wand: the part's peaks brought to the target.
+  const fit = (g: number) => Math.max(LEVEL_MIN, Math.min(LEVEL_MAX, Math.round(g * 2) / 2));
+  const set = (g: number) => onGain(fit(g));
+  // The wand: the part's peaks brought to the target (each channel apart: each).
   const wand = async () => {
     setBusy(true);
     try {
       const p = await measure();
-      setPeak(p);
-      if (p === null || p <= SILENT) {
+      setPeaks(p);
+      const [l, r] = p ?? [-90, -90];
+      const top = channels.route === 'left' ? l : channels.route === 'right' ? r : Math.max(l, r);
+      if (top <= SILENT) {
         toast(t('This track is silent: nothing to set'), 'info');
         return;
       }
-      set(TARGET - p);
+      if (apart) onChannels({ gainL: l <= SILENT ? 0 : fit(TARGET - l), gainR: r <= SILENT ? 0 : fit(TARGET - r) });
+      else set(TARGET - top);
     } catch {
       toast(t('This track is silent: nothing to set'), 'info');
     } finally {
@@ -123,7 +133,7 @@ export function ClipLevel({ out, gain, onGain, measure, measureKey }: { out: Aud
   };
   return (
     <div className="xl-wrap" ref={wrap}>
-      <button type="button" className={`xl-btn ${gain !== 0 ? 'mod' : ''} ${open ? 'open' : ''}`} aria-expanded={open} data-tip={open ? undefined : t('Sound level of the clip')} onClick={() => {
+      <button type="button" className={`xl-btn ${gain !== 0 || apart || channels.route !== 'stereo' ? 'mod' : ''} ${open ? 'open' : ''}`} aria-expanded={open} data-tip={open ? undefined : t('Sound of the clip')} onClick={() => {
           // Toward the right edge of the button unless it would leave the centre column.
           const r = wrap.current?.getBoundingClientRect();
           const col = wrap.current?.closest('.sc-center')?.getBoundingClientRect();
@@ -137,20 +147,24 @@ export function ClipLevel({ out, gain, onGain, measure, measureKey }: { out: Aud
             </span>
           ))}
         </span>
-        <span className="xl-label">{t('Level')}</span> <b>{dbText(gain)}</b>
+        <span className="xl-label">{t('Level')}</span> <b>{apart ? t('L | R') : dbText(gain)}</b>
+        {channels.route !== 'stereo' && <small className="xl-route">{routeShort(channels.route, false)}</small>}
       </button>
       {open && (
-        <div className={`xl-pop ${side}`} role="dialog" aria-label={t('Sound level of the clip')} onKeyDown={(e) => e.key !== 'Escape' && e.stopPropagation()}>
+        <div className={`xl-pop ${side}`} role="dialog" aria-label={t('Sound of the clip')} onKeyDown={(e) => e.key !== 'Escape' && e.stopPropagation()}>
           <div className="xl-head">
-            <span>{t('Sound level of the clip')}</span>
-            {peak !== null && <Verdict peak={peak + gain} />}
+            <span>{t('Sound of the clip')}</span>
+            {peak !== null && <Verdict peak={peak} />}
             <span className="spacer" />
-            <button type="button" className="xl-zero" disabled={gain === 0} onClick={() => set(0)}>
+            <button type="button" className="xl-zero" disabled={apart ? channels.gainL === 0 && channels.gainR === 0 : gain === 0} onClick={() => (apart ? onChannels({ gainL: 0, gainR: 0 }) : set(0))}>
               0 dB
             </button>
           </div>
+          <div className="xl-ch">
+            <ChannelPick wide value={{ route: channels.route, split: apart }} onChange={onChannels} />
+          </div>
           <div className="xl-meters" aria-hidden="true">
-            {['L', 'R'].map((c, ch) => (
+            {[t('L'), t('R')].map((c, ch) => (
               <div key={c} className="xl-row">
                 <span>{c}</span>
                 <span className="xl-bar">
@@ -167,14 +181,33 @@ export function ClipLevel({ out, gain, onGain, measure, measureKey }: { out: Aud
               ))}
             </div>
           </div>
-          <div className="xl-fader">
-            <span>{LEVEL_MIN}</span>
-            <input type="range" min={LEVEL_MIN} max={LEVEL_MAX} step={0.5} value={gain} aria-label={t('Level')} onChange={(e) => set(Number(e.target.value))} onDoubleClick={() => set(0)} />
-            <span>+{LEVEL_MAX}</span>
-            <button type="button" className="pg-tool" disabled={busy} data-tip={t('Set the level by itself')} aria-label={t('Set the level by itself')} onClick={() => void wand()}>
-              <Wand2 size={12} />
-            </button>
-          </div>
+          {apart ? (
+            <>
+              {(['gainL', 'gainR'] as const).map((g, c) => (
+                <div key={g} className="xl-fader apart">
+                  <span className="xl-who">{c ? t('R') : t('L')}</span>
+                  <span>{LEVEL_MIN}</span>
+                  <input type="range" min={LEVEL_MIN} max={LEVEL_MAX} step={0.5} value={channels[g]} aria-label={`${t('Level')} · ${c ? t('R') : t('L')}`} onChange={(e) => onChannels({ [g]: fit(Number(e.target.value)) })} onDoubleClick={() => onChannels({ [g]: 0 })} />
+                  <span>+{LEVEL_MAX}</span>
+                  <b>{dbText(channels[g])}</b>
+                </div>
+              ))}
+              <div className="xl-fader end">
+                <button type="button" className="pg-tool" disabled={busy} data-tip={t('Set the level by itself')} aria-label={t('Set the level by itself')} onClick={() => void wand()}>
+                  <Wand2 size={12} />
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="xl-fader">
+              <span>{LEVEL_MIN}</span>
+              <input type="range" min={LEVEL_MIN} max={LEVEL_MAX} step={0.5} value={gain} aria-label={t('Level')} onChange={(e) => set(Number(e.target.value))} onDoubleClick={() => set(0)} />
+              <span>+{LEVEL_MAX}</span>
+              <button type="button" className="pg-tool" disabled={busy} data-tip={t('Set the level by itself')} aria-label={t('Set the level by itself')} onClick={() => void wand()}>
+                <Wand2 size={12} />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

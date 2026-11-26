@@ -320,4 +320,18 @@ export const streaming: Record<string, string> = {
   'Streamer only': 'Streamer seulement',
   'Select every clip': 'Tout sélectionner',
   'a test pattern is not recorded: it is made live in the Streamer': 'Une mire n’est pas enregistrée\u00a0: elle est générée en direct dans le Streamer.',
+  // A track's channels (Streamer, Cut).
+  Stereo: 'Stéréo',
+  'Mono left': 'Mono gauche',
+  'Mono right': 'Mono droite',
+  'Mono left + right': 'Mono gauche + droite',
+  'L · R': 'G · D',
+  'L | R': 'G | D',
+  'MONO L': 'MONO G',
+  'MONO R': 'MONO D',
+  'MONO L+R': 'MONO G+D',
+  'Sound of the clip': 'Son de l’extrait',
+  'Set L and R apart': 'Régler G et D séparément',
+  L: 'G',
+  R: 'D',
 };

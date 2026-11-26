@@ -18,6 +18,7 @@ import { LoopPlayer } from '../player';
 import { fpsOf, timecode } from '../tc';
 import { Empty } from '../ui/Empty';
 import { useAudioOut } from '../ui/AudioUi';
+import { matrix } from '../ui/Channels';
 import { clockOf, mbps, useDestinations, useStreams, volume, type Destination, type StreamInfo } from '../streams';
 import { encodingOf, ProtoTag, Spark } from '../settings/Destinations';
 import type { Recorder } from '../types';
@@ -179,15 +180,17 @@ function Center({ rec }: { rec: Recorder }) {
   useEffect(() => {
     player.current?.setOtherTracks(others);
   }, [others.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
-  const gainOf = (k: number) => pg?.tracks[k]?.gain ?? 0;
+  // Each track on its channels, at its fader(s).
+  const routeOf = (k: number) => matrix(pg?.tracks[k] ?? {}, pg?.tracks[k]?.gain ?? 0);
   const factor = (db: number) => 10 ** (db / 20);
-  // Each track at its fader; the output's level after (none under the image).
+  // The output's level after (none under the image).
   const level = !pg || solo !== null ? 1 : pg.imageOn || firstOn === undefined ? 0 : factor(pg.master);
-  const mainGain = pg ? factor(gainOf(heard)) : 1;
-  useEffect(() => audio.out?.setMain(mainGain), [audio.out, mainGain]);
-  const othersKey = others.map((k) => `${k}:${gainOf(k)}`).join(',');
+  const main = routeOf(heard);
+  const mainKey = main.join(',');
+  useEffect(() => audio.out?.setMain(main), [audio.out, mainKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const othersKey = others.map((k) => `${k}:${routeOf(k).join(',')}`).join('|');
   useEffect(() => {
-    audio.out?.setOthers(new Map([...followers].filter(([k]) => others.includes(k)).map(([k, el]) => [el, factor(gainOf(k))])));
+    audio.out?.setOthers(new Map([...followers].filter(([k]) => others.includes(k)).map(([k, el]) => [el, routeOf(k)])));
   }, [audio.out, followers, othersKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // The image coming or going: the sound fades as the picture does; a fader: at once.
   const imageWas = useRef(pg?.imageOn);

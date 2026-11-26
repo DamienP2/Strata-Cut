@@ -40,6 +40,39 @@ use crate::{
     state::{Audience, Events, Shared},
 };
 
+/// Where a sound track's two channels go: as they are, the left or the right on both, or both
+/// mixed on both.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Route {
+    #[default]
+    Stereo,
+    Left,
+    Right,
+    Mono,
+}
+
+impl Route {
+    /// Both channels heard (each may then have its own level).
+    pub fn both(self) -> bool {
+        matches!(self, Route::Stereo | Route::Mono)
+    }
+}
+
+/// A track's two channels to the two out (factors: left from left, left from right, right from
+/// left, right from right). `split`: each channel at its own level (`left`, `right`, dB), else
+/// both at `gain` (dB).
+pub fn matrix(route: Route, split: bool, gain: f64, left: f64, right: f64) -> [f64; 4] {
+    let db = |v: f64| 10f64.powf(v / 20.0);
+    let (l, r) = if split && route.both() { (db(left), db(right)) } else { (db(gain), db(gain)) };
+    match route {
+        Route::Stereo => [l, 0.0, 0.0, r],
+        Route::Left => [l, 0.0, l, 0.0],
+        Route::Right => [0.0, r, 0.0, r],
+        Route::Mono => [l * 0.5, r * 0.5, l * 0.5, r * 0.5],
+    }
+}
+
 /// A sound track of the source in the programme.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
@@ -47,11 +80,23 @@ pub struct Track {
     pub on: bool,
     /// dB.
     pub gain: f64,
+    /// Its channels.
+    pub route: Route,
+    /// Its left and right each at its own level (dB).
+    pub split: bool,
+    pub gain_l: f64,
+    pub gain_r: f64,
 }
 
 impl Default for Track {
     fn default() -> Self {
-        Track { on: true, gain: 0.0 }
+        Track { on: true, gain: 0.0, route: Route::Stereo, split: false, gain_l: 0.0, gain_r: 0.0 }
+    }
+}
+
+impl Track {
+    pub fn matrix(&self) -> [f64; 4] {
+        matrix(self.route, self.split, self.gain, self.gain_l, self.gain_r)
     }
 }
 
@@ -110,7 +155,7 @@ impl Program {
             return Err("the channels are lr, l, r or mono".into());
         }
         let ok = |v: f64| v.is_finite();
-        if ![self.x, self.y, self.size, self.opacity, self.master, self.fade_secs, self.overlay_fade_secs].into_iter().all(ok) || self.tracks.iter().any(|t| !ok(t.gain)) {
+        if ![self.x, self.y, self.size, self.opacity, self.master, self.fade_secs, self.overlay_fade_secs].into_iter().all(ok) || self.tracks.iter().any(|t| ![t.gain, t.gain_l, t.gain_r].into_iter().all(ok)) {
             return Err("a value is not a number".into());
         }
         self.master = self.master.clamp(-40.0, 12.0);
@@ -123,12 +168,16 @@ impl Program {
         self.tracks.truncate(8);
         for t in &mut self.tracks {
             t.gain = t.gain.clamp(-40.0, 12.0);
+            t.gain_l = t.gain_l.clamp(-40.0, 12.0);
+            t.gain_r = t.gain_r.clamp(-40.0, 12.0);
+            // One channel heard: one level.
+            t.split &= t.route.both();
         }
         Ok(())
     }
 
     pub(crate) fn track(&self, k: usize) -> Track {
-        self.tracks.get(k).cloned().unwrap_or(Track { on: k == 0, gain: 0.0 })
+        self.tracks.get(k).cloned().unwrap_or(Track { on: k == 0, ..Default::default() })
     }
 
     /// The overlay's opacity on air (0 when it is not).
