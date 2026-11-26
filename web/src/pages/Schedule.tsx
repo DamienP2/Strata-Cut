@@ -441,7 +441,6 @@ function SourceHead({ rec, canRec, mayStop }: { rec: Recorder; canRec: boolean; 
           </span>
         )}
       </div>
-      <span className="sc-cal-info">
       <span className="sc-cal-info-name">
         <RecLogo rec={rec} size="sm" />
         <b title={rec.name}>{rec.name}</b>
@@ -458,7 +457,6 @@ function SourceHead({ rec, canRec, mayStop }: { rec: Recorder; canRec: boolean; 
           </button>
         </span>
       )}
-      </span>
     </div>
   );
 }

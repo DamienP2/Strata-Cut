@@ -1203,7 +1203,7 @@ a.btn { color: inherit; }
    programmed recordings are drawn over what was recorded (the programme guide above it). */
 .sc-plan-main { padding-top: 16px; gap: 12px; }
 .sc-cal-title { font-size: 18px; margin: 0 8px 0 2px; }
-.sc-plan .sc-cal-row { grid-template-columns: 270px 1fr; min-height: 54px; }
+.sc-plan .sc-cal-row { grid-template-columns: 340px 1fr; min-height: 54px; }
 .sc-cal-src { gap: 10px; padding: 6px 10px; }
 .sc-cal-pic { width: 64px; border-radius: 4px; }
 .sc-cal-pic .sc-onpic { height: 13px; font-size: 8px; padding: 0 4px; top: 3px; left: 3px; gap: 3px; }
@@ -1216,8 +1216,6 @@ a.btn { color: inherit; }
 /* Régie: REC (all the time) or Stop, compact, at the end of the source's head. */
 .sc-cal-src .sc-cal-info-name { flex: 1; }
 /* REC | OFF: the state lit; the other half switches. */
-.sc-cal-info { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
-.sc-cal-info .sc-cal-info-name { max-width: 100%; }
 .sc-recseg { flex: none; display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel); }
 .sc-recseg button { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--text-3); font: 700 10.5px Inter, system-ui, sans-serif; letter-spacing: 0.04em; cursor: pointer; }
 .sc-recseg button.on { cursor: default; }
