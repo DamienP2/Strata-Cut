@@ -576,6 +576,7 @@ export const business: Record<string, string> = {
   '10 min': '10 min',
   core: 'cœur',
   '{p} of the server': '{p} du serveur',
+  Normal: 'Normal',
   'Stopped, but still working': 'Arrêtée, mais tourne encore',
   'Being cut': 'Extraction en cours',
   'Damaged {n} time · 10 min': 'Abîmée {n} fois · 10 min',
