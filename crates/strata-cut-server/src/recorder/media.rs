@@ -729,13 +729,18 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
     let clips_of = s.clips.by_recorder();
     let v = tokio::task::spawn_blocking(move || {
         let rec_dir = m.recordings_dir();
+        let mut programmed = (0u64, 0usize);
         let recorders: Vec<Value> = m
             .recs()
             .iter()
             .map(|r| {
                 let st = r.status.lock().unwrap().clone();
                 let c = r.config();
+                let held = m.programmed_held(r);
+                programmed = (programmed.0 + held.0, programmed.1 + held.1);
                 json!({
+                    // What its programmed slots recorded, kept longer than its loop.
+                    "programmedBytes": held.0, "programmed": held.1,
                     "id": r.id, "name": c.name, "enabled": c.enabled, "loopHours": c.loop_hours,
                     "expected": c.bitrate, "bitrate": st.bitrate, "bytes": st.bytes,
                     "need": m.need_of(&c, st.measured), "oldest": st.oldest, "newest": st.newest,
@@ -751,6 +756,7 @@ async fn storage(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiRe
         let orphans: (u64, u64) = clips_of.iter().filter(|(id, _)| !known.contains(*id)).fold((0, 0), |a, (_, c)| (a.0 + c.0, a.1 + c.1));
         json!({
             "recordings": {"dir": rec_dir, "disk": disk(&rec_dir), "bytes": m.loops_bytes()},
+            "programmed": {"bytes": programmed.0, "count": programmed.1},
             "clips": {"dir": clips_dir, "disk": disk(&clips_dir), "bytes": clips_bytes, "sameDisk": super::same_disk(&rec_dir, &clips_dir), "count": clips_of.values().map(|c| c.0).sum::<u64>(), "orphans": orphans.0, "orphanBytes": orphans.1},
             "capacity": m.loops_capacity(),
             "reserved": m.reserved(),

@@ -33,6 +33,10 @@ pub struct ServerConfig {
     /// Clips older than this many days (since made) are deleted (0 = kept until deleted by hand).
     #[serde(default)]
     pub clips_keep_days: u32,
+    /// What a programmed slot recorded stays this many days after it (0 = until the loop is
+    /// emptied by hand), longer than the loop around it.
+    #[serde(default = "default_programmed_keep")]
+    pub programmed_keep_days: u32,
     /// Space always left free on the disks, % (the oldest recordings go first).
     #[serde(default = "default_keep_free")]
     pub keep_free_percent: u32,
@@ -103,6 +107,9 @@ pub struct Security {
 fn default_keep_free() -> u32 {
     5
 }
+fn default_programmed_keep() -> u32 {
+    30
+}
 fn default_name() -> String {
     BRAND.into()
 }
@@ -162,6 +169,7 @@ impl ServerConfig {
         self.keep_free_percent = self.keep_free_percent.clamp(1, 50);
         self.alerts.normalize();
         self.clips_keep_days = self.clips_keep_days.min(3650);
+        self.programmed_keep_days = self.programmed_keep_days.min(3650);
         let mut ntp: Vec<String> = Vec::new();
         for s in self.ntp.iter().flat_map(|s| s.split([' ', ',', ';'])).map(str::trim).filter(|s| !s.is_empty()) {
             if !ntp.iter().any(|x| x.eq_ignore_ascii_case(s)) {

@@ -869,6 +869,7 @@ a.btn { color: inherit; }
 .sc-st-bar > span:first-child { border-radius: 5px 0 0 5px; }
 .sc-st-bar .loops, .sc-st-legend .loops, .sc-st-k .loops, .sc-st-minibar .loops { background: var(--accent); }
 .sc-st-bar .clips, .sc-st-legend .clips, .sc-st-k .clips, .sc-st-minibar .clips { background: var(--key); }
+.sc-st-bar .prog, .sc-st-legend .prog, .sc-st-k .prog, .sc-st-minibar .prog { background: #b48cff; }
 .sc-st-legend .free { background: var(--panel-3); border: 1px solid var(--line-2); }
 .sc-st-mark { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--text); border-radius: 1px; box-shadow: 0 0 0 1px var(--panel); }
 .sc-st-legend .mark { width: 2px; height: 12px; background: var(--text); border-radius: 1px; }

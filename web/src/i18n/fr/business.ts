@@ -529,4 +529,10 @@ export const business: Record<string, string> = {
   'cal|Continuous': 'En continu',
   'on now': 'en cours',
   over: 'terminé',
+  // Programmed recordings kept longer than the loop (Système › Stockage).
+  'Programmed recordings': 'Enregistrements programmés',
+  '{n} programmed recording': '{n} enregistrement',
+  '{n} programmed recordings': '{n} enregistrements',
+  'Keep the programmed recordings': 'Conserver les enregistrements programmés',
+  'What a programmed recording recorded stays in the Cut’s timeline this long after it, even once the loop has gone past it. “Always”: until the loop is emptied by hand.': 'Ce qu’un enregistrement programmé a enregistré reste dans la timeline de Cut pendant ce temps après lui, même quand la boucle l’a dépassé. «\u00a0Toujours\u00a0»\u00a0: jusqu’à ce que la boucle soit vidée à la main.',
 };

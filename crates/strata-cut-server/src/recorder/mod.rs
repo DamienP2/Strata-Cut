@@ -692,6 +692,43 @@ pub struct Pin {
     pub from: f64,
 }
 
+/// The segment meets one of the spans (server times, ms).
+fn kept_in(spans: &[(f64, f64)], s: &index::Seg) -> bool {
+    spans.iter().any(|&(a, b)| s.wall0 < b && s.wall1() > a)
+}
+
+/// Removes a run's proxy fragments (and their waves) that no longer meet any of its original
+/// segments (a live run keeps those past its last one: its live edge). The bytes freed.
+fn prune_proxies(run: &mut Run, doomed: &mut Vec<PathBuf>) -> u64 {
+    let spans: Vec<(f64, f64)> = run.master.iter().map(|s| (s.t0, s.t1)).collect();
+    // A live run: those ahead of its last segment stay (all, none yet: its next one coming).
+    let end = spans.last().map_or(f64::NEG_INFINITY, |s| s.1);
+    let meets = |t0: f64, t1: f64| {
+        let i = spans.partition_point(|s| s.1 <= t0);
+        i < spans.len() && spans[i].0 < t1
+    };
+    let mut freed = 0;
+    for video in [true, false] {
+        let segs = std::mem::take(&mut run.track_mut(video).segs);
+        let n = segs.len();
+        for (i, p) in segs.into_iter().enumerate() {
+            if (run.live && (p.t1 > end || i + 1 == n)) || meets(p.t0, p.t1) {
+                run.track_mut(video).segs.push_back(p);
+                continue;
+            }
+            freed += p.bytes;
+            doomed.push(run.proxy_path(video, p.n));
+            if !video {
+                doomed.push(run.wave_path(p.n));
+                run.audio.waves.remove(&p.n);
+                // The other sound tracks' fragment of the same number.
+                doomed.extend((1..=PREVIEW_EXTRA).map(|k| run.dir.join(format!("audio{k}")).join(format!("p{:08}.m4s", p.n))).filter(|f| f.exists()));
+            }
+        }
+    }
+    freed
+}
+
 /// How much the loops may take.
 #[derive(Clone, Debug, Default)]
 pub struct Limits {
@@ -700,6 +737,8 @@ pub struct Limits {
     /// The clips: their folder and their limit (bytes, 0 = none).
     pub clips_dir: PathBuf,
     pub clips_max: u64,
+    /// What a programmed slot recorded stays this many days after it (0 = always).
+    pub programmed_keep_days: u32,
 }
 
 /// What stays free for the system on a disk of `total` bytes: on the system
@@ -744,7 +783,7 @@ pub fn same_disk(a: &Path, b: &Path) -> bool {
 
 impl Limits {
     pub fn from(cfg: &ServerConfig, data_dir: &Path) -> Self {
-        Limits { loops_max: (cfg.loops_max_gb * 1e9) as u64, clips_dir: cfg.clips_dir(data_dir), clips_max: (cfg.clips_max_gb * 1e9) as u64 }
+        Limits { loops_max: (cfg.loops_max_gb * 1e9) as u64, clips_dir: cfg.clips_dir(data_dir), clips_max: (cfg.clips_max_gb * 1e9) as u64, programmed_keep_days: cfg.programmed_keep_days }
     }
     /// The free space always kept on the disk holding `path` (see `system_reserve`).
     pub fn min_free(&self, path: &Path, total: u64) -> u64 {
@@ -805,6 +844,9 @@ pub struct Manager {
     tz: Mutex<jiff::tz::TimeZone>,
     /// recorders.json could not be written (disk full): written again later.
     unsaved: std::sync::atomic::AtomicBool,
+    /// What each recorder's programmed slots recorded (server times, ms): kept longer than the
+    /// loop (`Limits::programmed_keep_days`).
+    programmed: Mutex<std::collections::HashMap<String, Vec<(f64, f64)>>>,
 }
 
 impl Manager {
@@ -831,6 +873,7 @@ impl Manager {
             schedules: schedule::Schedules::load(data_dir.join("schedules.json")),
             tz: Mutex::new(jiff::tz::TimeZone::get(&cfg.timezone).unwrap_or(jiff::tz::TimeZone::UTC)),
             unsaved: false.into(),
+            programmed: Mutex::new(crate::paths::read_json(&data_dir.join("programmed.json")).unwrap_or_default()),
         });
         web::keep_updated(data_dir.to_path_buf());
         let list: Vec<RecorderConfig> = crate::paths::read_json(&m.config_path()).unwrap_or_default();
@@ -870,6 +913,12 @@ impl Manager {
                     let info = |o: Option<(schedule::Slot, i64, i64)>| o.map(|(s, a, b)| SlotInfo { name: s.name, start: a, end: b });
                     // Never recorded: its slots record nothing, none is shown as on or to come.
                     let (slot, next) = if r.config().slots_off { (None, None) } else { (info(m.schedules.active(&r.id, &tz, now_t)), info(m.schedules.next(&r.id, &tz, now_t))) };
+                    // A slot recording: what it records is kept longer than the loop.
+                    if let Some(s) = &slot {
+                        if r.state() == State::Recording && r.config().protocol != Protocol::Pattern {
+                            m.keep_programmed(&r.id, (s.start - PREROLL_MS) as f64, s.end as f64);
+                        }
+                    }
                     let mut st = r.status.lock().unwrap();
                     st.slot = slot;
                     st.next_slot = next;
@@ -1030,52 +1079,42 @@ impl Manager {
         let disk_only = quota_need < disk_need;
         let recs = self.recs();
         let pins = self.pins.lock().unwrap().clone();
+        let kept: Vec<Vec<(f64, f64)>> = recs.iter().map(|r| self.programmed(&r.id)).collect();
         let mut freed = 0u64;
         let mut doomed: Vec<PathBuf> = Vec::new();
         let mut touched: Vec<(usize, usize)> = Vec::new();
         let mut guards: Vec<_> = recs.iter().map(|r| r.runs.write().unwrap()).collect();
+        // The programmed recordings go last.
+        let mut programmed_too = false;
         while freed < need {
             // The oldest segment that may go (not the live edge, not one a clip is being cut from).
-            let mut best: Option<(usize, usize, f64)> = None;
+            let mut best: Option<(usize, usize, usize, f64)> = None;
             for (ri, runs) in guards.iter().enumerate() {
                 for (ui, run) in runs.iter().enumerate() {
-                    let Some(s) = run.master.front() else { continue };
-                    if run.live && run.master.len() <= 2 {
-                        continue;
-                    }
                     if disk_only && !run.dir.starts_with(&current) {
                         continue;
                     }
-                    if pins.iter().any(|p| p.recorder == recs[ri].id && p.run == run.meta.id && s.t1 > p.from) {
-                        continue;
-                    }
-                    if best.is_none_or(|b| s.wall0 < b.2) {
-                        best = Some((ri, ui, s.wall0));
+                    let pin = pins.iter().filter(|p| p.recorder == recs[ri].id && p.run == run.meta.id).map(|p| p.from).reduce(f64::min);
+                    let may = if run.live { run.master.len().saturating_sub(2) } else { run.master.len() };
+                    let Some(i) = run.master.iter().take(may).position(|s| !pin.is_some_and(|f| s.t1 > f) && (programmed_too || !kept_in(&kept[ri], s))) else { continue };
+                    let w = run.master[i].wall0;
+                    if best.is_none_or(|b| w < b.3) {
+                        best = Some((ri, ui, i, w));
                     }
                 }
             }
-            let Some((ri, ui, _)) = best else { break };
+            let Some((ri, ui, i, _)) = best else {
+                if programmed_too {
+                    break;
+                }
+                programmed_too = true;
+                continue;
+            };
             let run = &mut guards[ri][ui];
-            let Some(s) = run.master.pop_front() else { break };
+            let Some(s) = run.master.remove(i) else { break };
             freed += s.bytes;
             doomed.push(run.master_path(s.n));
-            let start = run.master.front().map(|x| x.t0).unwrap_or(f64::INFINITY);
-            for video in [true, false] {
-                while let Some(p) = run.track(video).segs.front().cloned() {
-                    if p.t1 > start {
-                        break;
-                    }
-                    freed += p.bytes;
-                    doomed.push(run.proxy_path(video, p.n));
-                    if !video {
-                        doomed.push(run.wave_path(p.n));
-                        run.audio.waves.remove(&p.n);
-                        // The other sound tracks' fragment of the same number.
-                        doomed.extend((1..=PREVIEW_EXTRA).map(|k| run.dir.join(format!("audio{k}")).join(format!("p{:08}.m4s", p.n))).filter(|f| f.exists()));
-                    }
-                    run.track_mut(video).segs.pop_front();
-                }
-            }
+            freed += prune_proxies(run, &mut doomed);
             if !touched.contains(&(ri, ui)) {
                 touched.push((ri, ui));
             }
@@ -1430,52 +1469,95 @@ impl Manager {
         let c = rec.config();
         let keep = if c.protocol == Protocol::Pattern { PATTERN_KEEP_MS } else { c.loop_hours as i64 * 3_600_000 };
         let cutoff = (now_ms() - keep) as f64;
-        self.trim_before(rec, cutoff);
+        let kept = self.programmed(&rec.id);
+        self.trim_before(rec, cutoff, &kept);
     }
 
-    /// Empties the loop: everything recorded so far goes (what a clip is being cut from stays).
+    /// Empties the loop: everything recorded so far goes, what its programmed slots recorded too
+    /// (what a clip is being cut from stays).
     pub fn clear(&self, rec: &Rec) {
-        self.trim_before(rec, f64::INFINITY);
+        {
+            let mut all = self.programmed.lock().unwrap();
+            if all.remove(&rec.id).is_some() {
+                let _ = crate::paths::write_json(&self.data_dir.join("programmed.json"), &*all, false);
+            }
+        }
+        self.trim_before(rec, f64::INFINITY, &[]);
         tracing::warn!("{}: loop emptied", rec.config().name);
         rec.refresh_status();
     }
 
-    /// Removes the segments that end before `cutoff` (server time, ms).
-    fn trim_before(&self, rec: &Rec, cutoff: f64) {
+    /// Notes a programmed slot's recording (server times, ms): what the loop holds of it stays
+    /// longer than the loop.
+    pub fn keep_programmed(&self, id: &str, from: f64, to: f64) {
+        let mut all = self.programmed.lock().unwrap();
+        let spans = all.entry(id.to_string()).or_default();
+        if spans.iter().any(|&(a, b)| a <= from && to <= b) {
+            return;
+        }
+        // One span a slot: the same slot's again, else a new one.
+        match spans.iter_mut().find(|(a, b)| from <= *b && *a <= to) {
+            Some(s) => *s = (s.0.min(from), s.1.max(to)),
+            None => spans.push((from, to)),
+        }
+        let _ = crate::paths::write_json(&self.data_dir.join("programmed.json"), &*all, false);
+    }
+
+    /// A recorder's programmed recordings still kept (those past their time are forgotten).
+    pub fn programmed(&self, id: &str) -> Vec<(f64, f64)> {
+        let days = self.limits.lock().unwrap().programmed_keep_days;
+        let mut all = self.programmed.lock().unwrap();
+        let Some(spans) = all.get_mut(id) else { return Vec::new() };
+        if days > 0 {
+            let since = (now_ms() - days as i64 * 86_400_000) as f64;
+            let before = spans.len();
+            spans.retain(|&(_, b)| b >= since);
+            if spans.len() != before {
+                let _ = crate::paths::write_json(&self.data_dir.join("programmed.json"), &*all, false);
+                return all.get(id).cloned().unwrap_or_default();
+            }
+        }
+        spans.clone()
+    }
+
+    /// A recorder's programmed recordings still held: their bytes (the original segments), and
+    /// how many.
+    pub fn programmed_held(&self, rec: &Rec) -> (u64, usize) {
+        let kept = self.programmed(&rec.id);
+        if kept.is_empty() {
+            return (0, 0);
+        }
+        let runs = rec.runs.read().unwrap();
+        let segs: Vec<&index::Seg> = runs.iter().flat_map(|r| r.master.iter()).collect();
+        let bytes = segs.iter().filter(|s| kept_in(&kept, s)).map(|s| s.bytes).sum();
+        let count = kept.iter().filter(|&&span| segs.iter().any(|s| kept_in(&[span], s))).count();
+        (bytes, count)
+    }
+
+    /// Removes the segments that end before `cutoff` (server time, ms), but those a programmed
+    /// slot recorded (`kept`).
+    fn trim_before(&self, rec: &Rec, cutoff: f64, kept: &[(f64, f64)]) {
         let pins: Vec<Pin> = self.pins.lock().unwrap().iter().filter(|p| p.recorder == rec.id).cloned().collect();
         let mut doomed: Vec<PathBuf> = Vec::new();
         let mut runs = rec.runs.write().unwrap();
         for run in runs.iter_mut() {
             let keep_from = pins.iter().filter(|p| p.run == run.meta.id).map(|p| p.from).reduce(f64::min);
+            let (live, n) = (run.live, run.master.len());
             let mut changed = false;
-            while let Some(s) = run.master.front() {
+            for (i, s) in std::mem::take(&mut run.master).into_iter().enumerate() {
                 let pinned = keep_from.is_some_and(|f| s.t1 > f);
-                if s.wall1() >= cutoff || pinned || (run.live && run.master.len() == 1) {
-                    break;
-                }
-                doomed.push(run.master_path(s.n));
-                run.master.pop_front();
-                changed = true;
-            }
-            let start = run.master.front().map(|s| s.t0).unwrap_or(f64::INFINITY);
-            for video in [true, false] {
-                while let Some(p) = run.track(video).segs.front().cloned() {
-                    if p.t1 > start || (run.live && run.track(video).segs.len() == 1) {
-                        break;
-                    }
-                    doomed.push(run.proxy_path(video, p.n));
-                    if !video {
-                        doomed.push(run.wave_path(p.n));
-                        run.audio.waves.remove(&p.n);
-                        // The other sound tracks' fragment of the same number.
-                        doomed.extend((1..=PREVIEW_EXTRA).map(|k| run.dir.join(format!("audio{k}")).join(format!("p{:08}.m4s", p.n))).filter(|f| f.exists()));
-                    }
-                    run.track_mut(video).segs.pop_front();
+                if s.wall1() >= cutoff || pinned || (live && i + 1 == n) || kept_in(kept, &s) {
+                    run.master.push_back(s);
+                } else {
+                    doomed.push(run.master_path(s.n));
                     changed = true;
                 }
             }
-            if changed && !run.master.is_empty() {
-                index::rewrite_index(run);
+            if changed {
+                prune_proxies(run, &mut doomed);
+                if !run.master.is_empty() {
+                    index::rewrite_index(run);
+                }
             }
         }
         runs.retain(|r| {
@@ -1542,6 +1624,36 @@ mod tests {
         // nothing known: 8 Mb/s
         c.bitrate = 0.0;
         assert_eq!(loop_need(&c, 0).map(|b| b / 1_000_000_000), Some(107));
+    }
+
+    #[test]
+    fn programmed_parts_stay() {
+        use index::{PSeg, RunMeta, Seg};
+        // Ten 6-s segments from t 0 (server time 0), proxies of 2 s, the run finished.
+        let mut run = Run::new(PathBuf::from("/nonexistent"), RunMeta::default());
+        run.live = false;
+        for i in 0..10u32 {
+            let t = i as f64 * 6.0;
+            run.master.push_back(Seg { n: i, t0: t, t1: t + 6.0, wall0: t * 1000.0, bytes: 10 });
+        }
+        for i in 0..30u32 {
+            let t = i as f64 * 2.0;
+            run.video.segs.push_back(PSeg { n: i, t0: t, t1: t + 2.0, bytes: 1 });
+        }
+        // A slot recorded 18 s to 30 s: its segments stay, the others go.
+        let kept = [(18_000.0, 30_000.0)];
+        run.master.retain(|s| kept_in(&kept, s));
+        assert_eq!(run.master.iter().map(|s| s.n).collect::<Vec<_>>(), vec![3, 4]);
+        let mut doomed = Vec::new();
+        let freed = prune_proxies(&mut run, &mut doomed);
+        // Its proxies stay (18 s to 30 s), the others go.
+        assert_eq!(run.video.segs.iter().map(|p| p.n).collect::<Vec<_>>(), vec![9, 10, 11, 12, 13, 14]);
+        assert_eq!(freed, 24);
+        // A live run keeps what is past its last segment.
+        run.live = true;
+        run.video.segs.push_back(PSeg { n: 40, t0: 80.0, t1: 82.0, bytes: 1 });
+        prune_proxies(&mut run, &mut doomed);
+        assert_eq!(run.video.segs.back().map(|p| p.n), Some(40));
     }
 
     #[test]

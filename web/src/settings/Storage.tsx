@@ -53,6 +53,8 @@ interface RecorderUse {
 }
 interface StorageInfo {
   recordings: { dir: string; bytes: number };
+  /** What programmed slots recorded, kept longer than the loops (counted in the recordings' bytes too). */
+  programmed: { bytes: number; count: number };
   clips: { dir: string; bytes: number; sameDisk: boolean; count: number; orphans: number; orphanBytes: number };
   capacity: number | null;
   reserved: number;
@@ -109,15 +111,18 @@ export function Storage() {
   const ld = info?.loopsDisk ?? null;
   const cd = info?.clipsDisk ?? null;
   const same = !!info?.clips.sameDisk;
-  const loops = info?.recordings.bytes ?? 0;
+  // The loops, and apart what programmed slots recorded (kept longer).
+  const programmed = Math.min(info?.programmed?.bytes ?? 0, info?.recordings.bytes ?? 0);
+  const loops = (info?.recordings.bytes ?? 0) - programmed;
   const clips = info?.clips.bytes ?? 0;
   const reserved = info?.reserved ?? 0;
   // The space of Strata LiveCut: what the disk(s) leave available.
   const loopsSpace = ld?.available ?? 0;
   const clipsSpace = same ? loopsSpace : (cd?.available ?? 0);
   const total = same ? loopsSpace : loopsSpace + clipsSpace;
-  const used = loops + clips;
+  const used = loops + programmed + clips;
   const loopsPct = pctOf(loops, loopsSpace);
+  const programmedPct = pctOf(programmed, loopsSpace);
   const clipsPct = pctOf(clips, clipsSpace);
   // The loops once full: what they will take (the recorders' reserve).
   const fullPct = pctOf(reserved, loopsSpace - (same ? clips : 0));
@@ -147,9 +152,11 @@ export function Storage() {
     const a = u.available;
     const l = withLoops ? u.loops : 0;
     const c = withClips ? u.clips : 0;
+    const p = withLoops ? Math.min(programmed, l) : 0;
     return (
       <div className="sc-st-bar" role="img" aria-label={t('{used} used of {total}', { used: sz(l + c), total: sz(a) })}>
-        {withLoops && <span className="loops" style={{ width: `${pctOf(l, a)}%` }} />}
+        {withLoops && <span className="loops" style={{ width: `${pctOf(l - p, a)}%` }} />}
+        {p > 0 && <span className="prog" style={{ width: `${pctOf(p, a)}%` }} />}
         {withClips && <span className="clips" style={{ width: `${pctOf(c, a)}%` }} />}
         {/* Where the loops will be once full. */}
         {withLoops && reserved > 0 && <i className="sc-st-mark" style={{ left: `${pctOf(reserved + (withClips ? c : 0), a)}%` }} title={t('The loops once full: {s}', { s: sz(reserved) })} />}
@@ -235,6 +242,7 @@ export function Storage() {
           )}
           <div className="sc-st-legend">
             <span><i className="loops" /> {t('Recordings')}</span>
+            <span><i className="prog" /> {t('Programmed recordings')}</span>
             <span><i className="clips" /> {t('Clips')}</span>
             <span><i className="free" /> {t('Free')}</span>
             {reserved > 0 && <span><i className="mark" /> {t('The loops once full')}</span>}
@@ -251,6 +259,20 @@ export function Storage() {
                 {reserved > 0 ? t('Full, the loops will take {s} ({p} of the space left to them)', { s: sz(reserved), p: pctText(fullPct) }) : t('No recorder records')}
                 <InfoTip text={t('Each loop takes, once full, its length at its bitrate. When the disk is full the oldest recordings go first, and a loop is shorter than asked.')} />
               </span>
+            </div>
+            <div className="sc-st-tile">
+              <span className="sc-st-k"><i className="prog" /> {t('Programmed recordings')}</span>
+              <b className="sc-st-v">{pctText(programmedPct)}</b>
+              <span className="sc-st-sub">{t('{used} of {total}', { used: sz(programmed), total: sz(loopsSpace) })} · {tn(info.programmed?.count ?? 0, '{n} programmed recording', '{n} programmed recordings')}</span>
+              {cfg && (
+                <Field label={<>{t('Keep the programmed recordings')}<InfoTip text={t('What a programmed recording recorded stays in the Cut’s timeline this long after it, even once the loop has gone past it. “Always”: until the loop is emptied by hand.')} /></>}>
+                  <Dropdown
+                    value={String(num('programmedKeepDays'))}
+                    options={[0, 1, 7, 15, 30, 60, 90, 180, 365].map((d) => ({ value: String(d), label: d === 0 ? t('Always') : tn(d, '{n} day', '{n} days') }))}
+                    onChange={(v) => setCfg((c) => ({ ...c, programmedKeepDays: Number(v) }))}
+                  />
+                </Field>
+              )}
             </div>
             <div className="sc-st-tile">
               <span className="sc-st-k"><i className="clips" /> {t('Clips')}</span>
