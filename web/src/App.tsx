@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect } from 'react';
-import { CalendarClock, CircleHelp, Clapperboard, Radio, Scissors, Server } from 'lucide-react';
+import { Ban, CalendarClock, CircleHelp, Clapperboard, Radio, Scissors, Server } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { loadDisplayPrefs, useDisplayPrefs } from './displayPrefs';
 import { t, useLang } from './i18n';
@@ -92,6 +92,8 @@ function Shell({ route }: { route: Route }) {
   };
   const home = pages.extract ? '/extract' : pages.schedule ? '/schedule' : pages.streamer ? '/streamer' : pages.clips ? '/clips' : '/help';
   const streamer = pages.streamer;
+  // No page at all: a page that says so, nothing else (not the help).
+  const nothing = !!user && !system && !Object.values(pages).some(Boolean);
   // Its rights changed (Système › Accès › Rôles): its account asked again.
   useChanged('roles', () => void api<AuthState>('GET', '/api/auth/state').then((a) => useApp.setState({ auth: a }), () => {}));
   // The extractions under way, on the Clips tab (seen from every page).
@@ -103,12 +105,13 @@ function Shell({ route }: { route: Route }) {
 
   // A page this user may not open goes back home.
   useEffect(() => {
+    if (nothing) return;
     const closed = (route.page === 'system' && !system) || (route.page in pages && !pages[route.page as keyof typeof pages]);
     if (closed) void navigate(home, true);
     // The sources are in Système now; the home: the first page its role opens.
     else if (route.page === 'recorders') void navigate(system ? '/system/sources' : home, true);
     else if (route.page === 'home') void navigate(home, true);
-  }, [route.page, system, home]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [route.page, system, home, nothing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   let page: React.ReactNode;
   switch (route.page) {
@@ -133,6 +136,15 @@ function Shell({ route }: { route: Route }) {
     default:
       page = null;
   }
+  if (nothing) {
+    page = (
+      <div className="no-rights">
+        <Ban size={28} />
+        <h1>{t('You have no rights')}</h1>
+        <p>{t('Contact your administrator.')}</p>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -148,7 +160,7 @@ function Shell({ route }: { route: Route }) {
         <div className="spacer" />
         <LoadGauge />
         <StatusPill />
-        <HelpButton on={route.page === 'help'} />
+        {!nothing && <HelpButton on={route.page === 'help'} />}
         <UserMenu named />
       </nav>
       <div className="content">

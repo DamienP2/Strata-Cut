@@ -40,6 +40,14 @@ const num = (v: number) => v.toLocaleString(locale(), { maximumFractionDigits: 1
 
 function GuardMessage({ g }: { g: Guard }) {
   const admin = can.admin(useApp.getState().auth?.user);
+  // Not an admin, a recording: what it can do, in plain words (the numbers are the admins').
+  if (!admin && g.what === 'recording') {
+    return (
+      <div className="guard-msg">
+        <p>{t('The server has reached its limit. The only way to start this recording is to stop another one first.')}</p>
+      </div>
+    );
+  }
   const upload = g.reason === 'upload';
   const unit = upload ? ' Mb/s' : ' %';
   const scale = upload ? Math.max(g.limit, g.now + g.adds) * 1.15 : 100;

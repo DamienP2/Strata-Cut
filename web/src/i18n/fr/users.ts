@@ -96,4 +96,7 @@ export const users: Record<string, string> = {
   'Administrators only': 'Administrateurs uniquement',
   'Groups that may send there': 'Groupes autorisés à y envoyer',
   'scope|All': 'Tous',
+  'You have no rights': 'Vous n’avez aucun droit',
+  'Contact your administrator.': 'Contactez l’administrateur\u00a0!',
+  'The server has reached its limit. The only way to start this recording is to stop another one first.': 'Le serveur a atteint sa limite. La seule solution pour lancer cet enregistrement est d’en arrêter un autre.',
 };

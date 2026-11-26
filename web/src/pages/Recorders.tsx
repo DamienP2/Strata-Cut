@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { Cable, CalendarClock, ChevronDown, Copy, Eraser, Globe, Grid3x3, GripVertical, ImagePlus, MonitorPlay, MoreHorizontal, Network, Pencil, Plus, RadioTower, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { CalendarClock, ChevronDown, Copy, Eraser, GripVertical, ImagePlus, MoreHorizontal, Pencil, Plus, RadioTower, Search, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverNow, useApp } from '../store';
 import { RecLogo } from '../ui/RecLogo';
 import { ContentFlags } from '../ui/ContentFlags';
@@ -18,6 +18,7 @@ import { clockOf, MASKED, useStreams, type StreamInfo } from '../streams';
 import { explainGuard } from '../ui/guard';
 import { showError } from '../ui/serverError';
 import { gb, loopBytes, recWithLoop, type Space } from '../ui/RecLoop';
+import { SOURCE_KINDS } from '../ui/sourceKinds';
 import { openContextMenu } from '../ui/ContextMenu';
 
 const PROTOCOLS: { value: Protocol; label: string; detail: string }[] = [
@@ -117,15 +118,8 @@ function useTick(ms: number) {
   return n;
 }
 
-/** The page's groups, by kind of source; a new one in a group is of its first kind. */
-const GROUPS: { key: string; label: string; icon: React.ReactNode; protocols: Protocol[] }[] = [
-  { key: 'card', label: 'SDI / HDMI inputs', icon: <Cable size={14} />, protocols: ['decklink'] },
-  { key: 'ndi', label: 'NDI', icon: <Network size={14} />, protocols: ['ndi'] },
-  { key: 'net', label: 'Network streams', icon: <RadioTower size={14} />, protocols: ['srt', 'rtmp', 'udp', 'rtp'] },
-  { key: 'web', label: 'Online videos', icon: <MonitorPlay size={14} />, protocols: ['web', 'hls'] },
-  { key: 'page', label: 'Web pages', icon: <Globe size={14} />, protocols: ['page'] },
-  { key: 'pattern', label: 'Test patterns', icon: <Grid3x3 size={14} />, protocols: ['pattern'] },
-];
+/** The page's groups: the kinds of sources. */
+const GROUPS = SOURCE_KINDS;
 
 /** A new source of this kind, with its kind's defaults. */
 function presetFor(p: Protocol, name: string): Partial<Recorder> {
