@@ -988,7 +988,7 @@ impl Manager {
             lines.extend(load.iter().filter(|(_, l)| l.samples > 0).map(|(card, l)| nic_load_line(card, l)));
         }
         // The last bytes stay: the next ten minutes go on from them.
-        *self.nic_load.lock().unwrap() = load.into_iter().map(|(k, l)| (k, NicLoad { last: l.last, ..Default::default() })).collect();
+        *self.nic_load.lock().unwrap() = load.into_iter().map(|(k, l)| (k, NicLoad { last: l.last, speed: l.speed, now_mbps: l.now_mbps, ..Default::default() })).collect();
         for line in lines {
             tracing::warn!("{line}");
         }
@@ -1718,6 +1718,8 @@ struct NicLoad {
     peak_mbps: f64,
     /// Its speed (Mb/s), as the system says (0: unknown).
     speed: u64,
+    /// Over the last 2 seconds, Mb/s.
+    now_mbps: f64,
 }
 
 impl Manager {
@@ -1741,9 +1743,17 @@ impl Manager {
                 l.sum_mbps += mbps;
                 l.samples += 1;
                 l.peak_mbps = l.peak_mbps.max(mbps);
+                l.now_mbps = mbps;
             }
             l.last = bytes;
         }
+    }
+}
+
+impl Manager {
+    /// Each network card now: its name, what it receives (Mb/s) and its speed (Mb/s, 0: unknown).
+    pub fn nics_now(&self) -> Vec<(String, f64, u64)> {
+        self.nic_load.lock().unwrap().iter().map(|(k, l)| (k.clone(), l.now_mbps, l.speed)).collect()
     }
 }
 
@@ -1868,7 +1878,7 @@ mod glitch_tests {
 
     #[test]
     fn nic_load() {
-        let l = NicLoad { last: 1, sum_mbps: 3000.0, samples: 10, peak_mbps: 960.0, speed: 1000 };
+        let l = NicLoad { last: 1, sum_mbps: 3000.0, samples: 10, peak_mbps: 960.0, speed: 1000, now_mbps: 0.0 };
         assert_eq!(nic_load_line("eno1", &l), "network card eno1 (1000 Mb/s): received in the last 10 minutes 300 Mb/s on average, up to 960 Mb/s over 2 s: close to its speed: what comes on top is lost before this server");
         let quiet = NicLoad { peak_mbps: 200.0, ..l };
         assert!(!nic_load_line("eno1", &quiet).contains("close"));

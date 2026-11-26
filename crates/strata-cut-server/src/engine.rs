@@ -175,6 +175,7 @@ async fn decode_once(ffmpeg: &str, rec: &Arc<Rec>, sh: &Shape, picks: &Picks, in
         Ok(c) => c,
         Err(e) => return Some(format!("cannot start {ffmpeg}: {e}")),
     };
+    crate::procs::tag(child.id(), format!("streamer:{}", rec.id), "Programme decoding");
     inputs.restart();
     let last = last_words(&mut child);
     // Its pictures, and each track's sound: read as they come.
@@ -336,6 +337,7 @@ async fn encode_once(ffmpeg: &str, r: &Arc<Runner>, sh: &Shape, sink: &Arc<Mutex
     let mut cmd = Command::new(ffmpeg);
     cmd.args(encoder_args(sh, vp, ap, op)).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
     let mut child = cmd.spawn().map_err(|e| format!("cannot start {ffmpeg}: {e}"))?;
+    crate::procs::tag(child.id(), format!("streamer:{}", r.source), "Programme encoding");
     let last = last_words(&mut child);
     let mut look = tokio::time::interval(Duration::from_millis(500));
     loop {
@@ -403,6 +405,7 @@ fn write_to(listener: TcpListener, rx: Receiver<Vec<u8>>, queued: Arc<AtomicUsiz
 fn relay(sock: UdpSocket, r: Arc<Runner>, done: Arc<AtomicBool>) {
     let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
     let _ = std::thread::Builder::new().name("program-relay".into()).spawn(move || {
+        crate::procs::tag_thread(format!("streamer:{}", r.source), "Relay to the lives");
         let mut buf = vec![0u8; 65536];
         let mut taps: Vec<u16> = Vec::new();
         let mut looked: Option<Instant> = None;

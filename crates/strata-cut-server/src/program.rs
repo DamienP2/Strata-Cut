@@ -356,6 +356,8 @@ pub(crate) struct Change {
 
 /// A programme being made.
 pub struct Runner {
+    /// Its source (the recorder's id).
+    pub source: String,
     /// The lives reading it (as `Rec::taps`).
     pub taps: Mutex<Vec<(u64, u16)>>,
     pub(crate) last_packet: AtomicI64,
@@ -468,7 +470,7 @@ impl Programs {
             return r.clone();
         }
         let (tx, rx) = mpsc::unbounded_channel();
-        let r = Arc::new(Runner { taps: Mutex::new(Vec::new()), last_packet: AtomicI64::new(0), users: AtomicUsize::new(1), failed: Mutex::new(String::new()), pictured: Default::default(), epoch: AtomicU64::new(0), stage: Mutex::new("waiting for the source's description"), ended: AtomicBool::new(false), tx, stop: watch::channel(false).0 });
+        let r = Arc::new(Runner { source: source.to_string(), taps: Mutex::new(Vec::new()), last_packet: AtomicI64::new(0), users: AtomicUsize::new(1), failed: Mutex::new(String::new()), pictured: Default::default(), epoch: AtomicU64::new(0), stage: Mutex::new("waiting for the source's description"), ended: AtomicBool::new(false), tx, stop: watch::channel(false).0 });
         running.insert(source.to_string(), r.clone());
         let (me, source, runner) = (self.clone(), source.to_string(), r.clone());
         tokio::spawn(async move { me.run(source, runner, rx).await });
@@ -519,7 +521,7 @@ impl Programs {
         let done = Arc::new(AtomicBool::new(false));
         let _end = Ends(done.clone());
         let (changes, crx) = std::sync::mpsc::channel();
-        if let Err(e) = (Mixer { shape: sh, program: p.clone(), inputs: inputs.clone(), pics: pics.clone(), changes: crx, sink: sink.clone(), done: done.clone(), pictured: r.pictured.clone() }).spawn() {
+        if let Err(e) = (Mixer { source: source.clone(), shape: sh, program: p.clone(), inputs: inputs.clone(), pics: pics.clone(), changes: crx, sink: sink.clone(), done: done.clone(), pictured: r.pictured.clone() }).spawn() {
             *r.failed.lock().unwrap() = e.to_string();
             return;
         }

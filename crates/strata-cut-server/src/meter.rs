@@ -96,6 +96,7 @@ impl Meters {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 continue;
             };
+            crate::procs::tag(child.id(), format!("rec:{}", rec.id), "Sound levels");
             let key = rand_key();
             rec.taps.lock().unwrap().push((key, port));
             let _untap2 = Untap(rec.clone(), key);

@@ -308,11 +308,19 @@ pub struct Mixer {
     pub done: Arc<AtomicBool>,
     /// A picture of the source was mixed.
     pub pictured: Arc<AtomicBool>,
+    /// Its source (the recorder's id).
+    pub source: String,
 }
 
 impl Mixer {
     pub fn spawn(self) -> std::io::Result<()> {
-        std::thread::Builder::new().name("program-mixer".into()).spawn(move || self.run()).map(|_| ())
+        std::thread::Builder::new()
+            .name("program-mixer".into())
+            .spawn(move || {
+                crate::procs::tag_thread(format!("streamer:{}", self.source), "Mixing");
+                self.run()
+            })
+            .map(|_| ())
     }
 
     fn run(mut self) {

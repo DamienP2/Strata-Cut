@@ -349,7 +349,7 @@ impl Streams {
         all
     }
 
-    fn get(&self, id: &str) -> Option<Destination> {
+    pub(crate) fn get(&self, id: &str) -> Option<Destination> {
         self.list().into_iter().find(|d| d.id == id)
     }
 
@@ -696,7 +696,11 @@ impl Streams {
             args.extend(output_args(&d));
             let mut cmd = Command::new(&ffmpeg);
             cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-            let mut child = match cmd.spawn() {
+            let spawned = cmd.spawn();
+            if let Ok(c) = &spawned {
+                crate::procs::tag(c.id(), format!("streamer:{}", s.source), if output_args(&d).iter().any(|a| a == "copy") { "Live (copy)" } else { "Live (encoded again)" });
+            }
+            let mut child = match spawned {
                 Ok(c) => c,
                 Err(e) => {
                     if !self.wait_again(&s, &d, format!("cannot start {ffmpeg}: {e}"), &mut stop).await {

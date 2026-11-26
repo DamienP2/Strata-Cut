@@ -290,6 +290,7 @@ async fn screen(page: &Page, display: u32) -> Option<tokio::process::Child> {
         let mut cmd = Command::new(XORG);
         cmd.arg(format!(":{display}")).arg("-config").arg(&conf).arg("-logfile").arg(page.dir.join("xorg.log")).args(["-noreset", "-nolisten", "tcp"]);
         if let Ok(mut c) = cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).process_group(0).spawn() {
+            crate::procs::tag(c.id(), format!("rec:{}", page.id), "Screen");
             if appears(Path::new(&socket), 10).await {
                 return Some(c);
             }
@@ -301,6 +302,7 @@ async fn screen(page: &Page, display: u32) -> Option<tokio::process::Child> {
         let _ = (std::fs::remove_file(format!("/tmp/.X{display}-lock")), std::fs::remove_file(&socket));
     }
     let mut c = Command::new("Xvfb").args([format!(":{display}"), "-screen".into(), "0".into(), format!("{w}x{h}x24"), "-nolisten".into(), "tcp".into()]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).process_group(0).spawn().ok()?;
+    crate::procs::tag(c.id(), format!("rec:{}", page.id), "Screen");
     if appears(Path::new(&socket), 10).await {
         return Some(c);
     }
@@ -418,7 +420,10 @@ async fn run_once(pages: &Pages, page: &Arc<Page>, stop: &mut watch::Receiver<bo
         }
         cmd.env("PULSE_RUNTIME_PATH", &rt).env("HOME", &page.dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
         match cmd.spawn() {
-            Ok(c) => pulse = Some(c),
+            Ok(c) => {
+                crate::procs::tag(c.id(), format!("rec:{}", page.id), "Sound card");
+                pulse = Some(c)
+            }
             Err(e) => return Some(format!("cannot start PulseAudio (run the install script again): {e}")),
         }
         if !appears(&socket, 10).await {
@@ -458,7 +463,10 @@ async fn run_once(pages: &Pages, page: &Arc<Page>, stop: &mut watch::Receiver<bo
         cmd.env("PULSE_SERVER", format!("unix:{}", socket.display()));
     }
     let mut chrome = match cmd.spawn() {
-        Ok(c) => c,
+        Ok(c) => {
+            crate::procs::tag(c.id(), format!("rec:{}", page.id), "Browser");
+            c
+        }
         Err(e) => return Some(format!("cannot start {browser}: {e}")),
     };
     // Driven through its DevTools protocol.
@@ -533,7 +541,10 @@ async fn film(pages: &Pages, page: &Arc<Page>, display: u32, socket: &Path, audi
     enc.arg(format!("udp://127.0.0.1:{}?pkt_size=1316", page.port));
     enc.stdin(Stdio::piped()).stdout(Stdio::null());
     let mut enc = match Proc::start(enc) {
-        Ok(c) => c,
+        Ok(c) => {
+            crate::procs::tag(Some(c.child.id()), format!("rec:{}", page.id), "Encoding");
+            c
+        }
         Err(e) => return format!("cannot start {}: {e}", pages.ffmpeg),
     };
     // The grabber: the screen raw on its output, the sound to the encoder.
@@ -555,7 +566,10 @@ async fn film(pages: &Pages, page: &Arc<Page>, display: u32, socket: &Path, audi
     }
     // (Both killed and waited for however this ends: dropped with the page too.)
     let mut grab = match Proc::start(grab) {
-        Ok(c) => c,
+        Ok(c) => {
+            crate::procs::tag(Some(c.child.id()), format!("rec:{}", page.id), "Screen capture");
+            c
+        }
         Err(e) => return format!("cannot start {}: {e}", pages.ffmpeg),
     };
     let (Some(mut input), Some(mut output)) = (grab.child.stdout.take(), enc.child.stdin.take()) else {

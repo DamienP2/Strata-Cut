@@ -26,6 +26,8 @@ mod ntp;
 mod pages;
 mod paths;
 mod perf;
+mod procs;
+mod resources;
 mod prefs;
 mod recorder;
 mod service;
@@ -323,6 +325,8 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
             sends: sends.clone(),
             streams: streams.clone(),
         });
+        // What each source, Streamer, clip… costs, sampled every 2 s.
+        resources::start(shared.clone());
         let mut app = api::router();
         app = match &args.web_dir {
             Some(dir) => app.fallback_service(tower_http::services::ServeDir::new(dir).fallback(tower_http::services::ServeFile::new(dir.join("index.html")))),

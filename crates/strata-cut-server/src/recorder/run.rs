@@ -462,7 +462,9 @@ impl Relay {
         set_receive_buffer(&sock, 8 << 20);
         let _ = sock.set_read_timeout(Some(Duration::from_millis(200)));
         let local = std::net::Ipv4Addr::LOCALHOST;
+        let key = format!("rec:{}", rec.id);
         let spawned = std::thread::Builder::new().name("relay".into()).spawn(move || {
+            crate::procs::tag_thread(key, "Receiving");
             let mut buf = vec![0u8; 65536];
             let mut taps: Vec<u16> = Vec::new();
             let mut looked = 0i64;
@@ -582,6 +584,9 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             let args = super::decklink::encoder_args(cfg, &r.mode, &video, &sound, &ts);
             tracing::debug!("{}: encoder: ffmpeg {}", cfg.name, args.join(" "));
             let spawned = Command::new(&m.ffmpeg).args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
+            if let Ok(c) = &spawned {
+                crate::procs::tag(c.id(), format!("rec:{}", rec.id), "Encoding");
+            }
             match spawned {
                 Ok(mut encoder) => {
                     if let Some(err) = encoder.stderr.take() {
@@ -602,6 +607,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     let (tx, done) = tokio::sync::oneshot::channel();
                     let (stop2, rec2, name, channels) = (stop.clone(), rec.clone(), cfg.name.clone(), cfg.audio_channels);
                     std::thread::spawn(move || {
+                        crate::procs::tag_thread(format!("rec:{}", rec2.id), "Capture");
                         let end = super::decklink::pump(r, video, sound, channels, stop2, |on| {
                             rec2.no_signal.store(!on, Ordering::Relaxed);
                             if on {
@@ -645,6 +651,9 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
             let args = super::ndi::encoder_args(cfg, &r.format, &video, &sound, &ts);
             tracing::debug!("{}: encoder: ffmpeg {}", cfg.name, args.join(" "));
             let spawned = Command::new(&m.ffmpeg).args(&args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true).spawn();
+            if let Ok(c) = &spawned {
+                crate::procs::tag(c.id(), format!("rec:{}", rec.id), "Encoding");
+            }
             match spawned {
                 Ok(mut encoder) => {
                     if let Some(err) = encoder.stderr.take() {
@@ -663,8 +672,9 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
                     }
                     let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let (tx, done) = tokio::sync::oneshot::channel();
-                    let stop2 = stop.clone();
+                    let (stop2, key) = (stop.clone(), format!("rec:{}", rec.id));
                     std::thread::spawn(move || {
+                        crate::procs::tag_thread(key, "Capture");
                         let _ = tx.send(super::ndi::pump(r, video, sound, stop2));
                     });
                     capture = Some(CardCapture { encoder, stop, done });
@@ -740,7 +750,10 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     pcmd.args(&preview_args).current_dir(&run_dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).kill_on_drop(true);
     super::lower_priority(&mut pcmd, 5);
     let mut preview = match pcmd.spawn() {
-        Ok(c) => c,
+        Ok(c) => {
+            crate::procs::tag(c.id(), format!("rec:{}", rec.id), "Preview");
+            c
+        }
         Err(e) => {
             finish_run(rec, &run_id);
             return Outcome::Exited { had_data: false, message: format!("cannot start {}: {e}", m.ffmpeg) };
@@ -815,6 +828,7 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     if cfg.protocol == Protocol::Pattern {
         match super::pattern::command(&m.ffmpeg, m.data_dir(), cfg).spawn() {
             Ok(mut f) => {
+                crate::procs::tag(f.id(), format!("rec:{}", rec.id), "Test pattern");
                 match f.stdout.take().map(TryInto::<Stdio>::try_into) {
                     Some(Ok(out)) => stdin = out,
                     _ => {
@@ -847,6 +861,9 @@ async fn record_once(m: &Arc<Manager>, rec: &Arc<Rec>, cfg: &RecorderConfig, cfg
     }
     let stdout = if epg_map.is_some() { Stdio::piped() } else { Stdio::null() };
     let child = Command::new(&m.ffmpeg).args(&args).current_dir(&run_dir).stdin(stdin).stdout(stdout).stderr(Stdio::piped()).kill_on_drop(true).spawn();
+    if let Ok(c) = &child {
+        crate::procs::tag(c.id(), format!("rec:{}", rec.id), "Recording");
+    }
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {

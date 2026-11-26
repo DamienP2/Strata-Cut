@@ -268,6 +268,11 @@ pub struct Clips {
 }
 
 impl Clips {
+    /// The name of a clip being cut (its job), for the resources' page.
+    pub fn job_name(&self, id: &str) -> Option<String> {
+        self.jobs.lock().unwrap().iter().find(|j| j.id == id).map(|j| j.name.clone())
+    }
+
     pub fn start(data_dir: &Path, cfg: &ServerConfig, events: Events, recorders: Arc<Manager>) -> Arc<Self> {
         let clips: Vec<Clip> = crate::paths::read_json::<Vec<Clip>>(&data_dir.join("clips.json")).unwrap_or_default().into_iter().filter(|c| c.file.exists()).collect();
         let c = Arc::new(Clips {
@@ -633,11 +638,16 @@ impl Clips {
                 args.extend(["-update", "1", "-y"].map(String::from));
             }
         }
+        // Half the cores at most, at the lowest priority: the recordings never wait for a clip
+        // (a starved receiver loses packets: the picture breaks up).
+        let half = (crate::perf::machine().cores / 2).max(1).to_string();
+        args.extend(["-threads".to_string(), half.clone(), "-filter_threads".to_string(), half]);
         args.push(part.to_string_lossy().into_owned());
         let mut cmd = tokio::process::Command::new(&self.recorders.ffmpeg);
         cmd.args(&args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
-        crate::recorder::background(&mut cmd);
+        crate::recorder::lower_priority(&mut cmd, 19);
         let mut child = cmd.spawn().map_err(|e| format!("cannot start ffmpeg: {e}"))?;
+        crate::procs::tag(child.id(), format!("clip:{}", job.id), "Clip encoding");
         *self.running.lock().unwrap() = child.id().map(|p| (job.id.clone(), job.req.recorder.clone(), p));
         let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
         let stderr = child.stderr.take().unwrap();
