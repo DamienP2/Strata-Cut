@@ -234,6 +234,9 @@ struct Live {
     overrides: Overrides,
     #[serde(default)]
     by: String,
+    /// Who started it (the account's id): "start and stop their streams" goes by it.
+    #[serde(default)]
+    by_id: String,
     /// Tells this live from the next one to the same destination.
     token: u64,
 }
@@ -242,6 +245,9 @@ struct Live {
 struct Session {
     dest: String,
     source: String,
+    /// Who started it (account id, name).
+    by_id: String,
+    by: String,
     started: i64,
     token: u64,
     /// Started again after a restart of the server: it was live, and is made again until stopped.
@@ -415,7 +421,7 @@ impl Streams {
                 .map(|s| {
                     let st = s.stats.lock().unwrap();
                     json!({
-                        "destination": s.dest, "source": s.source, "started": s.started, "state": st.state,
+                        "destination": s.dest, "source": s.source, "byId": s.by_id, "by": s.by, "started": s.started, "state": st.state,
                         "message": st.message, "note": st.note, "liveSince": st.live_since,
                         "duration": st.live_since.map(|t| now - t), "bytes": st.bytes, "kbps": st.kbps.round(),
                         "history": st.history.iter().map(|k| k.round()).collect::<Vec<_>>(),
@@ -434,8 +440,18 @@ impl Streams {
     }
 
     /// Sends a source to a destination (a destination sends one source at a time).
-    pub fn begin(self: &Arc<Self>, dest_id: &str, source: &str, o: &Overrides, who: &str) -> Result<(), String> {
-        self.begin_live(&Live { destination: dest_id.into(), source: source.into(), overrides: o.clone(), by: who.into(), token: rand_key() }, false)
+    pub fn begin(self: &Arc<Self>, dest_id: &str, source: &str, o: &Overrides, who: &crate::auth::User) -> Result<(), String> {
+        self.begin_live(&Live { destination: dest_id.into(), source: source.into(), overrides: o.clone(), by: who.username.clone(), by_id: who.id.clone(), token: rand_key() }, false)
+    }
+
+    /// Who started the live to this destination (account id), if one is under way.
+    pub fn started_by(&self, dest_id: &str) -> Option<String> {
+        self.sessions.lock().unwrap().get(dest_id).map(|x| x.by_id.clone())
+    }
+
+    /// The lives of a source: their destination and who started them.
+    pub fn of_source(&self, source: &str) -> Vec<(String, String)> {
+        self.sessions.lock().unwrap().values().filter(|x| x.source == source).map(|x| (x.dest.clone(), x.by_id.clone())).collect()
     }
 
     fn begin_live(self: &Arc<Self>, live: &Live, resumed: bool) -> Result<(), String> {
@@ -455,7 +471,7 @@ impl Streams {
                 Some(s) => Some(s.clone()),
                 None => None,
             };
-            let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), started: now_ms(), token: live.token, resumed, planned_kbps, stop: watch::channel(false).0, finished: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
+            let session = Arc::new(Session { dest: dest_id.to_string(), source: source.to_string(), by_id: live.by_id.clone(), by: live.by.clone(), started: now_ms(), token: live.token, resumed, planned_kbps, stop: watch::channel(false).0, finished: watch::channel(false).0, stats: Mutex::new(Stats { state: "connecting", ..Default::default() }) });
             sessions.insert(dest_id.to_string(), session.clone());
             (session, previous)
         };
@@ -968,9 +984,9 @@ pub fn routes() -> Router<Shared> {
 
 /// Admins: the destinations (their secrets masked). Operators: what the Streamer shows.
 async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view"))?;
+    require(me.can("stream.access"))?;
     let all = s.streams.list();
-    Ok(Json(Value::Array(all.iter().map(|d| if me.is_admin() { d.public() } else { d.for_operator() }).collect())))
+    Ok(Json(Value::Array(all.iter().filter(|d| crate::groups::may_stream_to(&me, &d.id)).map(|d| if me.is_admin() { d.public() } else { d.for_operator() }).collect())))
 }
 
 /// The saved secrets are kept when the form sends them masked, for the same server only: sent
@@ -1044,38 +1060,60 @@ async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
 /// Tests at the same time, at most (each one encodes a few seconds).
 static TESTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
+/// May this account stream: at all, and to this destination (its groups say which).
+fn may_stream(me: &crate::auth::User, dest: &str) -> bool {
+    (me.can("stream.run.own") || me.can("stream.run.all")) && crate::groups::may_stream_to(me, dest)
+}
+
+/// May this account stop this live: any, or its own.
+fn may_stop(me: &crate::auth::User, by: &str) -> bool {
+    me.can("stream.run.all") || (me.can("stream.run.own") && by == me.id)
+}
+
 async fn test(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(o): Json<Overrides>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.run"))?;
+    require(may_stream(&me, &id))?;
     let _one = TESTS.try_acquire().map_err(|_| bad("other tests are under way: again in a moment"))?;
     s.streams.test(&id, &o).await.map(Json).map_err(bad)
 }
 
 async fn streams(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view"))?;
+    require(me.can("stream.access"))?;
     Ok(Json(s.streams.json()))
 }
 
 async fn start(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<StartBody>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.run"))?;
+    require(may_stream(&me, &b.destination) && crate::groups::sees_source(&me, &b.source))?;
+    // A live under way there: replaced only by who may stop it.
+    if let Some(by) = s.streams.started_by(&b.destination) {
+        require(may_stop(&me, &by))?;
+    }
     if let Some(cost) = s.streams.cost(&b.destination, &b.source, &b.overrides).map_err(bad)? {
         crate::limits::check(&s, &cost)?;
     }
-    s.streams.begin(&b.destination, &b.source, &b.overrides, &me.username).map_err(bad)?;
+    s.streams.begin(&b.destination, &b.source, &b.overrides, &me).map_err(bad)?;
     Ok(Json(s.streams.json()))
 }
 
 async fn stop(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(dest): UrlPath<String>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.run"))?;
+    match s.streams.started_by(&dest) {
+        Some(by) => require(may_stop(&me, &by))?,
+        // A live that could not start: cleared by who may stream.
+        None => require(me.can("stream.run.own") || me.can("stream.run.all"))?,
+    }
     if s.streams.end(&dest) {
         tracing::info!("{} stops the stream to {dest}", me.username);
     }
     Ok(Json(json!({"ok": true})))
 }
 
-/// Every stream of a source ("Tout arrêter").
+/// Every stream of a source ("Tout arrêter") this account may stop.
 async fn stop_source(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<StopSource>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.run"))?;
-    s.streams.end_source(&b.source);
+    require(me.can("stream.run.own") || me.can("stream.run.all"))?;
+    for (dest, by) in s.streams.of_source(&b.source) {
+        if may_stop(&me, &by) {
+            s.streams.end(&dest);
+        }
+    }
     Ok(Json(json!({"ok": true})))
 }
 

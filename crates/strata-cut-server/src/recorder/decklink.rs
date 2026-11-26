@@ -953,6 +953,7 @@ mod tests {
 
     fn cfg() -> RecorderConfig {
         RecorderConfig {
+            rec_by: String::new(),
             id: "x".into(),
             name: "x".into(),
             protocol: Protocol::Decklink,

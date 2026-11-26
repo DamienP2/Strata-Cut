@@ -35,6 +35,9 @@ export interface Destination {
 export interface StreamInfo {
   destination: string;
   source: string;
+  /** Who started it (account id, name). */
+  byId?: string;
+  by?: string;
   started: number;
   state: 'connecting' | 'live' | 'retrying' | 'failed';
   message: string;

@@ -36,6 +36,41 @@ pub struct Group {
     /// One of the base groups (its name is fixed; it cannot be deleted).
     #[serde(default)]
     pub base: bool,
+    /// The sources its members see (Control Room, Cut, Streamer).
+    #[serde(default)]
+    pub sources: Scope,
+    /// The file servers its members may send clips to.
+    #[serde(default)]
+    pub sends: Scope,
+    /// The Streamer's destinations its members may stream to.
+    #[serde(default)]
+    pub dests: Scope,
+}
+
+/// All of them, or these only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Scope {
+    #[serde(default = "yes")]
+    pub all: bool,
+    #[serde(default)]
+    pub ids: Vec<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for Scope {
+    fn default() -> Self {
+        Scope { all: true, ids: Vec::new() }
+    }
+}
+
+impl Scope {
+    pub fn has(&self, id: &str) -> bool {
+        self.all || self.ids.iter().any(|i| i == id)
+    }
 }
 
 /// The base groups: their ids, and the former role each stands for.
@@ -77,14 +112,22 @@ pub fn load(data_dir: &Path, users: &[User]) {
             continue;
         }
         let members = users.iter().filter(|u| u.role == role).map(|u| u.id.clone()).collect();
-        all.push(Group { id: id.into(), name: base_name(id).into(), members, rights: crate::roles::former(data_dir, role), base: true });
+        all.push(Group { id: id.into(), name: base_name(id).into(), members, rights: crate::roles::former(data_dir, role), base: true, ..Default::default() });
         made = true;
+    }
+    // Rights of an earlier version as today's.
+    for g in &mut all {
+        let up = crate::roles::upgraded(&g.rights);
+        if up != g.rights {
+            g.rights = up;
+            made = true;
+        }
     }
     if made {
         if let Err(e) = crate::paths::write_json(&file, &all, false) {
             tracing::warn!("cannot save the groups: {e}");
         } else {
-            tracing::info!("the roles became the base groups (operators, streamers, readers)");
+            tracing::info!("the groups are saved with today's rights");
         }
     }
     *ALL.write().unwrap() = all;
@@ -123,7 +166,57 @@ pub fn rights_of(user: &str) -> Vec<String> {
 
 /// May one of the account's groups do this?
 pub fn allows(user: &str, perm: &str) -> bool {
-    ALL.read().unwrap().iter().any(|g| g.rights.iter().any(|r| r == perm) && g.members.iter().any(|m| m == user))
+    any_of(user, |g| g.rights.iter().any(|r| r == perm))
+}
+
+/// Does one of the account's groups say so?
+fn any_of(user: &str, f: impl Fn(&Group) -> bool) -> bool {
+    ALL.read().unwrap().iter().any(|g| g.members.iter().any(|m| m == user) && f(g))
+}
+
+/// May this account see this source (an admin: all)?
+pub fn sees_source(me: &User, id: &str) -> bool {
+    me.is_admin() || any_of(&me.id, |g| g.sources.has(id))
+}
+
+/// The sources an account's groups give it (None: all of them).
+pub fn sources_of(user: &str) -> Option<Vec<String>> {
+    let all = ALL.read().unwrap();
+    let mine: Vec<&Group> = all.iter().filter(|g| g.members.iter().any(|m| m == user)).collect();
+    if mine.iter().any(|g| g.sources.all) {
+        return None;
+    }
+    let mut ids: Vec<String> = mine.iter().flat_map(|g| g.sources.ids.iter().cloned()).collect();
+    ids.sort();
+    ids.dedup();
+    Some(ids)
+}
+
+/// May this account send clips to this file server (the right to send apart)?
+pub fn may_send_to(me: &User, target: &str) -> bool {
+    me.is_admin() || any_of(&me.id, |g| g.sends.has(target))
+}
+
+/// May this account stream to this destination (the right to stream apart)?
+pub fn may_stream_to(me: &User, dest: &str) -> bool {
+    me.is_admin() || any_of(&me.id, |g| g.dests.has(dest))
+}
+
+/// The file servers' former rule (who may send there) as the groups' lists, once: a server
+/// for every account that extracts goes to every group; one for some groups, to these.
+pub fn adopt_send_rules(rules: &[(String, String, Vec<String>)]) {
+    if !rules.iter().any(|(_, who, _)| who == "groups" || who == "admins") {
+        return;
+    }
+    let _one = WRITE.lock().unwrap();
+    let mut all = ALL.read().unwrap().clone();
+    for g in &mut all {
+        let ids: Vec<String> = rules.iter().filter(|(_, who, groups)| who == "extract" || (who == "groups" && groups.contains(&g.id))).map(|(id, _, _)| id.clone()).collect();
+        g.sends = Scope { all: false, ids };
+    }
+    if let Err(e) = save(all) {
+        tracing::warn!("cannot save the groups: {e}");
+    }
 }
 
 static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -188,6 +281,12 @@ struct Body {
     /// None: left as they are.
     #[serde(default)]
     rights: Option<Vec<String>>,
+    #[serde(default)]
+    sources: Option<Scope>,
+    #[serde(default)]
+    sends: Option<Scope>,
+    #[serde(default)]
+    dests: Option<Scope>,
 }
 
 fn check(s: &Shared, b: &Body, all: &[Group], id: &str, base: bool) -> Result<(String, Vec<String>), String> {
@@ -222,6 +321,7 @@ async fn get_all(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<
         for g in &mut all {
             g.members.retain(|m| *m == me.id);
             g.rights.clear();
+            (g.sources, g.sends, g.dests) = Default::default();
         }
     }
     Json(all)
@@ -232,7 +332,16 @@ async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): 
     let _one = WRITE.lock().unwrap();
     let mut all = list(&s);
     let (name, members) = check(&s, &b, &all, "", false).map_err(bad)?;
-    let g = Group { id: crate::api::new_id(), name, members, rights: clean_rights(&b.rights.clone().unwrap_or_default()), base: false };
+    let g = Group {
+        id: crate::api::new_id(),
+        name,
+        members,
+        rights: clean_rights(&b.rights.clone().unwrap_or_default()),
+        base: false,
+        sources: b.sources.clone().unwrap_or_default(),
+        sends: b.sends.clone().unwrap_or_default(),
+        dests: b.dests.clone().unwrap_or_default(),
+    };
     all.push(g.clone());
     save(all).map_err(bad)?;
     tracing::info!("{} created the group {}", me.username, g.name);
@@ -254,6 +363,11 @@ async fn update(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
     g.members = members;
     if let Some(r) = &b.rights {
         g.rights = clean_rights(r);
+    }
+    for (to, from) in [(&mut g.sources, &b.sources), (&mut g.sends, &b.sends), (&mut g.dests, &b.dests)] {
+        if let Some(x) = from {
+            *to = x.clone();
+        }
     }
     let g = g.clone();
     save(all).map_err(bad)?;
@@ -295,13 +409,14 @@ mod tests {
         load(&dir, &[op.clone(), st.clone(), boss.clone()]);
         assert_eq!(of_id(&op.id), vec!["operators"]);
         assert!(of_id(&boss.id).is_empty(), "an admin is in no base group");
-        assert!(op.can("extract.cut") && op.can("extract.send") && !op.can("schedule.rec"));
-        assert!(st.can("stream.pilot") && !st.can("extract.cut"));
-        assert!(boss.can("clips.all"));
+        assert!(op.can("cut.make") && op.can("cut.send") && !op.can("control.rec.start"));
+        assert!(st.can("stream.mixer") && !st.can("cut.make"));
+        assert!(boss.can("clips.all.delete"));
+        assert!(sees_source(&op, "any") && may_stream_to(&st, "any"), "all by default");
         // The directory makes the streamer a reader: out of the streamers, in the readers.
         assert!(set_base(&st.id, Role::Viewer).unwrap());
         assert_eq!(of_id(&st.id), vec!["viewers"]);
-        assert!(!st.can("stream.run"));
+        assert!(!st.can("stream.run.own"));
         // Read again: the groups are kept, not made again.
         load(&dir, &[op.clone(), st.clone(), boss]);
         assert_eq!(of_id(&st.id), vec!["viewers"]);

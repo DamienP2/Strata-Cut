@@ -26,8 +26,6 @@ export interface SendTarget {
   exists: 'rename' | 'replace' | 'skip';
   auto: boolean;
   sources: string[];
-  who: 'extract' | 'groups' | 'admins';
-  groups: string[];
   /** Read only: where it is, in words. */
   address?: string;
   /** Read only: its last send. */
@@ -97,7 +95,7 @@ export interface SendJob {
 export const KIND_TAG: Record<SendKind, string> = { smb: 'SMB', sftp: 'SFTP', ftp: 'FTP', webdav: 'DAV', dir: 'DIR' };
 
 export function blankTarget(): SendTarget {
-  return { id: '', name: '', kind: 'smb', host: '', port: 0, share: '', path: '', user: '', password: '', tls: 'explicit', folder: '{source}/{date}', exists: 'rename', auto: false, sources: [], who: 'extract', groups: [], usable: true };
+  return { id: '', name: '', kind: 'smb', host: '', port: 0, share: '', path: '', user: '', password: '', tls: 'explicit', folder: '{source}/{date}', exists: 'rename', auto: false, sources: [], usable: true };
 }
 
 /** The places this account may send to (an admin: all, set as they are). */

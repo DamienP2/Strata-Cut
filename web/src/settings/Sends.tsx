@@ -281,18 +281,16 @@ function SendModal({ target, onClose }: { target: SendTarget; onClose: () => voi
               </div>
             </Field>
           )}
-          <Field label={t('Who may send there when they want')} group className="span2">
-            <Segmented value={x.who} options={[{ value: 'extract', label: t('Who extracts') }, { value: 'groups', label: t('Groups…') }, { value: 'admins', label: t('Admins') }]} onChange={(who) => set({ who })} />
-            {x.who === 'groups' && (
-              <div className="snd-chips">
-                {groups.length === 0 && <span className="muted">{t('No group yet: an admin makes them in Système › Groupes.')}</span>}
-                {groups.map((g) => (
-                  <button key={g.id} type="button" className={x.groups.includes(g.id) ? 'on' : ''} onClick={() => set({ groups: toggleIn(x.groups, g.id) })}>
-                    {groupName(g)}
-                  </button>
-                ))}
-              </div>
-            )}
+          {/* Who may send there: said by the groups (Système › Groupes). */}
+          <Field label={t('Groups that may send there')} group className="span2">
+            <div className="snd-chips">
+              {groups.filter((g) => x.id && (g.sends?.all || g.sends?.ids.includes(x.id))).map((g) => (
+                <span key={g.id} className="on">
+                  {groupName(g)}
+                </span>
+              ))}
+              {!groups.some((g) => x.id && (g.sends?.all || g.sends?.ids.includes(x.id))) && <span className="muted">{t('Administrators only')}</span>}
+            </div>
           </Field>
         </div>
         <footer>

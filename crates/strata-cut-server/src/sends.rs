@@ -70,8 +70,11 @@ pub struct Target {
     /// Every new clip sent (of `sources`; none listed: of all).
     pub auto: bool,
     pub sources: Vec<String>,
-    /// Who sends there when they want: "extract" (who extracts), "groups", "admins".
+    /// Who sent there when they wanted, before the groups said it ("extract", "groups",
+    /// "admins"; empty since): read once, to make the groups' lists (`groups::adopt_send_rules`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub who: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<String>,
 }
 
@@ -92,7 +95,7 @@ impl Default for Target {
             exists: "rename".into(),
             auto: false,
             sources: Vec::new(),
-            who: "extract".into(),
+            who: String::new(),
             groups: Vec::new(),
         }
     }
@@ -107,9 +110,9 @@ impl Target {
         if !matches!(self.exists.as_str(), "rename" | "replace" | "skip") {
             self.exists = "rename".into();
         }
-        if !matches!(self.who.as_str(), "extract" | "groups" | "admins") {
-            self.who = "extract".into();
-        }
+        // Who may send there is said by the groups now.
+        self.who.clear();
+        self.groups.clear();
         let tls_ok = match self.kind.as_str() {
             "ftp" => matches!(self.tls.as_str(), "explicit" | "implicit" | "none"),
             "webdav" => matches!(self.tls.as_str(), "tls" | "none"),
@@ -200,15 +203,10 @@ impl Target {
         v
     }
 
-    /// May this account send there (when it wants)? It must be allowed to send at all.
-    fn usable_by(&self, me: &User, groups: &[String]) -> bool {
-        me.is_admin()
-            || me.can("extract.send")
-                && match self.who.as_str() {
-                "groups" => self.groups.iter().any(|g| groups.contains(g)),
-                "extract" => me.can("extract.cut"),
-                _ => false,
-            }
+    /// May this account send there (when it wants)? It must be allowed to send at all, and one
+    /// of its groups must give it this server.
+    fn usable_by(&self, me: &User) -> bool {
+        me.is_admin() || (me.can("cut.send") || me.can("clips.own.upload") || me.can("clips.all.upload")) && crate::groups::may_send_to(me, &self.id)
     }
 
     /// The same server and account (a saved password may go there).
@@ -270,7 +268,17 @@ fn list_path(dir: &Path) -> PathBuf {
 
 impl Sends {
     pub fn start(data_dir: &Path, events: Events, clips: Arc<Clips>) -> Arc<Self> {
-        let targets: Vec<Target> = crate::paths::read_json(&targets_path(data_dir)).unwrap_or_default();
+        let mut targets: Vec<Target> = crate::paths::read_json(&targets_path(data_dir)).unwrap_or_default();
+        // Who may send where: the targets' former rule becomes the groups' lists, once.
+        if targets.iter().any(|t| !t.who.is_empty()) {
+            crate::groups::adopt_send_rules(&targets.iter().map(|t| (t.id.clone(), t.who.clone(), t.groups.clone())).collect::<Vec<_>>());
+            for t in &mut targets {
+                t.normalize();
+            }
+            if let Err(e) = crate::paths::write_json(&targets_path(data_dir), &targets, true) {
+                tracing::warn!("cannot save the file servers: {e}");
+            }
+        }
         let mut list: Vec<Send> = crate::paths::read_json(&list_path(data_dir)).unwrap_or_default();
         // Going when the server stopped: again from the start.
         for s in list.iter_mut().filter(|s| s.state == SendState::Running) {
@@ -358,11 +366,11 @@ impl Sends {
 
     /// A new clip: to the places that take every new clip (of its source), and to those its
     /// maker chose when extracting (that they may use).
-    pub fn clip_made(&self, clip: &Clip, chosen: &[String], maker: Option<&User>, groups: &[String]) {
+    pub fn clip_made(&self, clip: &Clip, chosen: &[String], maker: Option<&User>) {
         let targets = self.targets.lock().unwrap().clone();
         for t in &targets {
             let auto = t.auto && (t.sources.is_empty() || t.sources.contains(&clip.recorder));
-            let asked = chosen.contains(&t.id) && maker.is_some_and(|m| t.usable_by(m, groups));
+            let asked = chosen.contains(&t.id) && maker.is_some_and(|m| t.usable_by(m));
             if auto || asked {
                 self.queue(clip, t, if asked { maker.map(|m| m.id.as_str()).unwrap_or("") } else { "" });
             }
@@ -1074,12 +1082,11 @@ async fn list_targets(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> 
                 .collect(),
         ));
     }
-    let groups = crate::groups::of(&s, &me.id);
     // Those it may send to, and those clips go to by themselves (shown, not chosen).
     Json(Value::Array(
         all.iter()
-            .filter(|t| t.auto || t.usable_by(&me, &groups))
-            .map(|t| json!({ "id": t.id, "name": t.name, "kind": t.kind, "folder": t.folder, "base": t.base(), "auto": t.auto, "sources": t.sources, "usable": t.usable_by(&me, &groups) }))
+            .filter(|t| t.auto || t.usable_by(&me))
+            .map(|t| json!({ "id": t.id, "name": t.name, "kind": t.kind, "folder": t.folder, "base": t.base(), "auto": t.auto, "sources": t.sources, "usable": t.usable_by(&me) }))
             .collect(),
     ))
 }
@@ -1198,7 +1205,7 @@ async fn browse(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): 
 
 /// The sends of the clips this account sees (and whether each is its own).
 async fn list_sends(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<Value> {
-    if !me.can("clips.view") {
+    if !me.can("clips.access") {
         return Json(Value::Array(Vec::new()));
     }
     let groups = crate::groups::of(&s, &me.id);
@@ -1227,15 +1234,19 @@ struct SendBody {
 }
 
 async fn send(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(b): Json<SendBody>) -> ApiResult<Json<Value>> {
-    require(me.can("clips.view") && me.can("extract.send"))?;
+    require(me.can("clips.access"))?;
     let groups = crate::groups::of(&s, &me.id);
     let target = s.sends.target(&b.target).ok_or_else(|| not_found("place"))?;
-    if !target.usable_by(&me, &groups) {
+    if !target.usable_by(&me) {
         return Err((StatusCode::FORBIDDEN, "you do not have the rights for this".into()));
     }
     let mut out = Vec::new();
     for id in b.clips.iter().take(500) {
         let clip = s.clips.get(id).filter(|c| c.visible(&me, &groups)).ok_or_else(|| not_found("clip"))?;
+        // Its own, or the others': each its right to upload.
+        if !clip.may(&me, &groups, "upload") {
+            return Err((StatusCode::FORBIDDEN, "you do not have the rights for this".into()));
+        }
         out.push(s.sends.queue(&clip, &target, &me.id));
     }
     tracing::info!("{} sends {} clip(s) to {}", me.username, out.len(), target.name);

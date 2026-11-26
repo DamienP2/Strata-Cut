@@ -796,7 +796,7 @@ function Editor({ rec }: { rec: Recorder }) {
           }
         />
       )}
-      {rec.protocol !== 'page' && <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={can.has(user, 'schedule.edit')} act={act} />}
+      {rec.protocol !== 'page' && <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={can.has(user, 'control.slots.own') || can.has(user, 'control.slots.all')} act={act} />}
     </>
   );
 }

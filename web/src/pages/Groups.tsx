@@ -6,12 +6,15 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Eye, Plus, Radio, Scissors, Search, Trash2, UsersRound, X } from 'lucide-react';
 import { create } from 'zustand';
-import { t, tn } from '../i18n';
+import { t, tc, tn } from '../i18n';
 import { api, useApp, useChanged, type PublicUser } from '../store';
 import { confirmDialog } from '../ui/dialogs';
 import { showError } from '../ui/serverError';
 import { displayName, initial } from '../ui/UserMenu';
-import { Field, Switch } from '../settings/ui';
+import { Switch } from '../settings/ui';
+import { RecLogo } from '../ui/RecLogo';
+import { KIND_TAG, useSendTargets, type SendTarget } from '../sends';
+import { useDestinations } from '../streams';
 import { PageHead } from './SidePage';
 import { loadUsers, useUserList } from './userList';
 
@@ -24,6 +27,16 @@ export interface Group {
   rights: string[];
   /** A base group: its name is fixed, it cannot be deleted. */
   base: boolean;
+  /** The sources its members see, the file servers and the destinations they may send to. */
+  sources?: Scope;
+  sends?: Scope;
+  dests?: Scope;
+}
+
+/** All of them, or these only. */
+export interface Scope {
+  all: boolean;
+  ids: string[];
 }
 
 /** The groups, reloaded when the server says they changed. */
@@ -53,6 +66,8 @@ export function GroupIcon({ g, size = 15 }: { g: Pick<Group, 'id' | 'base'>; siz
 export interface Perm {
   key: string;
   part: string;
+  /** The clips': "Theirs" / "The others'" (else empty). */
+  sub: string;
   label: string;
 }
 /** The rights there are (asked once, admins only). */
@@ -136,6 +151,19 @@ export function Groups() {
       <div className="gr-areas">
         <RightsSummary rights={g.rights} />
       </div>
+      <div className="gr-scopes">
+        {(
+          [
+            [t('Sources'), g.sources],
+            [t('File servers'), g.sends],
+            [t('Destinations'), g.dests],
+          ] as const
+        ).map(([label, sc]) => (
+          <span key={label}>
+            {label} <b>{!sc || sc.all ? tc('scope', 'All') : sc.ids.length}</b>
+          </span>
+        ))}
+      </div>
     </div>
   );
 
@@ -167,11 +195,52 @@ export function Groups() {
   );
 }
 
+/** The rights of a part, under their sub-heading when they have one (the clips'). */
+export function subsOf(list: Perm[]): [string, Perm[]][] {
+  const out: [string, Perm[]][] = [];
+  for (const p of list) {
+    const last = out[out.length - 1];
+    if (last && last[0] === p.sub) last[1].push(p);
+    else out.push([p.sub, [p]]);
+  }
+  return out;
+}
+
+type ModalTab = 'members' | 'rights' | 'sources' | 'sends' | 'dests';
+
+/** All of them, or these only: a switch, then the list to tick. */
+function ScopePick({ scope, items, onChange, empty }: { scope: Scope; items: { id: string; name: string; sub?: string; icon?: React.ReactNode }[]; onChange: (s: Scope) => void; empty: string }) {
+  const flip = (id: string) => onChange({ all: false, ids: scope.ids.includes(id) ? scope.ids.filter((x) => x !== id) : [...scope.ids, id] });
+  return (
+    <div className="gm-scope">
+      <Switch checked={scope.all} onChange={(all) => onChange({ all, ids: all ? [] : items.map((x) => x.id) })} label={t('All, the new ones too')} />
+      {items.length === 0 && <span className="muted">{empty}</span>}
+      <div className={`gm-list ${scope.all ? 'off' : ''}`}>
+        {items.map((x) => (
+          <label key={x.id} className={`gm-item ${scope.all || scope.ids.includes(x.id) ? 'on' : ''}`}>
+            <input type="checkbox" checked={scope.all || scope.ids.includes(x.id)} disabled={scope.all} onChange={() => flip(x.id)} />
+            {x.icon}
+            <b>{x.name}</b>
+            {x.sub && <span className="muted">{x.sub}</span>}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function GroupModal({ group, users, onClose }: { group: Group | null; users: PublicUser[]; onClose: () => void }) {
   const perms = usePerms((s) => s.perms) ?? [];
+  const recorders = useApp((s) => s.allRecorders);
+  const [targets] = useSendTargets<SendTarget>();
+  const [dests] = useDestinations();
+  const [tab, setTab] = useState<ModalTab>('members');
   const [name, setName] = useState(group?.name ?? '');
   const [members, setMembers] = useState<Set<string>>(() => new Set(group?.members ?? []));
   const [rights, setRights] = useState<Set<string>>(() => new Set(group?.rights ?? []));
+  const [sources, setSources] = useState<Scope>(group?.sources ?? { all: true, ids: [] });
+  const [sends, setSends] = useState<Scope>(group?.sends ?? { all: true, ids: [] });
+  const [destsScope, setDests] = useState<Scope>(group?.dests ?? { all: true, ids: [] });
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState(false);
   const base = !!group?.base;
@@ -188,7 +257,7 @@ function GroupModal({ group, users, onClose }: { group: Group | null; users: Pub
     e.preventDefault();
     if ((!base && !name.trim()) || busy) return;
     setBusy(true);
-    const body = { name: name.trim(), members: [...members], rights: [...rights] };
+    const body = { name: name.trim(), members: [...members], rights: [...rights], sources, sends, dests: destsScope };
     try {
       if (group) await api('PUT', `/api/groups/${group.id}`, body);
       else await api('POST', '/api/groups', body);
@@ -210,23 +279,36 @@ function GroupModal({ group, users, onClose }: { group: Group | null; users: Pub
       showError(e);
     }
   };
+  const count = (sc: Scope, n: number) => (sc.all ? tc('scope', 'All') : `${sc.ids.length}/${n}`);
+  const tabs: { id: ModalTab; label: string; n: string }[] = [
+    { id: 'members', label: t('Members'), n: String(members.size) },
+    { id: 'rights', label: t('Rights'), n: String(rights.size) },
+    { id: 'sources', label: t('Sources'), n: count(sources, recorders.length) },
+    { id: 'sends', label: t('File servers'), n: count(sends, targets?.length ?? 0) },
+    { id: 'dests', label: t('Destinations'), n: count(destsScope, dests?.length ?? 0) },
+  ];
   const keys = (e: React.KeyboardEvent) => e.key !== 'Escape' && e.stopPropagation();
   return (
     <div className="modal-back" onPointerDown={onClose}>
-      <form className="modal xwide gr-modal" role="dialog" onPointerDown={(e) => e.stopPropagation()} onSubmit={submit} onKeyDown={keys}>
+      <form className="modal xwide gm" role="dialog" onPointerDown={(e) => e.stopPropagation()} onSubmit={submit} onKeyDown={keys}>
         <header>
-          {group && <GroupIcon g={group} />}
-          <h2>{group ? groupName(group) : t('New group')}</h2>
+          {group ? <GroupIcon g={group} /> : <GroupIcon g={{ id: '', base: false }} />}
+          {base ? <h2>{groupName(group!)}</h2> : <input className="gm-name" value={name} autoFocus maxLength={60} placeholder={t('Name of the group')} onChange={(e) => setName(e.target.value)} />}
           <button type="button" className="icon-btn ghost" title={t('Close')} onClick={onClose}>
             <X size={16} />
           </button>
         </header>
-        <div className="gr-modal-body">
-          <div className="gr-col">
-            <Field label={t('Name')}>
-              <input value={base ? groupName(group!) : name} disabled={base} autoFocus={!base} maxLength={60} placeholder={t('Journalists, Sport desk…')} onChange={(e) => setName(e.target.value)} />
-            </Field>
-            <Field label={t('Members')} group hint={tn(members.size, '{n} member', '{n} members')}>
+        <div className="gm-body">
+          <nav className="gm-tabs" role="tablist">
+            {tabs.map((x) => (
+              <button key={x.id} type="button" role="tab" aria-selected={tab === x.id} className={tab === x.id ? 'on' : ''} onClick={() => setTab(x.id)}>
+                <span>{x.label}</span>
+                <em>{x.n}</em>
+              </button>
+            ))}
+          </nav>
+          <div className="gm-pane">
+            {tab === 'members' && (
               <div className="sc-members-pick">
                 <label className="search">
                   <Search size={14} />
@@ -246,21 +328,33 @@ function GroupModal({ group, users, onClose }: { group: Group | null; users: Pub
                   {shown.length === 0 && <span className="muted">{t('No match')}</span>}
                 </div>
               </div>
-            </Field>
-          </div>
-          <div className="gr-col">
-            <Field label={t('Rights')} group>
-              <div className="gr-rights">
+            )}
+            {tab === 'rights' && (
+              <div className="gm-rights">
                 {partsOf(perms).map(([part, list]) => (
-                  <div key={part} className="gr-part">
-                    <span className="gr-part-name">{t(part)}</span>
-                    {list.map((p) => (
-                      <Switch key={p.key} checked={rights.has(p.key)} onChange={() => flip(setRights, p.key)} label={t(p.label)} />
+                  <section key={part} className="gm-part">
+                    <h3>{t(part)}</h3>
+                    {subsOf(list).map(([sub, items]) => (
+                      <div key={sub} className="gm-sub">
+                        {sub && <span className="gm-sub-name">{t(sub)}</span>}
+                        <div className={sub ? 'gm-row' : 'gm-col'}>
+                          {items.map((p) => (
+                            <Switch key={p.key} checked={rights.has(p.key)} onChange={() => flip(setRights, p.key)} label={t(p.label)} />
+                          ))}
+                        </div>
+                      </div>
                     ))}
-                  </div>
+                  </section>
                 ))}
+                <section className="gm-part dim">
+                  <h3>{t('System')}</h3>
+                  <span className="muted">{t('Administrators only')}</span>
+                </section>
               </div>
-            </Field>
+            )}
+            {tab === 'sources' && <ScopePick scope={sources} onChange={setSources} empty={t('No recorder')} items={recorders.map((r) => ({ id: r.id, name: r.name, icon: <RecLogo rec={r} size="sm" />, sub: r.protocol.toUpperCase() }))} />}
+            {tab === 'sends' && <ScopePick scope={sends} onChange={setSends} empty={t('No file server')} items={(targets ?? []).map((x) => ({ id: x.id, name: x.name, sub: KIND_TAG[x.kind] }))} />}
+            {tab === 'dests' && <ScopePick scope={destsScope} onChange={setDests} empty={t('No destination')} items={(dests ?? []).map((d) => ({ id: d.id, name: d.name, sub: d.protocol.toUpperCase() }))} />}
           </div>
         </div>
         <footer>

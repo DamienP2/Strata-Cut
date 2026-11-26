@@ -231,7 +231,7 @@ function Fader({ value, min, max, step, disabled, label, onChange, onReset }: { 
 
 /** The sound: each track's level, meter and switch (left); what goes out, and the headphones (right). */
 export function Mixer({ rec, prog, monitor, shown }: { rec: Recorder; prog: ProgramApi; monitor: Monitor; shown: () => number | null }) {
-  const run = useApp((s) => can.has(s.auth?.user, "stream.program"));
+  const run = useApp((s) => can.has(s.auth?.user, "stream.mixer"));
   const n = prog.state?.tracks.length ?? 0;
   const { lv: levels, recent } = useLevels(rec.id, n, shown);
   const toast = useApp((s) => s.toast);
@@ -368,7 +368,7 @@ export type Tab = "image" | "overlay";
 
 /** The source's pictures: its image, its overlay. */
 export function PicturesModal({ rec, prog, use, onClose, onPlace }: { rec: Recorder; prog: ProgramApi; use: Tab; onClose: () => void; onPlace: (p: { x: number; y: number; size: number }) => void }) {
-  const run = useApp((s) => can.has(s.auth?.user, "stream.program"));
+  const run = useApp((s) => can.has(s.auth?.user, "stream.mixer"));
   const width = useApp((s) => s.status[rec.id]?.media?.width) || 1920;
   if (!prog.state) return null;
   const p = prog.state.program;

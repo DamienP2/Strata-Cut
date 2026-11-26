@@ -60,6 +60,8 @@ export function Clips() {
   /** The clips ticked, for actions on several at once. */
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const admin = can.admin(user);
+  // The others' clips (not shared with it): its own tab.
+  const seesAll = admin || can.has(user, 'clips.all.view');
   const [allTargets] = useSendTargets();
   // The places this account may send to (not those it only sees as automatic).
   const targets = allTargets?.filter((x) => x.usable) ?? null;
@@ -79,7 +81,7 @@ export function Clips() {
   useChanged('groups', () => void loadGroups());
   // A clip gone (deleted here or elsewhere), or no longer on this tab, is no longer ticked.
   const all = clips ?? [];
-  const inTab = useMemo(() => all.filter((c) => (tab === 'all' && admin) || (tab === 'shared' ? c.sharedWithMe : c.mine)), [all, tab, admin]);
+  const inTab = useMemo(() => all.filter((c) => (tab === 'all' && seesAll) || (tab === 'shared' ? c.sharedWithMe : c.mine)), [all, tab, seesAll]);
   useEffect(() => {
     setPicked((p) => {
       const ids = new Set(inTab.map((c) => c.id));
@@ -100,9 +102,11 @@ export function Clips() {
   const shown = inTab.filter((c) => (!source || c.recorder === source) && (!q || `${c.name} ${c.recorderName} ${c.createdBy}`.toLowerCase().includes(q.toLowerCase())));
   const total = inTab.reduce((a, c) => a + c.size, 0);
   const recOf = (id: string) => recorders.find((r) => r.id === id);
-  // Its own clips, as its role allows (an admin: any).
-  const mayShare = (c: Clip) => admin || (!!c.mine && can.has(user, 'clips.share'));
-  const mayDelete = (c: Clip) => admin || (!!c.mine && can.has(user, 'clips.delete'));
+  // What it may do with each clip: its own and the others' have their rights (the server says).
+  const mayShare = (c: Clip) => admin || !!c.may?.share;
+  const mayDelete = (c: Clip) => admin || !!c.may?.delete;
+  const mayDownload = (c: Clip) => admin || !!c.may?.download;
+  const mayUpload = (c: Clip) => admin || !!c.may?.upload;
 
   // By recorder (the one with the newest clip first), then by day, the newest first.
   const byRecorder = [...new Set(shown.map((c) => c.recorder))]
@@ -136,7 +140,7 @@ export function Clips() {
   };
   const downloadMany = () => {
     // One download after another (a browser lets a page start several).
-    pickedClips.forEach((c, i) =>
+    pickedClips.filter(mayDownload).forEach((c, i) =>
       setTimeout(() => {
         const a = document.createElement('a');
         a.href = `/api/clips/${c.id}/download`;
@@ -164,7 +168,7 @@ export function Clips() {
   const tabs: { id: Tab; label: string; n: number }[] = [
     { id: 'mine', label: t('My clips'), n: count.mine },
     { id: 'shared', label: t('Shared with me'), n: count.shared },
-    ...(admin ? [{ id: 'all' as Tab, label: t('All clips'), n: count.all }] : []),
+    ...(seesAll ? [{ id: 'all' as Tab, label: t('All clips'), n: count.all }] : []),
   ];
 
   return (
@@ -218,11 +222,13 @@ export function Clips() {
                 <strong>{tn(picked.size, '{n} clip selected', '{n} clips selected')}</strong>
                 <span className="muted">{size(pickedClips.reduce((a, c) => a + c.size, 0), locale(), fr)}</span>
                 <div className="spacer" />
-                <button type="button" className="btn small" onClick={downloadMany}>
-                  <Download size={13} /> {t('Download')}
-                </button>
-                {(targets ?? []).length > 0 && (
-                  <button type="button" className="btn small" onClick={(e) => sendMenu(e, pickedClips.map((c) => c.id))}>
+                {pickedClips.some(mayDownload) && (
+                  <button type="button" className="btn small" onClick={downloadMany}>
+                    <Download size={13} /> {t('Download')}
+                  </button>
+                )}
+                {(targets ?? []).length > 0 && pickedClips.some(mayUpload) && (
+                  <button type="button" className="btn small" onClick={(e) => sendMenu(e, pickedClips.filter(mayUpload).map((c) => c.id))}>
                     <Upload size={13} /> {t('Send to')} ▾
                   </button>
                 )}
@@ -402,14 +408,16 @@ export function Clips() {
                                 <button className="icon-btn ghost" title={t('Play')} onClick={() => setOpen(c)}>
                                   <Play size={14} />
                                 </button>
-                                {(targets ?? []).length > 0 && (
+                                {(targets ?? []).length > 0 && mayUpload(c) && (
                                   <button className="icon-btn ghost" title={t('Send to')} onClick={(e) => sendMenu(e, [c.id])}>
                                     <Upload size={14} />
                                   </button>
                                 )}
-                                <a className="icon-btn ghost" title={t('Download')} href={`/api/clips/${c.id}/download`}>
-                                  <Download size={14} />
-                                </a>
+                                {mayDownload(c) && (
+                                  <a className="icon-btn ghost" title={t('Download')} href={`/api/clips/${c.id}/download`}>
+                                    <Download size={14} />
+                                  </a>
+                                )}
                                 {mayDelete(c) && (
                                   <button className="icon-btn ghost" title={t('Delete')} onClick={() => void remove(c)}>
                                     <Trash2 size={14} />

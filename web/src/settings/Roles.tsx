@@ -7,7 +7,7 @@ import { Check, ShieldCheck } from 'lucide-react';
 import { t } from '../i18n';
 import { api, useApp, useChanged } from '../store';
 import { PageHead } from '../pages/SidePage';
-import { GroupIcon, groupName, loadGroups, loadPerms, partsOf, useGroups, usePerms, type Group } from '../pages/Groups';
+import { GroupIcon, groupName, loadGroups, loadPerms, partsOf, subsOf, useGroups, usePerms, type Group } from '../pages/Groups';
 import { showError } from '../ui/serverError';
 
 /** What only the admins do (shown, never given). */
@@ -62,8 +62,16 @@ export function Roles() {
                 <tr className="rl-part">
                   <td colSpan={cols.length + 2}>{t(part)}</td>
                 </tr>
-                {list.map((p) => (
-                  <tr key={p.key}>
+                {subsOf(list).flatMap(([sub, items]) => [
+                  ...(sub
+                    ? [
+                        <tr key={`sub-${sub}`} className="rl-sub">
+                          <td colSpan={cols.length + 2}>{t(sub)}</td>
+                        </tr>,
+                      ]
+                    : []),
+                  ...items.map((p) => (
+                  <tr key={p.key} className={sub ? 'rl-in' : ''}>
                     <td>{t(p.label)}</td>
                     <td className="rl-cell">
                       <Check size={14} className="rl-always" />
@@ -74,7 +82,8 @@ export function Roles() {
                       </td>
                     ))}
                   </tr>
-                ))}
+                  )),
+                ])}
               </tbody>
             ))}
             <tbody>

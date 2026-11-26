@@ -39,9 +39,12 @@ const hhmm = (ms: number, tz: string) => clock(ms, tz).slice(0, 5);
 export function Schedule() {
   const { recorders, user, timezone, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, user: s.auth?.user, timezone: s.timezone, toast: s.toast })));
   // Starting, stopping, programming: as the role allows.
-  const admin = can.has(user, 'schedule.edit');
-  // REC / Stop on a source: its own right (programming is another).
-  const canRec = can.has(user, 'schedule.rec');
+  // Programming: its own recordings, or the others' too.
+  const admin = can.has(user, 'control.slots.own') || can.has(user, 'control.slots.all');
+  const mayEdit = (slot: Slot) => can.has(user, 'control.slots.all') || (can.has(user, 'control.slots.own') && slot.by === user?.id);
+  // REC / Stop on a source: their own rights (stopping only what it started, when so).
+  const canRec = can.has(user, 'control.rec.start');
+  const mayStop = (r: Recorder) => can.has(user, 'control.rec.stop') || (can.has(user, 'control.rec.stop.own') && r.recBy === user?.id);
   const [slots, setSlots] = useState<Slot[] | null>(null);
   const [only, setOnly] = useDisplayPref<string | null>('schedule.recorder', null);
   const [edit, setEdit] = useState<{ slot: Slot | null; initial?: Partial<Slot> } | null>(null);
@@ -81,12 +84,12 @@ export function Schedule() {
         ) : (
           <>
             <TzWarning timezone={timezone} admin={admin} />
-            <Calendar recorders={programmed} slots={slots} timezone={timezone} admin={admin} canRec={canRec} onOpen={(slot) => setEdit({ slot })} onNew={(initial) => setEdit({ slot: null, initial })} />
+            <Calendar recorders={programmed} slots={slots} timezone={timezone} admin={admin} canRec={canRec} mayStop={mayStop} onOpen={(slot) => setEdit({ slot })} onNew={(initial) => setEdit({ slot: null, initial })} />
           </>
         )}
       </div>
-      <SlotPanel slots={slots} recorders={programmed} names={names} timezone={timezone} admin={admin} only={only} setOnly={setOnly} onOpen={(slot) => setEdit({ slot })} onNew={() => setEdit({ slot: null })} />
-      {edit && <SlotModal slot={edit.slot} initial={edit.initial} recorders={programmed} preset={only} names={names} timezone={timezone} admin={admin} onClose={() => setEdit(null)} />}
+      <SlotPanel slots={slots} recorders={programmed} names={names} timezone={timezone} admin={admin} mayEdit={mayEdit} mayStop={mayStop} only={only} setOnly={setOnly} onOpen={(slot) => setEdit({ slot })} onNew={() => setEdit({ slot: null })} />
+      {edit && <SlotModal slot={edit.slot} initial={edit.initial} recorders={programmed} preset={only} names={names} timezone={timezone} admin={edit.slot ? mayEdit(edit.slot) : admin} onClose={() => setEdit(null)} />}
     </div>
   );
 }
@@ -104,7 +107,7 @@ function repeatOf(s: Slot, names: string[]): string {
  * On the right: the slots programmed, by day (today, tomorrow, later), each with its state;
  * then those finished over the last days (what was recorded of each, to extract).
  */
-function SlotPanel({ slots, recorders, names, timezone, admin, only, setOnly, onOpen, onNew }: { slots: Slot[]; recorders: Recorder[]; names: string[]; timezone: string; admin: boolean; only: string | null; setOnly: (id: string | null) => void; onOpen: (s: Slot) => void; onNew: () => void }) {
+function SlotPanel({ slots, recorders, names, timezone, admin, mayEdit, mayStop, only, setOnly, onOpen, onNew }: { slots: Slot[]; recorders: Recorder[]; names: string[]; timezone: string; admin: boolean; mayEdit: (s: Slot) => boolean; mayStop: (r: Recorder) => boolean; only: string | null; setOnly: (id: string | null) => void; onOpen: (s: Slot) => void; onNew: () => void }) {
   const done = useFinished();
   const now = serverNow();
   const nameOf = (id: string) => recorders.find((r) => r.id === id)?.name ?? '—';
@@ -198,7 +201,7 @@ function SlotPanel({ slots, recorders, names, timezone, admin, only, setOnly, on
                     ) : (
                       <span className="sc-pill">{t('No signal')}</span>
                     )}
-                    {admin && (
+                    {mayStop(r) && (
                       <span className="sc-slot-acts" onClick={(e) => e.stopPropagation()}>
                         <button className="stop-btn icon" data-tip={t('Stop')} aria-label={t('Stop')} onClick={() => void stopContinuous(r)}>
                           <Square size={10} />
@@ -240,7 +243,7 @@ function SlotPanel({ slots, recorders, names, timezone, admin, only, setOnly, on
                     ) : (
                       <span className="sc-pill soon">{t('in {d}', { d: until(n.start - now) })}</span>
                     )}
-                    {admin && (
+                    {mayEdit(s) && (
                       <span className="sc-slot-acts" onClick={(e) => e.stopPropagation()}>
                         <button className="icon-btn ghost" data-tip={s.enabled ? t('Pause') : t('Resume')} aria-label={s.enabled ? t('Pause') : t('Resume')} onClick={() => void toggle(s)}>
                           {s.enabled ? <Pause size={13} /> : <Play size={13} />}
@@ -635,7 +638,7 @@ const recMode = (r: Recorder): RecMode => (r.enabled ? 'continuous' : r.slotsOff
 
 /** A source at the head of its line: its picture (REC on it while it records), its logo and name,
  * and (as the role allows) REC to record it all the time, or Stop. */
-function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
+function SourceHead({ rec, canRec, mayStop }: { rec: Recorder; canRec: boolean; mayStop: (r: Recorder) => boolean }) {
   const st = useApp((s) => s.status[rec.id]);
   const [busy, setBusy] = useState(false);
   const setMode = async (mode: 'slots') => {
@@ -681,7 +684,7 @@ function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
         <RecLogo rec={rec} size="sm" />
         <b title={rec.name}>{rec.name}</b>
       </span>
-      {admin &&
+      {(rec.enabled ? mayStop(rec) : canRec) &&
         (rec.enabled ? (
           <button type="button" className="sc-head-rec stop-btn" disabled={busy} data-tip={t('Stop recording all the time')} onClick={() => void setMode('slots')}>
             <Square size={9} /> {t('Stop')}
@@ -695,7 +698,7 @@ function SourceHead({ rec, admin }: { rec: Recorder; admin: boolean }) {
   );
 }
 
-function Calendar({ recorders, slots, timezone, admin, canRec, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; canRec: boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
+function Calendar({ recorders, slots, timezone, admin, canRec, mayStop, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; canRec: boolean; mayStop: (r: Recorder) => boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
   // 6 h by default (from an hour ago), 12 h, a day, a week.
   const [view, setView] = useDisplayPref<View>('schedule.view', '6h');
   const [anchor, setAnchor] = useState(() => anchorFor(view, serverNow(), timezone));
@@ -859,7 +862,7 @@ function Calendar({ recorders, slots, timezone, admin, canRec, onOpen, onNew }: 
           const guide = guides[r.id] ?? [];
           return (
             <div key={r.id} className="sc-cal-row">
-              <SourceHead rec={r} admin={canRec} />
+              <SourceHead rec={r} canRec={canRec} mayStop={mayStop} />
               <div
                 className={`sc-cal-lane ${admin ? 'edit' : ''}`}
                 onPointerDown={(e) => {

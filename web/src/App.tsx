@@ -83,12 +83,12 @@ function Shell({ route }: { route: Route }) {
   const admin = can.admin(user);
   const health = useHealth((s) => s.health);
   const system = visibleSystem(user).length > 0;
-  // The pages its role opens (Système › Accès › Rôles).
+  // The pages its groups open (Système › Accès › Autorisations).
   const pages = {
-    schedule: can.has(user, 'schedule.view'),
-    extract: can.has(user, 'extract.view'),
-    streamer: can.has(user, 'stream.view'),
-    clips: can.has(user, 'clips.view'),
+    schedule: can.has(user, 'control.access'),
+    extract: can.has(user, 'cut.access'),
+    streamer: can.has(user, 'stream.access'),
+    clips: can.has(user, 'clips.access'),
   };
   const home = pages.extract ? '/extract' : pages.schedule ? '/schedule' : pages.streamer ? '/streamer' : pages.clips ? '/clips' : '/help';
   const streamer = pages.streamer;

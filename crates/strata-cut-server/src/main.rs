@@ -286,8 +286,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
         let (to, users) = (sends.clone(), auth.clone());
         let _ = clips.made.set(Box::new(move |clip, chosen, by| {
             let maker = users.get(by);
-            let groups = crate::groups::of_id(by);
-            to.clip_made(clip, chosen, maker.as_ref(), &groups);
+            to.clip_made(clip, chosen, maker.as_ref());
         }));
         let gone = sends.clone();
         let _ = clips.gone.set(Box::new(move |id| gone.clip_gone(id)));

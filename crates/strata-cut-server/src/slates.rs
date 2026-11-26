@@ -92,7 +92,7 @@ pub fn routes() -> Router<Shared> {
 }
 
 async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view"))?;
+    require(me.can("stream.access"))?;
     let i = load(&s.data_dir);
     Ok(Json(json!({ "images": i.images })))
 }
@@ -110,7 +110,7 @@ struct Named {
 }
 
 async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Named>, body: Bytes) -> ApiResult<Json<Image>> {
-    require(me.can("stream.program"))?;
+    require(me.can("stream.mixer"))?;
     if body.len() > MAX {
         return Err(bad("an image is 10 MB at most"));
     }
@@ -156,7 +156,7 @@ async fn add(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Qu
 }
 
 async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
-    require(me.can("stream.program"))?;
+    require(me.can("stream.mixer"))?;
     let data_dir = s.data_dir.clone();
     let gone = crate::api::blocking(move || -> Result<Option<Image>, String> {
         let _g = LOCK.lock().unwrap();
@@ -176,7 +176,7 @@ async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(i
 }
 
 async fn image(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
-    require(me.can("stream.view"))?;
+    require(me.can("stream.access"))?;
     let img = load(&s.data_dir).images.into_iter().find(|x| x.id == id).ok_or_else(|| not_found("image"))?;
     let data = tokio::fs::read(dir(&s.data_dir).join(format!("{}.{}", img.id, img.ext))).await.map_err(|_| not_found("image"))?;
     let mime = kind(&data).map(|k| k.1).unwrap_or("application/octet-stream");

@@ -69,8 +69,8 @@ export function Streamer({ source }: { source?: string }) {
 function Center({ rec }: { rec: Recorder }) {
   const { st, timezone } = useApp(useShallow((s) => ({ st: s.status[rec.id], timezone: s.timezone })));
   // Preparing the output (picture, overlay, sound), and piloting a web page: each its right.
-  const run = useApp((s) => can.has(s.auth?.user, 'stream.program'));
-  const pilot = useApp((s) => can.has(s.auth?.user, 'stream.pilot'));
+  const run = useApp((s) => can.has(s.auth?.user, 'stream.mixer'));
+  const pilot = run;
   // A test pattern is made only while shown here (asked again every 10 s).
   useEffect(() => {
     if (rec.protocol !== 'pattern') return;
@@ -251,7 +251,10 @@ interface Draft {
 const SAID_MS = 8000;
 
 function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Destination[] | null; streams: StreamInfo[]; failed: StreamInfo[] }) {
-  const run = useApp((s) => can.has(s.auth?.user, 'stream.run'));
+  // Streaming: its own lives, or the others' too; a live stopped by who may.
+  const me = useApp((s) => s.auth?.user);
+  const run = can.has(me, 'stream.run.own') || can.has(me, 'stream.run.all');
+  const mayStop = (s?: StreamInfo) => !!s && (can.has(me, 'stream.run.all') || (can.has(me, 'stream.run.own') && s.byId === me?.id));
   const { recorders, toast } = useApp(useShallow((s) => ({ recorders: s.recorders, toast: s.toast })));
   const [starting, setStarting] = useState(false);
   // A countdown shown: drawn again every second.
@@ -392,7 +395,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
                     })()}
                     <div className="st-card-foot">
                       <span>{t('{v} sent', { v: volume(s.bytes, locale(), lang() === 'fr') })}</span>
-                      {run && (
+                      {mayStop(s) && (
                         <button type="button" className="btn small stop-btn" onClick={() => void stop(d)}>
                           <Square size={9} /> {t('Stop')}
                         </button>
@@ -444,7 +447,7 @@ function DestPanel({ rec, dests, streams, failed }: { rec: Recorder; dests: Dest
             <b>{mine.length}</b> {t('on air')} · <b>{mbps(mine.reduce((a, s) => a + s.kbps, 0), locale())}</b>
           </span>
           <span className="spacer" />
-          {run && (
+          {mine.some(mayStop) && (
             <button type="button" className="btn small stop-btn" onClick={() => void stopAll()}>
               <Square size={9} /> {t('Stop all')}
             </button>

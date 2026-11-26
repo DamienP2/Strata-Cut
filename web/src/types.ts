@@ -29,6 +29,8 @@ export interface Recorder {
   platform?: string;
   /** Loop length, hours. */
   loopHours: number;
+  /** Who pressed REC last (account id). */
+  recBy?: string;
   /** Expected bitrate, Mb/s: the loop's space is reserved from it (0 = unknown). DeckLink: the recording's bitrate. */
   bitrate: number;
   /** A source the server encodes (page, pattern, NDI, DeckLink): a constant rate (CBR), else variable (VBR). */
@@ -123,6 +125,8 @@ export interface Slot {
   start: string;
   end: string;
   enabled: boolean;
+  /** Who programmed it (account id). */
+  by?: string;
   /** Sent by the server: the next (or current) occurrence. */
   next?: { start: number; end: number } | null;
   active?: boolean;
@@ -169,6 +173,8 @@ export interface Clip {
   mine?: boolean;
   /** Shared with the one asking (not theirs). */
   sharedWithMe?: boolean;
+  /** What the one asking may do with it (its own and the others' have their rights). */
+  may?: { download: boolean; share: boolean; upload: boolean; delete: boolean };
   /** Deleted by itself at this time (ms); null: kept until deleted by hand. */
   expiresAt?: number | null;
   /** The picture with its sound, the sound alone, or one picture. */

@@ -1023,7 +1023,7 @@ pub fn routes() -> Router<Shared> {
 
 /// Who may browse, reframe and pilot a page: who pilots them in the Streamer, or extracts.
 fn may(me: &crate::auth::User) -> bool {
-    me.can("stream.pilot") || me.can("extract.cut")
+    me.can("stream.mixer") || me.can("cut.make")
 }
 
 fn page_of(s: &Shared, id: &str) -> ApiResult<Arc<Page>> {
@@ -1035,7 +1035,7 @@ fn page_of(s: &Shared, id: &str) -> ApiResult<Arc<Page>> {
 }
 
 async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view") || me.can("extract.view"))?;
+    require(me.can("stream.access") || me.can("cut.view"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let c = rec.config();
     let f = Format::parse(&c.video_mode).unwrap_or(Format { width: 1920, height: 1080, interlaced: false, num: 25, den: 1 });
@@ -1195,7 +1195,7 @@ async fn input(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
 
 /// The page as it is now, as its pictures change (MJPEG: an image element shows it).
 async fn live(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
-    require(me.can("stream.view") || me.can("extract.view"))?;
+    require(me.can("stream.access") || me.can("cut.view"))?;
     let page = page_of(&s, &id)?;
     let rx = page.frames.subscribe();
     // The last picture at once: the view is never black while the page does not move.

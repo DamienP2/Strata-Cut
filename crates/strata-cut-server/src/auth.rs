@@ -113,7 +113,7 @@ impl User {
     }
     /// Makes clips.
     pub fn can_extract(&self) -> bool {
-        self.can("extract.cut")
+        self.can("cut.make")
     }
     pub fn name(&self) -> &str {
         if self.display_name.is_empty() { &self.username } else { &self.display_name }
@@ -155,6 +155,8 @@ pub struct PublicUser {
     pub perms: Vec<String>,
     /// The groups it is in.
     pub groups: Vec<String>,
+    /// The sources it sees (null: all).
+    pub sources: Option<Vec<String>>,
 }
 
 impl From<&User> for PublicUser {
@@ -171,6 +173,7 @@ impl From<&User> for PublicUser {
             role_fixed: u.role_fixed,
             perms: if u.is_admin() { crate::roles::all() } else { crate::groups::rights_of(&u.id) },
             groups: crate::groups::of_id(&u.id),
+            sources: if u.is_admin() { None } else { crate::groups::sources_of(&u.id) },
         }
     }
 }

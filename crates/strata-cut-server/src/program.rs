@@ -591,7 +591,7 @@ pub fn routes() -> Router<Shared> {
 }
 
 async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view"))?;
+    require(me.can("stream.access"))?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let programs = &s.streams.programs;
     // Each track's language and kind (as the stream says them).
@@ -604,7 +604,7 @@ async fn read(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(sou
 
 /// The settings (not what is on air, nor where the overlay is: CUT and AUTO say that).
 async fn write(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, Json(mut p): Json<Program>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.program"))?;
+    require(me.can("stream.mixer"))?;
     s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     p.normalize().map_err(bad)?;
     let programs = &s.streams.programs;
@@ -642,7 +642,7 @@ struct OverlayAt {
 }
 
 async fn take(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, Json(t): Json<Take>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.program"))?;
+    require(me.can("stream.mixer"))?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let programs = &s.streams.programs;
     let was = programs.get(&source);
@@ -673,7 +673,7 @@ struct At {
 /// Each sound track's peaks, each of its channels (dB, -90: silence; none yet: none), of the frame
 /// the page shows (it plays some seconds behind the source): by that frame's own timestamp.
 async fn levels(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(source): UrlPath<String>, axum::extract::Query(q): axum::extract::Query<At>) -> ApiResult<Json<Value>> {
-    require(me.can("stream.view"))?;
+    require(me.can("stream.access"))?;
     let rec = s.recorders.get(&source).ok_or_else(|| not_found("recorder"))?;
     let n = rec.status.lock().unwrap().media.as_ref().map_or(0, |m| m.audio_tracks as usize);
     Ok(Json(json!({ "tracks": s.streams.programs.meters.read(&source, n, q.t) })))

@@ -132,6 +132,9 @@ pub struct RecorderConfig {
     pub cookies: String,
     #[serde(default = "default_loop")]
     pub loop_hours: u32,
+    /// Who pressed REC last (the account's id): "stop only their recordings" goes by it.
+    #[serde(default)]
+    pub rec_by: String,
     /// Expected bitrate of the source, Mb/s (reserves the loop's space; 0 = unknown).
     #[serde(default)]
     pub bitrate: f64,
@@ -206,6 +209,7 @@ pub fn blank_config() -> RecorderConfig {
         iface: String::new(),
         cookies: String::new(),
         loop_hours: default_loop(),
+        rec_by: String::new(),
         bitrate: 0.0,
         cbr: false,
         enabled: false,

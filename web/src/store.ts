@@ -21,6 +21,8 @@ export interface PublicUser {
   perms?: string[];
   /** The groups it is in. */
   groups?: string[];
+  /** The sources its groups let it see (null: all). */
+  sources?: string[] | null;
 }
 
 export interface AuthState {
@@ -44,7 +46,7 @@ export const can = {
   admin: (u: PublicUser | null | undefined) => u?.role === 'admin',
   /** A right of its role (an admin has them all). */
   has: (u: PublicUser | null | undefined, perm: string) => u?.role === 'admin' || !!u?.perms?.includes(perm),
-  extract: (u: PublicUser | null | undefined) => u?.role === 'admin' || !!u?.perms?.includes('extract.cut'),
+  extract: (u: PublicUser | null | undefined) => u?.role === 'admin' || !!u?.perms?.includes('cut.make'),
 };
 
 export class ApiError extends Error {
@@ -99,7 +101,10 @@ interface AppStore {
   serverOffset: number;
   timezone: string;
   toasts: Toast[];
+  /** The sources this account sees (its groups say which). */
   recorders: Recorder[];
+  /** Every source the server sent. */
+  allRecorders: Recorder[];
   status: Record<string, RecorderStatus>;
   jobs: Job[];
   init: () => Promise<void>;
@@ -143,6 +148,7 @@ export const useApp = create<AppStore>((set, get) => ({
   timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   toasts: [],
   recorders: [],
+  allRecorders: [],
   status: {},
   jobs: [],
 
@@ -183,7 +189,7 @@ export const useApp = create<AppStore>((set, get) => ({
     } catch {
       /* */
     }
-    set((s) => ({ connected: false, recorders: [], status: {}, jobs: [], auth: s.auth ? { ...s.auth, user: null } : s.auth }));
+    set((s) => ({ connected: false, recorders: [], allRecorders: [], status: {}, jobs: [], auth: s.auth ? { ...s.auth, user: null } : s.auth }));
   },
 
   connect: () => {
@@ -207,7 +213,7 @@ export const useApp = create<AppStore>((set, get) => ({
             connected: true,
             serverOffset: (e.serverTime as number) - Date.now(),
             timezone: (e.timezone as string) || get().timezone,
-            recorders: (e.recorders as Recorder[]) ?? [],
+            allRecorders: (e.recorders as Recorder[]) ?? [],
             status: Object.fromEntries(((e.status as RecorderStatus[]) ?? []).map((s) => [s.id, s])),
             jobs: (e.jobs as Job[]) ?? [],
           });
@@ -221,7 +227,7 @@ export const useApp = create<AppStore>((set, get) => ({
           changeEvents.dispatchEvent(new Event(e.what as string));
           break;
         case 'recorders':
-          set({ recorders: e.recorders as Recorder[] });
+          set({ allRecorders: e.recorders as Recorder[] });
           break;
         case 'status':
           set((s) => ({ status: { ...s.status, ...Object.fromEntries((e.status as RecorderStatus[]).map((x) => [x.id, x])) } }));
@@ -256,3 +262,11 @@ export const useApp = create<AppStore>((set, get) => ({
 
 /** Server time now, ms. */
 export const serverNow = () => Date.now() + useApp.getState().serverOffset;
+
+// The sources shown: those the account's groups give it (all for an admin), kept up to date as
+// the list or the account changes.
+useApp.subscribe((s, prev) => {
+  if (s.allRecorders === prev.allRecorders && s.auth?.user === prev.auth?.user) return;
+  const only = s.auth?.user?.sources;
+  useApp.setState({ recorders: only ? s.allRecorders.filter((r) => only.includes(r.id)) : s.allRecorders });
+});

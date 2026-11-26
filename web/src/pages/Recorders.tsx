@@ -93,7 +93,7 @@ export function sourceAddress(r: Recorder): string {
 /** The list again, after an action (the live event may have been missed). */
 async function reloadRecorders() {
   try {
-    useApp.setState({ recorders: await api<Recorder[]>('GET', '/api/recorders') });
+    useApp.setState({ allRecorders: await api<Recorder[]>('GET', '/api/recorders') });
   } catch {
     /* the live events will tell */
   }
@@ -205,7 +205,7 @@ export function Recorders() {
   const inGroup = (k: string) => recorders.filter((r) => groupOf(r) === k);
   const saveOrder = async (ids: string[]) => {
     const byId = new Map(recorders.map((r) => [r.id, r]));
-    useApp.setState({ recorders: ids.map((id) => byId.get(id)!).filter(Boolean) });
+    useApp.setState({ allRecorders: ids.map((id) => byId.get(id)!).filter(Boolean) });
     try {
       await api('PUT', '/api/recorders/order', ids);
     } catch (e) {

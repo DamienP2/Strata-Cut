@@ -124,9 +124,20 @@ impl Clip {
         self.share.all || self.share.groups.iter().any(|g| groups.contains(g))
     }
 
-    /// An account sees its clips, those shared with it; an admin (or who may see them all), all.
+    /// May this account do this with the clip ("view", "download", "share", "upload",
+    /// "delete")? With its own its "theirs" rights (a clip shared with it counts as its own to see
+    /// and download), with the others' the others' rights; an admin, all.
+    pub(crate) fn may(&self, me: &crate::auth::User, groups: &[String], act: &str) -> bool {
+        if me.is_admin() {
+            return true;
+        }
+        let own = self.mine(me) || (matches!(act, "view" | "download") && self.shared_with(groups));
+        (own && me.can(&format!("clips.own.{act}"))) || me.can(&format!("clips.all.{act}"))
+    }
+
+    /// An account sees its clips and those shared with it, and the others' when it may.
     pub(crate) fn visible(&self, me: &crate::auth::User, groups: &[String]) -> bool {
-        me.can("clips.all") || self.mine(me) || self.shared_with(groups)
+        self.may(me, groups, "view")
     }
 }
 
@@ -763,7 +774,7 @@ struct PeakQuery {
 /// The loudest peak (dBFS) of one sound track over a part of the loop (the Extraction's wand):
 /// null when there is no sound there. A part that begins before the recording: from its start.
 async fn peak(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(q): Json<PeakQuery>) -> ApiResult<Json<Value>> {
-    require(me.can_extract())?;
+    require(me.can_extract() && crate::groups::sees_source(&me, &q.recorder))?;
     if !q.t.is_finite() || !q.seconds.is_finite() || q.seconds <= 0.0 {
         return Err(bad("empty part"));
     }
@@ -809,7 +820,7 @@ async fn space(State(s): State<Shared>, CurrentUser(_me): CurrentUser) -> Json<V
 /// made it, whether it is this account's, whether it is shared with it, and until when it is kept.
 async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<Value> {
     // Not allowed to see the clips: none.
-    if !me.can("clips.view") {
+    if !me.can("clips.access") {
         return Json(Value::Array(Vec::new()));
     }
     let groups = crate::groups::of(&s, &me.id);
@@ -826,6 +837,11 @@ async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<Val
                 v["createdBy"] = json!(u.name());
             }
             v["mine"] = json!(c.mine(&me));
+            // What this account may do with it (the list shows only that).
+            v["may"] = json!({
+                "download": c.may(&me, &groups, "download"), "share": c.may(&me, &groups, "share"),
+                "upload": c.may(&me, &groups, "upload"), "delete": c.may(&me, &groups, "delete"),
+            });
             v["sharedWithMe"] = json!(!c.mine(&me) && c.shared_with(&groups));
             v["expiresAt"] = if keep > 0 { json!(c.created_at + keep * 86_400_000) } else { Value::Null };
             v
@@ -834,23 +850,14 @@ async fn list(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> Json<Val
     Json(Value::Array(out))
 }
 
-/// A clip this account may act on: its own (an admin: any).
-fn owned(s: &Shared, me: &crate::auth::User, id: &str) -> ApiResult<Clip> {
+/// A clip this account may do this with (one it does not even see: not found).
+fn allowed(s: &Shared, me: &crate::auth::User, id: &str, act: &str) -> ApiResult<Clip> {
     let clip = s.clips.clips.lock().unwrap().iter().find(|c| c.id == id).cloned().ok_or_else(|| not_found("clip"))?;
-    if me.is_admin() || clip.mine(me) {
+    let groups = crate::groups::of(s, &me.id);
+    if clip.may(me, &groups, act) {
         Ok(clip)
-    } else if clip.visible(me, &crate::groups::of(s, &me.id)) {
-        Err((StatusCode::FORBIDDEN, "only the one who made this clip can change it".into()))
-    } else {
-        Err(not_found("clip"))
-    }
-}
-
-/// A clip this account sees.
-fn seen(s: &Shared, me: &crate::auth::User, id: &str) -> ApiResult<Clip> {
-    let clip = s.clips.clips.lock().unwrap().iter().find(|c| c.id == id).cloned().ok_or_else(|| not_found("clip"))?;
-    if clip.visible(me, &crate::groups::of(s, &me.id)) {
-        Ok(clip)
+    } else if clip.visible(me, &groups) {
+        Err((StatusCode::FORBIDDEN, "you do not have the rights for this".into()))
     } else {
         Err(not_found("clip"))
     }
@@ -858,8 +865,7 @@ fn seen(s: &Shared, me: &crate::auth::User, id: &str) -> ApiResult<Clip> {
 
 /// Shares a clip with everyone, or with groups (empty: with nobody).
 async fn share(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Share>) -> ApiResult<StatusCode> {
-    require(me.can("clips.share"))?;
-    owned(&s, &me, &id)?;
+    allowed(&s, &me, &id, "share")?;
     let known: Vec<String> = crate::groups::list(&s).into_iter().map(|g| g.id).collect();
     let mut groups: Vec<String> = b.groups.into_iter().filter(|g| known.contains(g)).collect();
     groups.sort();
@@ -875,9 +881,9 @@ async fn share(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
 }
 
 async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(req): Json<ClipRequest>) -> ApiResult<(StatusCode, Json<Value>)> {
-    require(me.can_extract())?;
+    require(me.can_extract() && crate::groups::sees_source(&me, &req.recorder))?;
     // Sent to the file servers chosen: only who may send.
-    if !req.send_to.is_empty() && !me.can("extract.send") {
+    if !req.send_to.is_empty() && !me.can("cut.send") {
         return Err((StatusCode::FORBIDDEN, "you do not have the rights for this".into()));
     }
     let job = s.clips.queue(req, me.name(), &me.id).map_err(bad)?;
@@ -885,8 +891,7 @@ async fn create(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(req)
 }
 
 async fn remove(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
-    require(me.can("clips.delete"))?;
-    owned(&s, &me, &id)?;
+    allowed(&s, &me, &id, "delete")?;
     s.clips.delete(&id).await.ok_or_else(|| not_found("clip"))?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -915,10 +920,10 @@ pub(crate) fn file_name(name: &str, ext: &str) -> String {
 }
 
 async fn download(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, req: Request) -> ApiResult<Response> {
-    require(me.can("clips.view"))?;
-    let clip = seen(&s, &me, &id)?;
-    // `?inline=1`: played in the page (the clips' player), not saved.
+    require(me.can("clips.access"))?;
+    // `?inline=1`: played in the page (the clips' player), not saved: seeing it is enough.
     let inline = req.uri().query().is_some_and(|q| q.split('&').any(|p| p == "inline=1"));
+    let clip = allowed(&s, &me, &id, if inline { "view" } else { "download" })?;
     let mut res = tower_http::services::ServeFile::new(&clip.file).oneshot(req).await.map_err(internal)?.into_response();
     if inline {
         return Ok(res);
@@ -933,8 +938,8 @@ async fn download(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath
 }
 
 async fn thumb(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
-    require(me.can("clips.view"))?;
-    seen(&s, &me, &id)?;
+    require(me.can("clips.access"))?;
+    allowed(&s, &me, &id, "view")?;
     let data = tokio::fs::read(s.clips.thumb_path(&id)).await.map_err(|_| not_found("image"))?;
     let mut r = Response::new(axum::body::Body::from(data));
     r.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("image/jpeg"));
@@ -970,11 +975,12 @@ mod tests {
         let bob = User::without_password("bob".into(), "Bob".into(), Role::Viewer, String::new());
         let boss = User::without_password("boss".into(), String::new(), Role::Admin, String::new());
         let mut c = Clip { id: "c".into(), name: "x".into(), recorder: "r".into(), recorder_name: "R".into(), start: 0, frames: 1, fps_num: 25, fps_den: 1, format: String::new(), size: 0, created_at: 0, created_by: "Ana".into(), owner: ana.id.clone(), share: Share::default(), kind: Kind::Video, file: PathBuf::new() };
-        assert!(c.visible(&ana, &[]) && !c.visible(&bob, &[]) && c.visible(&boss, &[]));
+        // Whose it is, and who it is shared with (what each may do with it is its groups' rights).
+        assert!(c.mine(&ana) && !c.mine(&bob) && c.may(&boss, &[], "delete"));
         c.share.groups = vec!["g".into()];
-        assert!(c.visible(&bob, &["g".into()]) && !c.visible(&bob, &["h".into()]));
+        assert!(c.shared_with(&["g".into()]) && !c.shared_with(&["h".into()]));
         c.share = Share { all: true, groups: vec![] };
-        assert!(c.visible(&bob, &[]) && !c.mine(&bob));
+        assert!(c.shared_with(&[]) && !c.mine(&bob));
         // A clip made before the accounts were kept: nobody's until `adopt` gives it its maker.
         let old = Clip { owner: String::new(), share: Share::default(), ..c };
         assert!(!old.mine(&ana) && !old.mine(&bob));

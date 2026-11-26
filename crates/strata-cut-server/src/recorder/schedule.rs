@@ -29,6 +29,9 @@ pub struct Slot {
     pub end: String,
     #[serde(default = "yes")]
     pub enabled: bool,
+    /// Who programmed it (the account's id; empty for one programmed before this was kept).
+    #[serde(default)]
+    pub by: String,
 }
 
 fn yes() -> bool {
@@ -218,7 +221,7 @@ mod tests {
     fn occurrences() {
         let tz = TimeZone::get("Europe/Paris").unwrap();
         // Mondays and Wednesdays 20:00 → 21:30; 2026-11-16 is a Monday.
-        let s = Slot { id: "a".into(), recorder: "r".into(), name: "JT".into(), date: String::new(), days: vec![1, 3], start: "20:00".into(), end: "21:30".into(), enabled: true };
+        let s = Slot { id: "a".into(), recorder: "r".into(), name: "JT".into(), date: String::new(), days: vec![1, 3], start: "20:00".into(), end: "21:30".into(), enabled: true, by: String::new() };
         let o = s.occurrences(&tz, ms("2026-11-16T00:00", &tz), ms("2026-11-23T00:00", &tz));
         assert_eq!(o, vec![(ms("2026-11-16T20:00", &tz), ms("2026-11-16T21:30", &tz)), (ms("2026-11-18T20:00", &tz), ms("2026-11-18T21:30", &tz))]);
         // Over midnight, once.
@@ -235,7 +238,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sc-sched-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let sch = Schedules::load(dir.join("s.json"));
-        let s = Slot { id: String::new(), recorder: "r".into(), name: String::new(), date: String::new(), days: vec![1, 2, 3, 4, 5, 6, 7], start: "20:00".into(), end: "21:00".into(), enabled: true };
+        let s = Slot { id: String::new(), recorder: "r".into(), name: String::new(), date: String::new(), days: vec![1, 2, 3, 4, 5, 6, 7], start: "20:00".into(), end: "21:00".into(), enabled: true, by: String::new() };
         sch.put(s.clone(), |_| Ok(())).unwrap();
         // A second slot for the same recorder.
         sch.put(Slot { start: "20:30".into(), end: "21:00".into(), ..s }, |_| Ok(())).unwrap();

@@ -54,8 +54,8 @@ pub fn routes() -> Router<Shared> {
 }
 
 /// Sees the sources' pictures and what was recorded: from Extraction, the Régie or the Streamer.
-fn sees(me: &crate::auth::User) -> bool {
-    me.can("extract.view") || me.can("schedule.view") || me.can("stream.view")
+fn sees(me: &crate::auth::User, id: &str) -> bool {
+    (me.can("cut.view") || me.can("control.access") || me.can("stream.access")) && crate::groups::sees_source(me, id)
 }
 
 /// DeckLink cards: what the server has (GStreamer's module, Blackmagic's driver) and the cards seen.
@@ -276,7 +276,7 @@ struct Recording {
 
 /// The Streamer shows a test pattern (asked again every 10 s while it does).
 async fn demand(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<StatusCode> {
-    require(me.can("stream.view"))?;
+    require(me.can("stream.access") && crate::groups::sees_source(&me, &id))?;
     s.recorders.demand(&id).map_err(|_| not_found("recorder"))?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -290,12 +290,21 @@ async fn reorder(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(ids
 
 /// Programmation: how a source is recorded (all the time, during its slots, not at all).
 async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(b): Json<Recording>) -> ApiResult<Json<Value>> {
-    require(me.can("schedule.rec"))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
+    require(crate::groups::sees_source(&me, &id))?;
     if rec.config().protocol == super::Protocol::Pattern {
         return Err(bad("a test pattern is not recorded: it is made live in the Streamer"));
     }
     let mut c = rec.config();
+    // REC: who may start one. Stop: who may stop any, or this one if it pressed REC.
+    if b.mode == "continuous" {
+        require(me.can("control.rec.start"))?;
+        if !c.enabled {
+            c.rec_by = me.id.clone();
+        }
+    } else {
+        require(me.can("control.rec.stop") || (me.can("control.rec.stop.own") && c.enabled && c.rec_by == me.id) || (!c.enabled && me.can("control.rec.start")))?;
+    }
     (c.enabled, c.slots_off) = match b.mode.as_str() {
         "continuous" => (true, false),
         "slots" => (false, false),
@@ -315,14 +324,14 @@ async fn set_recording(State(s): State<Shared>, CurrentUser(me): CurrentUser, Ur
 
 /// The programmed slots, each with its next occurrence.
 async fn schedules(State(s): State<Shared>, CurrentUser(me): CurrentUser) -> ApiResult<Json<Value>> {
-    require(me.can("schedule.view"))?;
+    require(me.can("control.access"))?;
     let m = &s.recorders;
     Ok(Json(json!({ "slots": m.schedules.json(&m.tz(), super::now_ms()), "timezone": m.tz().iana_name().unwrap_or("UTC") })))
 }
 
 /// Every occurrence of the slots between two server times (the calendar).
 async fn occurrences(State(s): State<Shared>, CurrentUser(me): CurrentUser, Query(q): Query<Window>) -> ApiResult<Json<Value>> {
-    require(me.can("schedule.view"))?;
+    require(me.can("control.access"))?;
     let m = &s.recorders;
     let tz = m.tz();
     let (from, to) = (q.from as i64, q.to as i64);
@@ -344,14 +353,31 @@ fn schedules_changed(s: &Shared) {
     m.events.send(crate::state::Audience::All, json!({"type": "schedules", "slots": m.schedules.json(&m.tz(), super::now_ms())}));
 }
 
-async fn put_slot(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(slot): Json<super::schedule::Slot>) -> ApiResult<Json<Value>> {
-    require(me.can("schedule.edit"))?;
+/// May this account change or delete this programmed recording: its own, or the others'.
+fn may_change_slot(me: &crate::auth::User, by: &str) -> bool {
+    me.can("control.slots.all") || (by == me.id && me.can("control.slots.own"))
+}
+
+async fn put_slot(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut slot): Json<super::schedule::Slot>) -> ApiResult<Json<Value>> {
+    require(me.can("control.slots.own") || me.can("control.slots.all"))?;
+    require(crate::groups::sees_source(&me, &slot.recorder))?;
+    // A new one is this account's; one already there keeps its author (and asks for the right).
+    match s.recorders.schedules.all().into_iter().find(|x| !slot.id.is_empty() && x.id == slot.id) {
+        Some(old) => {
+            require(may_change_slot(&me, &old.by))?;
+            slot.by = old.by;
+        }
+        None => slot.by = me.id.clone(),
+    }
     save_slot(&s, slot)
 }
 
 async fn put_slot_id(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Json(mut slot): Json<super::schedule::Slot>) -> ApiResult<Json<Value>> {
-    require(me.can("schedule.edit"))?;
+    let old = s.recorders.schedules.all().into_iter().find(|x| x.id == id).ok_or_else(|| not_found("slot"))?;
+    require(may_change_slot(&me, &old.by))?;
+    require(crate::groups::sees_source(&me, &slot.recorder))?;
     slot.id = id;
+    slot.by = old.by;
     save_slot(&s, slot)
 }
 
@@ -383,7 +409,8 @@ fn save_slot(s: &Shared, slot: super::schedule::Slot) -> ApiResult<Json<Value>> 
 }
 
 async fn delete_slot(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
-    require(me.can("schedule.edit"))?;
+    let old = s.recorders.schedules.all().into_iter().find(|x| x.id == id).ok_or_else(|| not_found("slot"))?;
+    require(may_change_slot(&me, &old.by))?;
     s.recorders.schedules.delete(&id).map_err(bad)?;
     schedules_changed(&s);
     Ok(Json(json!({ "ok": true })))
@@ -406,7 +433,7 @@ fn file_response(data: Vec<u8>, mime: &'static str, cache: &'static str) -> Resp
 }
 
 async fn thumb(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
-    require(sees(&me))?;
+    require(sees(&me, &id))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let path = rec.dir.lock().unwrap().join("thumb.jpg");
     let data = tokio::fs::read(path).await.map_err(|_| not_found("image"))?;
@@ -422,7 +449,7 @@ struct Window {
 /// What the player needs between two server times: per run, the proxy
 /// fragments and the original segments' clock (`map`: [t0, t1, wall0]).
 async fn media(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Query(w): Query<Window>) -> ApiResult<Json<Value>> {
-    require(me.can("extract.view") || me.can("stream.view"))?;
+    require((me.can("cut.view") || me.can("stream.access")) && crate::groups::sees_source(&me, &id))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let mut out = Vec::new();
     let mut inits: Vec<(usize, PathBuf, PathBuf)> = Vec::new();
@@ -466,7 +493,7 @@ async fn media(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id
 
 /// The recorded spans of the loop, for the overview bar.
 async fn coverage(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>) -> ApiResult<Json<Value>> {
-    require(sees(&me))?;
+    require(sees(&me, &id))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let runs = rec.runs.read().unwrap();
     let spans: Vec<Value> = runs
@@ -496,7 +523,7 @@ async fn coverage(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath
 /// A file of the browser's proxy: `init.mp4` or a fragment `p<n>.m4s`, of the video, the first
 /// sound track (`audio`) or another one (`audio1` to `audio3`, numbered as the first's).
 async fn fragment(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath((id, run, track, file)): UrlPath<(String, String, String, String)>) -> ApiResult<Response> {
-    require(me.can("extract.view") || me.can("stream.view"))?;
+    require((me.can("cut.view") || me.can("stream.access")) && crate::groups::sees_source(&me, &id))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     // The fragment's number (none: the init segment); nothing else names a file.
     let n: Option<u32> = if file == "init.mp4" {
@@ -536,7 +563,7 @@ async fn fragment(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath
 
 /// The programmes of the source's guide between two server times.
 async fn epg(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<Window>) -> ApiResult<Json<Value>> {
-    require(sees(&me))?;
+    require(sees(&me, &id))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let events = rec.epg.lock().unwrap().between(q.from, q.to);
     Ok(Json(json!({ "events": events })))
@@ -552,7 +579,7 @@ struct WaveQuery {
 /// The sound level between two server times, in `n` columns (peak of each;
 /// -1 where nothing was recorded).
 async fn wave(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<WaveQuery>) -> ApiResult<Json<Value>> {
-    require(me.can("extract.view"))?;
+    require(me.can("cut.view") && crate::groups::sees_source(&me, &id))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let n = q.n.clamp(1, 4000);
     if q.to <= q.from || q.to.is_nan() || q.from.is_nan() {
@@ -622,7 +649,7 @@ fn frame_cache() -> &'static FrameCache {
 
 /// A still of the loop at a server time, from the proxy (the timeline's strip).
 async fn frame(State(s): State<Shared>, CurrentUser(me): CurrentUser, UrlPath(id): UrlPath<String>, Query(q): Query<At>) -> ApiResult<Response> {
-    require(sees(&me))?;
+    require(sees(&me, &id))?;
     let rec = s.recorders.get(&id).ok_or_else(|| not_found("recorder"))?;
     let h = q.h.clamp(36, 540) & !1;
     let (init, seg, t, key) = {
