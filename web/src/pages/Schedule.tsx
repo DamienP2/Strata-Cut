@@ -3,7 +3,8 @@
  * only during its slots (one day, or days of the week) and keeps its recordings some days,
  * instead of a rolling loop. A slot can be taken from the source's programme guide.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDisplayPref } from '../displayPrefs';
 import { kindOf, SOURCE_KINDS } from '../ui/sourceKinds';
 import { useShallow } from 'zustand/react/shallow';
@@ -463,10 +464,53 @@ function SourceHead({ rec, canRec, mayStop }: { rec: Recorder; canRec: boolean; 
   );
 }
 
+/** A programme of the guide, under the pointer: its time (start, end, length) on the left, its
+ * name, source and words on the right; one to come can be programmed (a click on it). */
+function EpgCard({ g, r, x, y, timezone, admin }: { g: Programme; r: Recorder; x: number; y: number; timezone: string; admin: boolean }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: x + 14, top: y + 18 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    setPos({ left: Math.max(8, Math.min(innerWidth - w - 12, x + 14)), top: y + 18 + h > innerHeight - 8 ? y - h - 12 : y + 18 });
+  }, [x, y]);
+  const now = serverNow();
+  const live = g.start <= now && now < g.end;
+  const mins = Math.round((g.end - g.start) / 60_000);
+  const length = mins >= 60 ? `${Math.floor(mins / 60)} h ${String(mins % 60).padStart(2, '0')}` : `${mins} min`;
+  return createPortal(
+    <div ref={ref} className="sc-epg-card" style={{ left: pos.left, top: pos.top }} role="tooltip">
+      <div className="sc-epg-time">
+        <b>{hhmm(g.start, timezone)}</b>
+        <span>→ {hhmm(g.end, timezone)}</span>
+        <em>{length}</em>
+      </div>
+      <div className="sc-epg-body">
+        <strong>{g.name}</strong>
+        <span className="sc-epg-sub">
+          {r.name}
+          {live ? ` · ${t('on now')}` : g.end <= now ? ` · ${t('over')}` : ''}
+        </span>
+        {g.text && <p>{g.text}</p>}
+        {admin && g.end > now && (
+          <span className="sc-epg-act">
+            <Plus size={12} /> {t('Programme')}
+          </span>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function Calendar({ recorders, slots, timezone, admin, canRec, mayStop, onOpen, onNew }: { recorders: Recorder[]; slots: Slot[]; timezone: string; admin: boolean; canRec: boolean; mayStop: (r: Recorder) => boolean; onOpen: (s: Slot) => void; onNew: (initial: Partial<Slot>) => void }) {
   // 6 h by default (from an hour ago), 12 h, a day, a week.
   const [view, setView] = useDisplayPref<View>('schedule.view', '6h');
   const [anchor, setAnchor] = useState(() => anchorFor(view, serverNow(), timezone));
+  // The programme under the pointer: its card.
+  const [tip, setTip] = useState<{ g: Programme; r: Recorder; x: number; y: number } | null>(null);
   const span = SPANS[view];
   const hourly = view !== 'week';
   const from = anchor;
@@ -675,7 +719,10 @@ function Calendar({ recorders, slots, timezone, admin, canRec, mayStop, onOpen, 
                     type="button"
                     className="sc-cal-prog"
                     style={{ left: `${Math.max(0, x(g.start))}%`, width: `${Math.max(0.2, Math.min(100, x(g.end)) - Math.max(0, x(g.start)))}%` }}
-                    title={`${g.name}\n${hhmm(g.start, timezone)}–${hhmm(g.end, timezone)}${g.text ? `\n${g.text}` : ''}${admin ? `\n\n${t('Click: programme it')}` : ''}`}
+                    aria-label={`${g.name} ${hhmm(g.start, timezone)}–${hhmm(g.end, timezone)}`}
+                    onPointerEnter={(e) => setTip({ g, r, x: e.clientX, y: e.clientY })}
+                    onPointerMove={(e) => setTip({ g, r, x: e.clientX, y: e.clientY })}
+                    onPointerLeave={() => setTip(null)}
                     onClick={() => admin && g.end > serverNow() && open(r.id, g.start, g.end, g.name)}
                   >
                     {g.name}
@@ -684,7 +731,12 @@ function Calendar({ recorders, slots, timezone, admin, canRec, mayStop, onOpen, 
                 {/* What it really recorded (its stills, as in Extraction), the holes in its loop, and, recording
                     all the time, what is to come. */}
                 <Recorded spans={cover[r.id] ?? []} recId={r.id} from={from} to={to} now={now} loopFrom={now - r.loopHours * 3_600_000} tileMs={tileMs} x={x} />
-                {r.enabled && now < to && <span className="sc-cal-cont todo" style={{ left: `${Math.max(0, x(now))}%`, width: `${100 - Math.max(0, x(now))}%` }} />}
+                {r.enabled && now < to && (
+                  <span className="sc-cal-cont todo" style={{ left: `${Math.max(0, x(now))}%`, width: `${100 - Math.max(0, x(now))}%` }}>
+                    <i className="sc-cal-pulse" />
+                    {tc('cal', 'Continuous')}
+                  </span>
+                )}
                 {mine.map((o, i) => {
                   const slot = slots.find((s) => s.id === o.slot);
                   const live = o.enabled !== false && o.start <= now && now < o.end;
@@ -726,6 +778,7 @@ function Calendar({ recorders, slots, timezone, admin, canRec, mayStop, onOpen, 
           );
         })}
       </div>
+      {tip && <EpgCard {...tip} timezone={timezone} admin={admin} />}
     </div>
   );
 }

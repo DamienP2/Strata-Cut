@@ -529,4 +529,7 @@ export const business: Record<string, string> = {
   'Extract anyway': 'Extraire quand même',
   'MP4 light': 'MP4 léger',
   'TS copy': 'TS copie',
+  'cal|Continuous': 'En continu',
+  'on now': 'en cours',
+  over: 'terminé',
 };
