@@ -1215,10 +1215,21 @@ a.btn { color: inherit; }
 .sc-cal-slot.past { background: transparent; border-color: color-mix(in srgb, var(--text-3) 70%, transparent); color: var(--text); filter: none; text-shadow: 0 1px 2px #000; }
 /* Régie: REC (all the time) or Stop, compact, at the end of the source's head. */
 .sc-cal-src .sc-cal-info-name { flex: 1; }
-.sc-head-rec { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text); font: 600 11px Inter, system-ui, sans-serif; cursor: pointer; }
-.sc-head-rec:hover:not(:disabled) { background: var(--panel-3); border-color: color-mix(in srgb, var(--live) 50%, var(--line-2)); }
-.sc-head-rec .sc-rec { width: 6px; height: 6px; }
-.sc-head-rec:disabled { opacity: 0.5; cursor: default; }
+/* REC | OFF: the state lit; the other half switches. */
+.sc-cal-info { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 5px; }
+.sc-cal-info .sc-cal-info-name { max-width: 100%; }
+.sc-recseg { flex: none; display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--panel); }
+.sc-recseg button { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 0; border-radius: 6px; background: none; color: var(--text-3); font: 700 10.5px Inter, system-ui, sans-serif; letter-spacing: 0.04em; cursor: pointer; }
+.sc-recseg button.on { cursor: default; }
+.sc-recseg button:hover:not(.on):not(:disabled) { color: var(--text); background: var(--panel-3); }
+.sc-recseg button:disabled { opacity: 0.5; cursor: default; }
+.sc-recseg i { display: block; width: 7px; height: 7px; background: currentColor; }
+.sc-recseg .dot { border-radius: 50%; }
+.sc-recseg .sq { border-radius: 1px; }
+.sc-recseg .rec.on { background: var(--live-btn); color: #fff; }
+.sc-recseg .off.on { background: var(--panel-3); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-2); }
+/* A source that does not record: OFF along its picture. */
+.sc-pic-off { position: absolute; left: 0; right: 0; bottom: 0; height: 15px; display: grid; place-items: center; background: rgba(5, 6, 10, 0.78); color: var(--text-2); font: 700 8.5px Inter, system-ui, sans-serif; letter-spacing: 0.08em; }
 
 /* Top bar: the server's highest load (processor, memory, disks, bandwidth out). */
 .load-gauge { display: inline-flex; align-items: center; gap: 7px; flex: none; height: 28px; padding: 0 10px; border-radius: 14px; border: 1px solid transparent; background: none; color: var(--text-2); font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -1442,7 +1453,6 @@ button.load-gauge:hover { background: var(--panel-2); border-color: var(--line);
 .stop-btn:disabled { opacity: 0.5; cursor: default; }
 .stop-btn svg { color: #fff; fill: #fff; }
 .stop-btn.icon { width: 26px; height: 26px; padding: 0; }
-.sc-head-rec.stop-btn { height: 24px; padding: 0 8px; font-size: 11px; }
 /* A setting of the live (the bitrate): a slider, its value beside. */
 .st-slider { display: flex; flex-direction: column; gap: 6px; }
 .st-slider-head { display: flex; align-items: baseline; justify-content: space-between; font-size: 11.5px; color: var(--text-3); }

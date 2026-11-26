@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { useDisplayPref } from '../displayPrefs';
 import { kindOf, SOURCE_KINDS } from '../ui/sourceKinds';
 import { useShallow } from 'zustand/react/shallow';
-import { CalendarClock, ChevronDown, ChevronLeft, ChevronRight, Plus, Square, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
+import { CalendarClock, ChevronLeft, ChevronRight, Plus, Trash2, TriangleAlert, Tv, WifiOff, X } from 'lucide-react';
 import { api, can, serverEvents, serverNow, useApp } from '../store';
 import { locale, t, tc } from '../i18n';
 import { navigate } from '../router';
@@ -402,8 +402,8 @@ function Recorded({ spans, recId, from, to, now, loopFrom, tileMs, x }: { spans:
 const TILE_STEPS = [30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000, 3_600_000, 7_200_000, 14_400_000];
 const recMode = (r: Recorder): RecMode => (r.enabled ? 'continuous' : r.slotsOff ? 'off' : 'slots');
 
-/** A source at the head of its line: its picture (REC on it while it records), its logo and name,
- * and (as the role allows) REC to record it all the time, or Stop. */
+/** A source at the head of its line: its picture (OFF on it while it does not record), its logo
+ * and name, and (as the role allows) REC | OFF: record it all the time, or stop. */
 function SourceHead({ rec, canRec, mayStop }: { rec: Recorder; canRec: boolean; mayStop: (r: Recorder) => boolean }) {
   const st = useApp((s) => s.status[rec.id]);
   const [busy, setBusy] = useState(false);
@@ -433,12 +433,7 @@ function SourceHead({ rec, canRec, mayStop }: { rec: Recorder; canRec: boolean; 
     <div className="sc-cal-name sc-cal-src">
       <div className="sc-cal-pic">
         {img && (recording || state === 'starting') ? <img src={`/api/recorders/${rec.id}/thumb.jpg?v=${n}`} alt="" onError={() => setImg(false)} /> : <div className="sc-pic lost" />}
-        {recording && (
-          <span className="sc-onpic tl">
-            <span className="sc-rec" />
-            REC
-          </span>
-        )}
+        {!recording && !rec.enabled && state !== 'starting' && <span className="sc-pic-off">OFF</span>}
         {recording && <ContentFlags st={st} compact />}
         {state === 'nosignal' && (
           <span className="sc-cal-pic-msg">
@@ -446,20 +441,24 @@ function SourceHead({ rec, canRec, mayStop }: { rec: Recorder; canRec: boolean; 
           </span>
         )}
       </div>
+      <span className="sc-cal-info">
       <span className="sc-cal-info-name">
         <RecLogo rec={rec} size="sm" />
         <b title={rec.name}>{rec.name}</b>
       </span>
-      {(rec.enabled ? mayStop(rec) : canRec) &&
-        (rec.enabled ? (
-          <button type="button" className="sc-head-rec stop-btn" disabled={busy} data-tip={t('Stop recording all the time')} onClick={() => void setMode('slots')}>
-            <Square size={9} /> {t('Stop')}
+      {(rec.enabled ? mayStop(rec) : canRec) && (
+        <span className="sc-recseg" role="group" aria-label="REC">
+          <button type="button" className={`rec ${rec.enabled ? 'on' : ''}`} aria-pressed={rec.enabled} disabled={busy} data-tip={rec.enabled ? undefined : t('Record all the time: choose the loop')} onClick={(e) => !rec.enabled && recWithLoop(e, rec, (st?.measured ?? 0) / 1e6)}>
+            <i className="dot" />
+            REC
           </button>
-        ) : (
-          <button type="button" className="sc-head-rec" disabled={busy} data-tip={t('Record all the time: choose the loop')} onClick={(e) => recWithLoop(e, rec, (st?.measured ?? 0) / 1e6)}>
-            <span className="sc-rec" /> REC <ChevronDown size={11} className="src-caret" />
+          <button type="button" className={`off ${rec.enabled ? '' : 'on'}`} aria-pressed={!rec.enabled} disabled={busy} data-tip={rec.enabled ? t('Stop recording all the time') : undefined} onClick={() => rec.enabled && void setMode('slots')}>
+            <i className="sq" />
+            OFF
           </button>
-        ))}
+        </span>
+      )}
+      </span>
     </div>
   );
 }
