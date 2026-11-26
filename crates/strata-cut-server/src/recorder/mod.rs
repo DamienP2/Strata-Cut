@@ -796,6 +796,9 @@ pub struct Manager {
     udp_dropped: Mutex<Option<u64>>,
     /// The same for the network cards (their receive rings full).
     nic_dropped: Mutex<Option<u64>>,
+    /// What each network card received since the last report: its name → bytes at the last
+    /// sample, then the 2-second samples' sum and number, and the highest (Mb/s).
+    nic_load: Mutex<std::collections::BTreeMap<String, NicLoad>>,
     /// The programmed slots of the recorders in schedule mode.
     pub schedules: schedule::Schedules,
     /// The server's time zone (the slots' hours are in it).
@@ -809,6 +812,7 @@ impl Manager {
         let m = Arc::new(Manager {
             udp_dropped: Mutex::new(udp_dropped()),
             nic_dropped: Mutex::new(nic_dropped()),
+            nic_load: Mutex::new(Default::default()),
             data_dir: data_dir.to_path_buf(),
             recordings_dir: Mutex::new(cfg.recordings_dir(data_dir)),
             dirs: Mutex::new({
@@ -870,6 +874,7 @@ impl Manager {
                     st.slot = slot;
                     st.next_slot = next;
                 }
+                m.sample_nic_load(2.0);
                 tick += 1;
                 // The reception problems, every 10 minutes.
                 if tick.is_multiple_of(300) {
@@ -908,7 +913,16 @@ impl Manager {
             .map(|r| (r.config().name, r.glitches.lock().unwrap().0.iter().filter(|(t, _)| now - t < 600_000).copied().collect::<Vec<_>>()))
             .filter(|(_, e)| !e.is_empty())
             .collect();
-        for line in glitch_lines(&recs, dropped, nic) {
+        // What the cards received meanwhile (said when something went wrong): a card close to its
+        // speed loses what comes on top, before this server sees it.
+        let load = std::mem::take(&mut *self.nic_load.lock().unwrap());
+        let mut lines = glitch_lines(&recs, dropped, nic);
+        if !lines.is_empty() || self.recs().iter().any(|r| r.net.seen.load(std::sync::atomic::Ordering::Relaxed) > 0 && r.net.missing.load(std::sync::atomic::Ordering::Relaxed) > 0) {
+            lines.extend(load.iter().filter(|(_, l)| l.samples > 0).map(|(card, l)| nic_load_line(card, l)));
+        }
+        // The last bytes stay: the next ten minutes go on from them.
+        *self.nic_load.lock().unwrap() = load.into_iter().map(|(k, l)| (k, NicLoad { last: l.last, ..Default::default() })).collect();
+        for line in lines {
             tracing::warn!("{line}");
         }
         // In detail for each source: what FFmpeg read damaged (picture, sound), and what the
@@ -1562,6 +1576,53 @@ fn witness_lines(name: &str, seen: u64, net: udp_in::Seen, rtp: bool, damaged: u
     out
 }
 
+/// What a network card received over ten minutes.
+#[derive(Default, Clone)]
+struct NicLoad {
+    /// Its received bytes at the last sample.
+    last: u64,
+    sum_mbps: f64,
+    samples: u32,
+    peak_mbps: f64,
+    /// Its speed (Mb/s), as the system says (0: unknown).
+    speed: u64,
+}
+
+impl Manager {
+    /// Each card's received bytes now: the rate since the last sample (`secs` ago).
+    fn sample_nic_load(&self, secs: f64) {
+        let Ok(dir) = std::fs::read_dir("/sys/class/net") else { return };
+        let mut load = self.nic_load.lock().unwrap();
+        for e in dir.flatten() {
+            let path = e.path();
+            if !path.join("device").exists() {
+                continue;
+            }
+            let read = |k: &str| std::fs::read_to_string(path.join(k)).ok().and_then(|v| v.trim().parse::<i64>().ok());
+            let Some(bytes) = read("statistics/rx_bytes") else { continue };
+            let card = e.file_name().to_string_lossy().into_owned();
+            let l = load.entry(card).or_default();
+            l.speed = read("speed").filter(|s| *s > 0).unwrap_or(0) as u64;
+            let bytes = bytes as u64;
+            if l.last > 0 && bytes >= l.last {
+                let mbps = (bytes - l.last) as f64 * 8.0 / 1e6 / secs;
+                l.sum_mbps += mbps;
+                l.samples += 1;
+                l.peak_mbps = l.peak_mbps.max(mbps);
+            }
+            l.last = bytes;
+        }
+    }
+}
+
+/// A card's load over ten minutes, and whether it came close to its speed.
+fn nic_load_line(card: &str, l: &NicLoad) -> String {
+    let avg = l.sum_mbps / l.samples.max(1) as f64;
+    let speed = if l.speed > 0 { format!(" ({} Mb/s)", l.speed) } else { String::new() };
+    let near = if l.speed > 0 && l.peak_mbps >= l.speed as f64 * 0.7 { ": close to its speed: what comes on top is lost before this server" } else { "" };
+    format!("network card {card}{speed}: received in the last 10 minutes {avg:.0} Mb/s on average, up to {:.0} Mb/s over 2 s{near}", l.peak_mbps)
+}
+
 /// The UDP datagrams the system dropped since it started (its receive buffers full), from
 /// /proc/net/snmp ("RcvbufErrors"); None elsewhere.
 fn udp_dropped() -> Option<u64> {
@@ -1671,6 +1732,14 @@ mod glitch_tests {
         assert_eq!(only_host("https://u:p@cdn.example.com:8443/live.m3u8?token=x"), "https://cdn.example.com:8443");
         assert_eq!(only_host("udp://@239.1.1.1:5000"), "udp://239.1.1.1:5000");
         assert_eq!(only_host("MACHINE (Caméra 1)"), "MACHINE (Caméra 1)");
+    }
+
+    #[test]
+    fn nic_load() {
+        let l = NicLoad { last: 1, sum_mbps: 3000.0, samples: 10, peak_mbps: 960.0, speed: 1000 };
+        assert_eq!(nic_load_line("eno1", &l), "network card eno1 (1000 Mb/s): received in the last 10 minutes 300 Mb/s on average, up to 960 Mb/s over 2 s: close to its speed: what comes on top is lost before this server");
+        let quiet = NicLoad { peak_mbps: 200.0, ..l };
+        assert!(!nic_load_line("eno1", &quiet).contains("close"));
     }
 
     #[test]

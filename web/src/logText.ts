@@ -204,6 +204,22 @@ const RULES: Rule[] = [
       `${m[1]} : problèmes de réception ces 10 dernières minutes : ${m[2]} paquets perdus par ce serveur, ${m[3]} abîmés à l’arrivée`,
   ],
   [
+    /^reception problems at the same moments in the last 10 minutes on (.+?): (.+)$/,
+    (m) =>
+      `Problèmes de réception aux mêmes moments ces 10 dernières minutes sur ${m[1]} : ${
+        {
+          'the network card of this server dropped packets: this server': 'la carte réseau de ce serveur a perdu des paquets : ce serveur',
+          "the system's network buffers were full: this server": 'les tampons réseau du système étaient pleins : ce serveur',
+          'the stream arrives so: the source or the network, not this server': 'le flux arrive ainsi : la source ou le réseau, pas ce serveur',
+        }[m[2]] ?? m[2]
+      }`,
+  ],
+  [
+    /^network card (\S+)(?: \((\d+) Mb\/s\))?: received in the last 10 minutes (\d+) Mb\/s on average, up to (\d+) Mb\/s over 2 s(: close to its speed.*)?$/,
+    (m) =>
+      `Carte réseau ${m[1]}${m[2] ? ` (${Number(m[2]) >= 1000 ? `${Number(m[2]) / 1000} Gb/s` : `${m[2]} Mb/s`})` : ''} : reçu ces 10 dernières minutes ${m[3]} Mb/s en moyenne, jusqu’à ${m[4]} Mb/s sur 2 s${m[5] ? ' : proche de sa limite, ce qui arrive en plus est perdu avant ce serveur' : ''}`,
+  ],
+  [
     /^the system dropped (\d+) UDP packets in the last 10 minutes .*$/,
     (m) =>
       `Le système a perdu ${m[1]} paquets UDP ces 10 dernières minutes (tampons réseau pleins : serveur à court de processeur, ou tampons trop petits)`,
