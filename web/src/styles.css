@@ -1852,3 +1852,29 @@ th .gr-ico, .gr-opt .gr-ico { width: 22px; height: 22px; border-radius: 6px; }
 .rs-st.warn { background: rgba(245, 165, 36, 0.15); color: var(--warn); }
 .rs-st.bad { background: rgba(255, 59, 92, 0.16); color: #ff8da1; }
 .rs-st.info { background: var(--accent-soft); color: var(--accent-2); }
+
+/* Santé: whom a message is about */
+.lw-chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+.lw-chip { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--line-2); background: none; color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.lw-chip b { color: var(--text-3); font-weight: 500; margin-left: 3px; }
+.lw-chip:hover { color: var(--text); }
+.lw-chip.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 50%, transparent); color: var(--text); }
+.lw-inc { display: grid; grid-template-columns: 10px minmax(110px, 170px) 1fr auto; gap: 14px; align-items: start; padding: 12px 16px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); }
+.lw-dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 5px; background: var(--warn); }
+.lw-dot.bad, .lw-dot.crash { background: var(--live); }
+.lw-who { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text); padding: 3px 9px; border-radius: 7px; background: var(--panel-3); justify-self: start; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.lw-who svg { color: var(--text-3); flex: none; }
+.lw-ico { display: inline-flex; color: var(--text-3); }
+.lw-ico svg { width: 12px; height: 12px; }
+.lw-who.sm { font-size: 11.5px; padding: 1px 7px; }
+.lw-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lw-main strong { font-size: 13.5px; }
+.lw-main > span { font-size: 12.5px; color: var(--text-2); }
+.lw-main details { font-size: 11.5px; color: var(--text-3); }
+.lw-main summary { cursor: pointer; width: max-content; }
+.lw-main code { display: block; margin-top: 4px; font: 11px var(--mono); color: var(--text-3); white-space: pre-wrap; word-break: break-word; }
+.lw-line { align-items: center; }
+.lw-tech { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.lw-line .log-lvl { width: 96px; }
+.lw-line .lw-who { flex: none; width: 150px; }
+.lw-line .log-msg { min-width: 0; }

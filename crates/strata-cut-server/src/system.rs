@@ -179,7 +179,7 @@ async fn player_trace(CurrentUser(me): CurrentUser, Json(t): Json<PlayerTrace>) 
         "other"
     };
     let events: Vec<String> = t.events.iter().take(40).map(|e| clip(e, 200)).collect();
-    tracing::warn!("player: the live went back {:.1} s ({}, {browser}, {}): {}", t.back, clip(&t.page, 80), me.username, events.join(" | "));
+    tracing::info!("player: the live went back {:.1} s ({}, {browser}, {}): {}", t.back, clip(&t.page, 80), me.username, events.join(" | "));
     tracing::info!("player: browser {}", clip(&t.ua, 200));
     Ok(StatusCode::NO_CONTENT)
 }

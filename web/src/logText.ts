@@ -45,6 +45,22 @@ const moments = (s: string) =>
 
 const RULES: Rule[] = [
   [
+    /^clip (.+?) not sent to (.+?): (.+)$/,
+    (m) => `« ${m[1]} » n’a pas été envoyé vers ${m[2]} : ${known(m[3])}`,
+  ],
+  [
+    /^player: the live went back ([\d.]+) s \((.+?), (.+?), (.+?)\):.*$/,
+    (m) => `Le direct a sauté de ${m[1].replace(".", ",")} s dans le navigateur de ${m[4]}`,
+  ],
+  [
+    /^processor over its limit: (\d+) % \(limit (\d+) %\)(?:, the most: (.+) \(([\d.]+) cores\))?$/,
+    (m) => `Processeur au-dessus de la limite : ${m[1]} % (limite ${m[2]} %)${m[3] ? ` · le plus gourmand : ${m[3]} (${m[4].replace(".", ",")} cœur)` : ""}`,
+  ],
+  [
+    /^resources: (.+?) let go by (.+?) \((\d+) processes stopped\)$/,
+    (m) => `${m[1]} libéré par ${m[2]} (${m[3]} processus arrêtés)`,
+  ],
+  [
     /^the server stopped unexpectedly$/,
     () => "Le serveur s’est arrêté de façon inattendue",
   ],
