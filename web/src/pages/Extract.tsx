@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { cachedStill, loadStill } from '../stills';
 import { useDisplayPref } from '../displayPrefs';
 import { useShallow } from 'zustand/react/shallow';
-import { AudioLines, CalendarPlus, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, Film, History, Play, RadioTower, RotateCcw, Scissors, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { AudioLines, Camera, Check, ChevronLeft, ChevronRight, ChevronsRight, Crosshair, Download, Eraser, Film, History, Play, RadioTower, RotateCcw, Scissors, VideoOff, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { api, can, serverNow, useApp, useChanged } from '../store';
 import { SourceGroups } from '../ui/SourceGroups';
 import { t, locale } from '../i18n';
@@ -461,16 +461,6 @@ function Editor({ rec }: { rec: Recorder }) {
     setOut(null);
     setName('');
   };
-  /** A programme to come: its recording programmed (the recorder starts for it if it is stopped). */
-  const programmeIt = async (g: Programme) => {
-    const day = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(g.start);
-    try {
-      await api('POST', '/api/schedules', { recorder: rec.id, name: g.name, date: day, days: [], start: clock(g.start, timezone).slice(0, 5), end: clock(g.end, timezone).slice(0, 5) });
-      toast(t('Recording of “{name}” programmed', { name: g.name }));
-    } catch (e) {
-      showError(e);
-    }
-  };
   const markIn = () => pos && !hole && setIn(pos);
   const markOut = () => pos && !hole && setOut(pos);
   const step = (n: number) => {
@@ -635,8 +625,8 @@ function Editor({ rec }: { rec: Recorder }) {
     void pl.seekWall(wall).then(() => set({ run: pl.run?.id ?? '', t: pl.t, wall: pl.wallOf(pl.t) }));
   };
 
-  const act = useRef<GuideActs>({ markProgramme, extractProgramme, programmeIt, seekWall });
-  act.current = { markProgramme, extractProgramme, programmeIt, seekWall };
+  const act = useRef<GuideActs>({ markProgramme, extractProgramme, seekWall });
+  act.current = { markProgramme, extractProgramme, seekWall };
 
   const now = serverNow();
   const ago = pos ? now - pos.wall : 0;
@@ -796,7 +786,7 @@ function Editor({ rec }: { rec: Recorder }) {
           }
         />
       )}
-      {rec.protocol !== 'page' && <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} admin={can.has(user, 'control.slots.own') || can.has(user, 'control.slots.all')} act={act} />}
+      {rec.protocol !== 'page' && <GuidePanel recId={rec.id} programmes={programmes} timezone={timezone} canExtract={can.extract(user)} act={act} />}
     </>
   );
 }
@@ -884,13 +874,12 @@ const Layers = memo(function Layers(props: { recId: string; start: number; span:
 interface GuideActs {
   markProgramme: (g: Programme) => Promise<unknown>;
   extractProgramme: (g: Programme) => Promise<unknown>;
-  programmeIt: (g: Programme) => Promise<unknown>;
   seekWall: (wall: number) => void;
 }
 type Listed = Programme & { share: number };
 
 /** The programme guide: drawn again when it changes, not at each frame shown. */
-const GuidePanel = memo(function GuidePanel({ recId, programmes, timezone, canExtract, admin, act }: { recId: string; programmes: Listed[]; timezone: string; canExtract: boolean; admin: boolean; act: { current: GuideActs } }) {
+const GuidePanel = memo(function GuidePanel({ recId, programmes, timezone, canExtract, act }: { recId: string; programmes: Listed[]; timezone: string; canExtract: boolean; act: { current: GuideActs } }) {
   const now = useNow(30_000);
   return (
     <aside className="panel right sc-guide-panel">
@@ -921,11 +910,6 @@ const GuidePanel = memo(function GuidePanel({ recId, programmes, timezone, canEx
                   {usable && canExtract && (
                     <button className="ctl" data-tip={t('Extract it now')} onClick={() => void act.current.extractProgramme(g)}>
                       <Scissors size={16} />
-                    </button>
-                  )}
-                  {state === 'soon' && admin && (
-                    <button className="ctl" data-tip={t('Programme its recording')} onClick={() => void act.current.programmeIt(g)}>
-                      <CalendarPlus size={16} />
                     </button>
                   )}
                 </div>
