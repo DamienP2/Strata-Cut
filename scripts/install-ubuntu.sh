@@ -622,6 +622,19 @@ net.core.netdev_max_backlog = 16384
 net.core.netdev_budget = 600
 EOF
 if sysctl -q -p "$SYSCTL_FILE" 2>/dev/null; then ok "tampons réseau agrandis ($SYSCTL_FILE)"; else warn "tampons réseau non appliqués (conteneur ?)"; fi
+# Les mises à jour automatiques d'Ubuntu (unattended-upgrades, chaque matin) ne redémarrent pas le
+# service : needrestart le relançait à chaque bibliothèque mise à jour qu'il utilise (son,
+# Kerberos, X11…), plusieurs fois en une minute, chaque fois un trou dans les enregistrements.
+# Les mises à jour s'installent quand même ; le service prend les nouvelles bibliothèques à son
+# prochain redémarrage (une mise à jour de Strata LiveCut, ou à la main).
+if [ -d /etc/needrestart ] || command -v needrestart >/dev/null 2>&1; then
+  mkdir -p /etc/needrestart/conf.d
+  cat >/etc/needrestart/conf.d/strata-cut.conf <<'EOF'
+# Strata LiveCut : jamais redémarré par les mises à jour automatiques (trou dans les enregistrements).
+$nrconf{override_rc}{qr(^strata-cut)} = 0;
+EOF
+  ok "mises à jour automatiques : le service n'est plus redémarré par needrestart"
+fi
 # Anneaux de réception des cartes réseau au maximum : trop petits (souvent 256 ou 512 par
 # défaut), une rafale des flux y est perdue avant tout programme (mosaïque qu'un poste VLC ne
 # voit pas). Réappliqué à chaque démarrage.
