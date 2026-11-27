@@ -23,6 +23,8 @@
 #   --no-apt              n'installe aucun paquet (dépendances déjà en place)
 #   --no-service          n'installe pas le service systemd (essai, conteneur)
 #   --no-grow             ne donne pas au volume des données tout l'espace libre du disque (LVM)
+#   --no-auto-updates     coupe les mises à jour automatiques d'Ubuntu (unattended-upgrades) : plus
+#                         rien ne s'installe ni ne redémarre seul ; les correctifs se font à la main
 #   --desktop-video F     installe le pilote Blackmagic Desktop Video depuis cette archive
 #                         (Blackmagic_Desktop_Video_Linux_*.tar.gz) ou ce paquet desktopvideo_*.deb ;
 #                         « wait » : explique comment copier l'archive par SSH et attend qu'elle
@@ -59,6 +61,7 @@ ADMIN=""
 OPEN_PORTS=""
 PACKAGE=""
 NO_APT=0
+NO_AUTO_UPDATES=0
 NO_SERVICE=0
 NO_GROW=0
 DESKTOP_VIDEO=""
@@ -114,6 +117,7 @@ while [ $# -gt 0 ]; do
     --no-apt) NO_APT=1; shift ;;
     --no-service) NO_SERVICE=1; shift ;;
     --no-grow) NO_GROW=1; shift ;;
+    --no-auto-updates) NO_AUTO_UPDATES=1; shift ;;
     --desktop-video) DESKTOP_VIDEO="${2:?}"; shift 2 ;;
     --no-desktop-video) NO_DESKTOP_VIDEO=1; shift ;;
     --ndi-sdk) NDI_SDK="${2:?}"; shift 2 ;;
@@ -634,6 +638,15 @@ if [ -d /etc/needrestart ] || command -v needrestart >/dev/null 2>&1; then
 $nrconf{override_rc}{qr(^strata-cut)} = 0;
 EOF
   ok "mises à jour automatiques : le service n'est plus redémarré par needrestart"
+fi
+# --no-auto-updates : plus aucune mise à jour d'Ubuntu ne s'installe seule (les correctifs de
+# sécurité se font à la main : sudo apt update && sudo apt upgrade, à un moment calme).
+if [ "$NO_AUTO_UPDATES" -eq 1 ]; then
+  printf 'APT::Periodic::Update-Package-Lists "0";\nAPT::Periodic::Unattended-Upgrade "0";\n' >/etc/apt/apt.conf.d/20auto-upgrades
+  if has_systemd; then
+    systemctl disable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service >/dev/null 2>&1 || true
+  fi
+  ok "mises à jour automatiques d'Ubuntu coupées (--no-auto-updates) : les correctifs se font à la main"
 fi
 # Anneaux de réception des cartes réseau au maximum : trop petits (souvent 256 ou 512 par
 # défaut), une rafale des flux y est perdue avant tout programme (mosaïque qu'un poste VLC ne

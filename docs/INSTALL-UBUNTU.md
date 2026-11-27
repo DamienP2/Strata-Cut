@@ -119,6 +119,7 @@ Tout ce qui suit `bash -s --` sont les options du script (tableau ci-dessous). S
 | `--no-apt` | n'installe aucun paquet | — |
 | `--no-service` | n'installe pas le service (essai) | — |
 | `--no-grow` | ne donne pas au volume des données tout l'espace libre du disque (LVM) | — |
+| `--no-auto-updates` | coupe les mises à jour automatiques d'Ubuntu : plus rien ne s'installe ni ne redémarre seul (voir « Mises à jour d'Ubuntu ») | — |
 | `--desktop-video F` | installe le pilote Blackmagic Desktop Video depuis cette archive (ou ce `.deb`) ; `wait` : explique comment la copier par SSH et attend qu'elle soit sur le serveur | demandé si une carte Blackmagic est présente sans pilote |
 | `--no-desktop-video` | ne propose pas le pilote Blackmagic | — |
 | `--uninstall` / `--purge` | désinstalle (avec `--purge` : efface aussi les données) | — |
@@ -324,6 +325,31 @@ Avec un paquet déjà construit (`Strata-Cut-<version>-linux-x86_64.tar.gz`) :
 ```bash
 sudo ./scripts/install-ubuntu.sh --package Strata-Cut-0.2.0-linux-x86_64.tar.gz
 ```
+
+### Mises à jour d'Ubuntu
+
+Par défaut, Ubuntu installe seul ses correctifs de sécurité chaque matin (`unattended-upgrades`, en général entre 6 h et 7 h). Ubuntu redémarrait alors les services qui utilisent une bibliothèque mise à jour (`needrestart`) : Strata LiveCut pouvait être relancé plusieurs fois en une minute, chaque fois un trou de quelques secondes dans les enregistrements.
+
+- **Toujours** : le script interdit à `needrestart` de redémarrer Strata LiveCut (`/etc/needrestart/conf.d/strata-cut.conf`). Les correctifs s'installent, le service les prend à son prochain redémarrage (une mise à jour de Strata LiveCut, ou à la main).
+- **Avec `--no-auto-updates`** : plus aucune mise à jour d'Ubuntu ne s'installe seule (`/etc/apt/apt.conf.d/20auto-upgrades` à `0`, minuteries `apt-daily` et `unattended-upgrades` désactivées).
+
+Les correctifs de sécurité se font alors à la main, à un moment calme, puis Strata LiveCut est redémarré quand cela convient :
+```bash
+sudo apt update && sudo apt upgrade
+```
+```bash
+sudo systemctl restart strata-cut
+```
+
+Pour remettre les mises à jour automatiques :
+```bash
+printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' | sudo tee /etc/apt/apt.conf.d/20auto-upgrades
+```
+```bash
+sudo systemctl enable --now apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service
+```
+
+Strata LiveCut lui-même ne se met jamais à jour seul : il signale une nouvelle version, et l'installation se fait depuis **Système › Maintenance** ou avec le script.
 
 ---
 
