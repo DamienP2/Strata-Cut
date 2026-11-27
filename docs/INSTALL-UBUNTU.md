@@ -287,6 +287,14 @@ Autre façon, depuis le serveur : `sudo ~/Strata-Cut/scripts/install-ubuntu.sh -
 
 Un disque doit d'abord être monté pour apparaître (voir « Disque des boucles » au § 1). Si le volume système d'Ubuntu n'utilise pas tout le disque (cas fréquent : 16 Go sur un disque de 300 Go), le script d'installation lui donne tout l'espace libre du disque, en une fois (`growpart` + `pvresize` si la fin du disque est hors partition, puis `lvextend -r -l +100%FREE` : à chaud, sans perte ; `--no-grow` pour ne pas le faire). Si le disque a grandi depuis, la page le signale et le bouton **Utiliser tout le disque** fait la même chose. À la main : `sudo lvextend -r -l +100%FREE /dev/ubuntu-vg/ubuntu-lv`.
 
+### Alertes (webhook, Teams, e-mail)
+
+**Système › Supervision › Alertes** prévient quand une source attendue n'arrive plus, une image est noire ou figée, le son coupé, une diffusion perdue, le disque presque plein, ou quand le serveur a redémarré après un arrêt inattendu ; puis quand c'est rentré dans l'ordre. Un problème n'est signalé qu'après le délai choisi.
+
+Le webhook reçoit un `POST` JSON : `text` (Slack, Mattermost), `content` (Discord), et pour tout autre outil `event`, `level` (`problem`, `ok`, `info`), `source`, `server`, `message`, `at`.
+
+**Microsoft Teams** : dans le canal, **… › Workflows › « Publier dans un canal lorsqu'une requête webhook est reçue »** (« Post to a channel when a webhook request is received »), choisir l'équipe et le canal, puis copier l'adresse donnée et la coller dans le champ Webhook. Strata LiveCut reconnaît une adresse Teams (`*.logic.azure.com`, `*.powerplatform.com`, ou un ancien connecteur `*.webhook.office.com`) et envoie une carte (Adaptive Card) que Teams affiche telle quelle : le message, le serveur, la source et l'heure. « Envoyer un test » vérifie tout de suite.
+
 ### Serveurs de temps (NTP)
 
 Le timecode est l'heure du serveur : **Système › Général › Heure** montre si elle est synchronisée, la source et le décalage. Indiquez-y vos serveurs NTP (séparés par des espaces, 8 au plus), puis **Enregistrer et appliquer** ; vide = ceux d'Ubuntu. Le service n'ayant pas les droits root, le script d'installation pose un petit relais (`strata-cut-ntp.path`) qui vérifie la liste et l'applique à systemd-timesyncd (ou à chrony s'il est utilisé).

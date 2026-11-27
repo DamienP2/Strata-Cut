@@ -359,19 +359,59 @@ fn send(a: &Alerts, m: &Message) -> Vec<(&'static str, Result<(), String>)> {
 }
 
 fn webhook(a: &Alerts, server: &str, m: &Message) -> Result<(), String> {
+    let body = payload(&a.webhook, server, m, &jiff::Timestamp::now().to_string());
+    let agent = crate::update::http_agent(3, Duration::from_secs(10));
+    agent.post(&a.webhook).header("Content-Type", "application/json").send(body.to_string()).map(drop).map_err(|e| e.to_string())
+}
+
+/// A Microsoft Teams address: a Workflow (Power Automate, « When a Teams webhook request is
+/// received ») or an older connector (Incoming Webhook).
+fn teams(url: &str) -> bool {
+    let host = url.split("://").nth(1).unwrap_or("").split(['/', '?', ':']).next().unwrap_or("").to_ascii_lowercase();
+    host.ends_with(".logic.azure.com") || host.ends_with(".powerplatform.com") || host.ends_with(".webhook.office.com") || host == "outlook.office.com"
+}
+
+/// What is sent: the text (Slack, Mattermost: "text"; Discord: "content") and the facts for any
+/// other service; to Teams, an Adaptive Card (what its webhooks show) with the same facts.
+fn payload(url: &str, server: &str, m: &Message, at: &str) -> Value {
     let mark = match m.level {
         "problem" => "⚠️",
         "ok" => "✅",
         _ => "ℹ️",
     };
     let text = format!("{mark} [{server}] {}", m.text);
-    let body = json!({
+    let mut body = json!({
         "text": text, "content": text,
         "event": m.event, "level": m.level, "source": m.source, "server": server,
-        "message": m.text, "at": jiff::Timestamp::now().to_string(),
+        "message": m.text, "at": at,
     });
-    let agent = crate::update::http_agent(3, Duration::from_secs(10));
-    agent.post(&a.webhook).header("Content-Type", "application/json").send(body.to_string()).map(drop).map_err(|e| e.to_string())
+    if teams(url) {
+        let colour = match m.level {
+            "problem" => "Attention",
+            "ok" => "Good",
+            _ => "Default",
+        };
+        let mut facts = vec![json!({"title": "Server", "value": server})];
+        if !m.source.is_empty() {
+            facts.push(json!({"title": "Source", "value": m.source}));
+        }
+        facts.push(json!({"title": "At", "value": at}));
+        body["type"] = json!("message");
+        body["attachments"] = json!([{
+            "contentType": "application/vnd.microsoft.card.adaptive",
+            "contentUrl": null,
+            "content": {
+                "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                "type": "AdaptiveCard",
+                "version": "1.4",
+                "body": [
+                    {"type": "TextBlock", "text": format!("{mark} {}", m.text), "wrap": true, "weight": "Bolder", "color": colour},
+                    {"type": "FactSet", "facts": facts},
+                ],
+            },
+        }]);
+    }
+    body
 }
 
 // ---- E-mail: a small SMTP client (STARTTLS or TLS, AUTH PLAIN), on the TLS the server already has.
@@ -531,6 +571,24 @@ async fn test(State(s): State<Shared>, CurrentUser(me): CurrentUser, Json(mut a)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn teams_gets_a_card() {
+        let m = Message { event: "signal", level: "problem", source: "TF1".into(), text: "TF1: no signal for 30 s".into() };
+        let slack = payload("https://hooks.slack.com/services/x", "régie", &m, "2026-11-27T08:00:00Z");
+        assert!(slack.get("attachments").is_none() && slack["text"].as_str().unwrap().contains("[régie] TF1: no signal"));
+        for url in ["https://prod-12.westeurope.logic.azure.com:443/workflows/abc/triggers/manual/paths/invoke?sig=x", "https://default1234.ab.environment.api.powerplatform.com/powerautomate/automations/direct/workflows/abc", "https://contoso.webhook.office.com/webhookb2/x"] {
+            let t = payload(url, "régie", &m, "2026-11-27T08:00:00Z");
+            assert_eq!(t["type"], "message", "{url}");
+            let card = &t["attachments"][0]["content"];
+            assert_eq!(card["type"], "AdaptiveCard");
+            assert!(card["body"][0]["text"].as_str().unwrap().contains("no signal"));
+            assert_eq!(card["body"][1]["facts"][1]["value"], "TF1");
+            // The plain text is still there (a Workflow may read it).
+            assert!(t["text"].is_string());
+        }
+        assert!(!teams("https://evil.example/logic.azure.com/x"));
+    }
 
     #[test]
     fn checks() {
