@@ -489,7 +489,7 @@ pub static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// stay in the service's group: one of them (the preview, waiting for a stream that no longer
 /// comes) does not end on the service manager's signal, which then waits 90 s before it starts
 /// the server again: a hole of a minute and a half in every recording, at each update.
-fn kill_children() {
+pub fn kill_children() {
     let me = std::process::id();
     let Ok(dir) = std::fs::read_dir("/proc") else { return };
     for e in dir.flatten() {
@@ -524,6 +524,15 @@ pub fn relaunch() -> ! {
             std::process::exit(75)
         }
     }
+}
+
+/// Ends now (what it started killed first): started again if an update asked for it.
+pub fn relaunch_or_exit() -> ! {
+    if RESTART.load(std::sync::atomic::Ordering::SeqCst) {
+        relaunch();
+    }
+    kill_children();
+    std::process::exit(0)
 }
 
 fn restart_soon() {

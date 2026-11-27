@@ -116,6 +116,9 @@ fn run(args: RunArgs) -> anyhow::Result<()> {
         tokio::spawn(async move {
             shutdown_signal().await;
             tracing::info!("stopping");
+            // The service manager kills it after 15 s: before that, it ends by itself.
+            health::waiting_for("the web server (connections still open)");
+            health::stop_within(10);
             let _ = stop_tx.send(true);
         });
         serve(RunArgs { data_dir: Some(data_dir), ..args }, stop_rx).await
@@ -258,6 +261,7 @@ async fn until_true(mut rx: watch::Receiver<bool>) {
 }
 
 pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Result<()> {
+    let boot = Instant::now();
     let data_dir = args.data_dir.clone().unwrap_or_else(paths::user_data_dir);
     // One Strata LiveCut per data folder: an older one still running (an update or a restart
     // that did not end it) would go on recording with its old list of recorders.
@@ -310,6 +314,13 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
         let listener = bind_retry(wanted).await?;
         let bind = listener.local_addr()?;
         tracing::info!("listening on http://{bind}");
+        if !health::started_once() {
+            let took = boot.elapsed().as_secs_f64();
+            if took > 3.0 {
+                tracing::info!("start: ready in {took:.0} s");
+            }
+        }
+        health::started();
         let _ = paths::write_json(&data_dir.join("runtime.json"), &serde_json::json!({"bind": bind, "version": VERSION, "pid": std::process::id()}), false);
         let shared: Shared = Arc::new(AppState {
             data_dir: data_dir.clone(),
@@ -350,6 +361,7 @@ pub async fn serve(args: RunArgs, stop_rx: watch::Receiver<bool>) -> anyhow::Res
         tracing::info!("settings changed: restarting the web server");
     }
     tracing::info!("stopping: web server closed, the streams and the recorders stop");
+    health::waiting_for("the lives");
     streams.shutdown().await;
     recorders.shutdown().await;
     tracing::info!("stopping: recorders stopped");

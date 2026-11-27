@@ -44,6 +44,11 @@ const moments = (s: string) =>
   );
 
 const RULES: Rule[] = [
+  [/^start: ready in (\d+) s$/, (m) => `Démarrage : prêt en ${m[1]} s`],
+  [
+    /^stopping: still waiting after (\d+) s for (.+): stopped now$/,
+    (m) => `Arrêt : toujours en attente après ${m[1]} s (${{ "the web server (connections still open)": "le serveur web, connexions encore ouvertes", "the lives": "les diffusions", "the start to end": "la fin du démarrage" }[m[2]] ?? m[2].replace(/^the source /, "la source ")}) : arrêté tout de suite`,
+  ],
   [
     /^clip (.+?) not sent to (.+?): (.+)$/,
     (m) => `« ${m[1]} » n’a pas été envoyé vers ${m[2]} : ${known(m[3])}`,

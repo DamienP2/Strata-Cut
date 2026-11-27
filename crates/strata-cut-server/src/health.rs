@@ -180,6 +180,44 @@ pub fn start(data_dir: &Path) {
     }));
 }
 
+/// What the stop waits for now (said if it lasts).
+static WAITING: Mutex<String> = Mutex::new(String::new());
+/// The web server listens: the start is over.
+static STARTED: AtomicBool = AtomicBool::new(false);
+
+/// The start was already over (the web server listens again after new settings).
+pub fn started_once() -> bool {
+    STARTED.load(Ordering::SeqCst)
+}
+
+/// The start is over (a stop asked before ends at once: nothing is recorded yet).
+pub fn started() {
+    STARTED.store(true, Ordering::SeqCst);
+}
+
+/// The stop now waits for this.
+pub fn waiting_for(what: impl Into<String>) {
+    *WAITING.lock().unwrap_or_else(|p| p.into_inner()) = what.into();
+}
+
+/// A stop asked: should it last more than `secs` (a source or a connection that does not end),
+/// what it waits for is said, what this process started is killed, and it ends cleanly before
+/// the service manager kills it (which would count as a crash at the next start).
+pub fn stop_within(secs: u64) {
+    // Still starting (its sources loading): a few seconds are enough.
+    let secs = if STARTED.load(Ordering::SeqCst) { secs } else { secs.min(3) };
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(secs));
+        if STOPPED.load(Ordering::SeqCst) {
+            return;
+        }
+        let what = WAITING.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        tracing::warn!("stopping: still waiting after {secs} s for {}: stopped now", if what.is_empty() { "the start to end" } else { what.as_str() });
+        stopped();
+        crate::update::relaunch_or_exit();
+    });
+}
+
 /// Marks a clean stop (not counted as a crash).
 pub fn stopped() {
     if let Some(h) = HEALTH.get() {

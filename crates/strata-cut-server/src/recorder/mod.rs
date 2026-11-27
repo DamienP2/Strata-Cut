@@ -1446,6 +1446,7 @@ impl Manager {
         for r in recs {
             let task = r.task.lock().unwrap().take();
             if let Some(t) = task {
+                crate::health::waiting_for(format!("the source {}", r.config().name));
                 let _ = t.await;
             }
         }
